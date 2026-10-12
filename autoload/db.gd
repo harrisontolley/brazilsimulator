@@ -8,6 +8,16 @@ const ITEMS := {
 	"cocaine": {"name": "Cocaine", "type": "drug", "key": "drug_1", "duration": 25.0, "comedown": 20.0, "od": 12.0, "price": 150},
 	"weed": {"name": "Weed", "type": "drug", "key": "drug_2", "duration": 45.0, "comedown": 0.0, "od": 20.0, "price": 60},
 	"meth": {"name": "Meth", "type": "drug", "key": "drug_3", "duration": 40.0, "comedown": 15.0, "od": 20.0, "price": 120},
+	# Eaten on the spot. `buff` ones also leave you tipsy for `duration`.
+	"coco": {"name": "Água de coco", "type": "food", "heal": 25.0, "price": 15},
+	"espetinho": {"name": "Espetinho", "type": "food", "heal": 40.0, "price": 25},
+	"acai": {"name": "Açaí", "type": "food", "heal": 70.0, "price": 40},
+	"caipirinha": {"name": "Caipirinha", "type": "food", "heal": 10.0, "buff": true, "duration": 45.0, "comedown": 0.0, "od": 0.0, "price": 25},
+	# Taken off the people you rob. Worth nothing until a fence buys it; lost if arrested.
+	"phone": {"name": "Celular", "type": "loot", "price": 120},
+	"watch": {"name": "Relógio", "type": "loot", "price": 180},
+	"camera": {"name": "Câmera", "type": "loot", "price": 220},
+	"chain": {"name": "Cordão de ouro", "type": "loot", "price": 450},
 }
 const DRUGS := ["cocaine", "weed", "meth"]
 const TOLERANCE_PER_DOSE := 0.45
@@ -30,13 +40,34 @@ const WHO_PLAYER := 1
 const WHO_COP := 2
 const WHO_NPC := 3
 
+const FOOD := ["coco", "espetinho", "acai", "caipirinha"]
+const LOOT := ["phone", "watch", "camera", "chain"]
+## kind: "shop" sells `stock` (at `discount`), "bicho" takes bets, "fence" buys loot.
+## `till` shops keep cash that can be taken at gunpoint.
 const VENDORS := [
-	{"name": "DEALER", "pos": Vector3(-60, 0, 47), "stock": ["cocaine", "weed", "meth"]},
-	{"name": "ARMS", "pos": Vector3(80, 0, 47), "stock": ["pistol", "ammo"]},
+	{"name": "DEALER", "kind": "shop", "pos": Vector3(-60, 0, 47), "stock": ["cocaine", "weed", "meth"], "color": Color(0.2, 0.7, 0.3)},
+	{"name": "ARMS", "kind": "shop", "pos": Vector3(80, 0, 47), "stock": ["pistol", "ammo"], "color": Color(0.25, 0.25, 0.3)},
+	{"name": "QUIOSQUE 1", "kind": "shop", "till": true, "pos": Vector3(-240, 0, 47), "stock": FOOD, "color": Color(0.9, 0.3, 0.2)},
+	{"name": "QUIOSQUE 2", "kind": "shop", "till": true, "pos": Vector3(-150, 0, 47), "stock": FOOD, "color": Color(0.95, 0.6, 0.1)},
+	{"name": "QUIOSQUE 3", "kind": "shop", "till": true, "pos": Vector3(10, 0, 47), "stock": FOOD, "color": Color(0.9, 0.3, 0.2)},
+	{"name": "QUIOSQUE 4", "kind": "shop", "till": true, "pos": Vector3(170, 0, 47), "stock": FOOD, "color": Color(0.2, 0.55, 0.85)},
+	{"name": "QUIOSQUE 5", "kind": "shop", "till": true, "pos": Vector3(250, 0, 47), "stock": FOOD, "color": Color(0.95, 0.6, 0.1)},
+	{"name": "JOGO DO BICHO", "kind": "bicho", "pos": Vector3(130, 0, 47), "stock": [], "color": Color(0.85, 0.75, 0.1)},
+	{"name": "JOGO DO BICHO", "kind": "bicho", "pos": Vector3(-70, 0, 107.0), "stock": [], "color": Color(0.85, 0.75, 0.1)},
+	{"name": "BOCA", "kind": "shop", "discount": 0.7, "pos": Vector3(-120, 12.2, 162.5), "stock": ["cocaine", "weed", "meth"], "color": Color(0.2, 0.7, 0.3)},
+	{"name": "RECEPTADOR", "kind": "fence", "pos": Vector3(212, 6.2, 146.5), "stock": [], "color": Color(0.5, 0.3, 0.6)},
 ]
 
-const PRISON_POS := Vector3(0, 0.2, 150)
-const RELEASE_POS := Vector3(0, 0.2, 46)
+## The 25 animals of the jogo do bicho, in their traditional order.
+const BICHOS := ["Avestruz", "Águia", "Burro", "Borboleta", "Cachorro", "Cabra", "Carneiro", "Camelo", "Cobra", "Coelho", "Cavalo", "Elefante", "Galo", "Gato", "Jacaré", "Leão", "Macaco", "Porco", "Pavão", "Peru", "Touro", "Tigre", "Urso", "Veado", "Vaca"]
+const BICHO_PAYS := 18
+const BICHO_EVERY := 60.0
+const BETS := [50, 200, 1000]
+
+const PRISON_POS := Vector3(0, 0.2, 121)
+const RELEASE_POS := Vector3(0, 0.2, 105)
+const BAILE_POS := Vector3(66, 9, 157)
+const CAMPINHO_POS := Vector3(-46, 15, 172.5)
 const JAIL_TIME := 30.0
 const RESPAWN_TIME := 4.0
 

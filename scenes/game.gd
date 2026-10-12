@@ -72,6 +72,10 @@ func _ready() -> void:
 			_debug_shot(a.trim_prefix("--shot="))
 		elif a == "--showcase" and multiplayer.is_server():
 			_debug_showcase()
+		elif a.begins_with("--cam="):
+			_debug_cam(a.trim_prefix("--cam="))
+		elif a.begins_with("--time="):
+			MatchState.time = float(a.trim_prefix("--time="))
 
 
 func _exit_tree() -> void:
@@ -84,6 +88,19 @@ func _debug_shot(path: String) -> void:
 	print("fps ", Engine.get_frames_per_second())
 	get_viewport().get_texture().get_image().save_png(path)
 	get_tree().quit()
+
+
+## Fixed camera for --shot: x,y,z,yaw,pitch in metres and degrees.
+func _debug_cam(spec: String) -> void:
+	var v := spec.split_floats(",")
+	var cam := Camera3D.new()
+	cam.far = 3000.0
+	cam.fov = 70.0
+	add_child(cam)
+	cam.position = Vector3(v[0], v[1], v[2])
+	cam.rotation_degrees = Vector3(v[4], v[3], 0.0)
+	cam.current = true
+	hud.visible = false
 
 
 ## Stages every character look and state in front of a fixed camera, for --shot.
