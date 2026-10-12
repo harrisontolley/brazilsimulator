@@ -17,8 +17,11 @@ const YARDS := [[2, 52.0, 80.0], [4, -62.0, -30.0], [3, -124.0, -116.0], [1, 208
 
 const Places := preload("res://scenes/world/places.gd")
 const Interiors := preload("res://scenes/world/interiors.gd")
+const Becos := preload("res://scenes/world/becos.gd")
 
 var _rng := RandomNumberGenerator.new()
+## What each row's buildings came to, as [x, width, height], for the alleys to dress.
+var _plots := {1: [], 3: []}
 var _tanks: Array = []
 var _dishes: Array = []
 var _wheels: Array = []
@@ -41,6 +44,9 @@ func _ready() -> void:
 	_instances(_ball(0.12, -1.0, 6), _vertex_mat(), _fruit, _fruit_tints)
 	_flush()
 	add_child(Interiors.new())
+	var becos := Becos.new()
+	becos.plots = _plots
+	add_child(becos)
 
 
 func _streets() -> void:
@@ -226,11 +232,7 @@ func _wall_tint() -> Color:
 
 ## The front row: apartment towers over shops, facing the sea.
 func _row_a() -> void:
-	var edges: Array = [-520.0]
-	for cx in Layout.CROSS_X:
-		edges.append(cx - Layout.CROSS_HALF)
-		edges.append(cx + Layout.CROSS_HALF)
-	edges.append(520.0)
+	var edges: Array = Layout.row_plots(1)
 	var escape_side := 0
 	for k in range(0, edges.size(), 2):
 		var x: float = edges[k]
@@ -256,6 +258,7 @@ func _row_a() -> void:
 			if absf(c.x) > Layout.X_LIMIT + 30.0:
 				continue
 			_collider(c, Vector3(w, h, 26.0))
+			_plots[1].append([c.x, w, h])
 			var trim := Color(tint.r, tint.g, tint.b).darkened(0.35)
 			if not low:
 				for f in int((h - 5.0) / 3.5):
@@ -279,11 +282,7 @@ func _row_a() -> void:
 
 ## The back row: low buildings with bars and workshops at street level.
 func _row_b() -> void:
-	var edges: Array = [-520.0]
-	for sx in Layout.STAIR_X:
-		edges.append(sx - Layout.CROSS_HALF)
-		edges.append(sx + Layout.CROSS_HALF)
-	edges.append(520.0)
+	var edges: Array = Layout.row_plots(3)
 	for k in range(0, edges.size(), 2):
 		var x: float = edges[k]
 		var hi: float = edges[k + 1]
@@ -306,6 +305,7 @@ func _row_b() -> void:
 			if absf(c.x) > Layout.X_LIMIT + 30.0:
 				continue
 			_collider(c, Vector3(w, h, 20.0))
+			_plots[3].append([c.x, w, h])
 			_shopfront(c.x, w, 111.0, -1.0)
 			_roof(c.x, w, h, 121.0, 20.0)
 			if w > 11.0 and _rng.randf() < 0.45:
@@ -421,7 +421,7 @@ func _favela() -> void:
 	_baile()
 	_campinho()
 	for v in DB.VENDORS:
-		if v.pos.z > Layout.ROAD_Z and not v.get("indoor", false):
+		if v.pos.z > Layout.ROAD_Z and not v.get("indoor", false) and v.get("stall", true):
 			_vendor_stall(v)
 
 

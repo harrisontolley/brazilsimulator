@@ -13,8 +13,9 @@ const MODELS := {
 	2: {"path": "res://assets/weapons/pistola.glb", "scale": 0.15, "grip": Vector3(0.02, -0.05, 0.0)},
 	3: {"path": "res://assets/weapons/revolver.glb", "scale": 0.15, "grip": Vector3(0.0, -0.05, 0.0)},
 	4: {"path": "res://assets/weapons/smg.glb", "scale": 0.15, "grip": Vector3(0.12, -0.35, 0.0)},
-	# Built out of boxes (see _fallback): shotgun, rifle, sniper, launcher, grenade, bottle, bat.
-	5: {}, 6: {}, 7: {}, 8: {}, 9: {}, 10: {}, 11: {},
+	# Built out of boxes (see _fallback): shotgun, rifle, sniper, launcher, grenade, bottle, bat,
+	# club, frying pan, brick.
+	5: {}, 6: {}, 7: {}, 8: {}, 9: {}, 10: {}, 11: {}, 12: {}, 13: {}, 14: {},
 }
 ## Where a right hand hangs on the character mesh at rest, and the shader ids that tie a
 ## vertex to that hand (see shaders/character_pose.gdshaderinc and character.gdshader).
@@ -197,6 +198,25 @@ static func _fallback(id: int, out: Array) -> void:
 			# Taco: thin where it is held, fat where it lands.
 			boxes = [[Vector3(0, 0, 0.0), Vector3(0.03, 0.03, 0.2), DARK], [Vector3(0, 0, -0.25), Vector3(0.04, 0.04, 0.32), WOOD.lightened(0.25)],
 					[Vector3(0, 0, -0.55), Vector3(0.062, 0.062, 0.34), WOOD.lightened(0.3)], [Vector3(0, 0, 0.11), Vector3(0.045, 0.045, 0.03), DARK]]
+		12:
+			# Porrete: a length of timber, knobbly at the business end, with a couple of nails.
+			var plank := WOOD.lightened(0.12)
+			boxes = [[Vector3(0, 0, 0.02), Vector3(0.032, 0.032, 0.22), plank.darkened(0.15)], [Vector3(0, 0, -0.2), Vector3(0.042, 0.042, 0.24), plank],
+					[Vector3(0, 0, -0.43), Vector3(0.056, 0.056, 0.22), plank], [Vector3(0, 0, -0.58), Vector3(0.07, 0.07, 0.1), plank.darkened(0.1)],
+					[Vector3(0.036, 0.012, -0.5), Vector3(0.02, 0.014, 0.014), STEEL], [Vector3(-0.034, -0.014, -0.55), Vector3(0.02, 0.014, 0.014), STEEL],
+					[Vector3(0.0, 0.05, -0.34), Vector3(0.03, 0.02, 0.05), plank.darkened(0.2)]]
+		13:
+			# Frigideira: a flat black disc on a long handle, held so it lands face first.
+			var iron := Color(0.11, 0.11, 0.12)
+			boxes = [[Vector3(0, 0, 0.0), Vector3(0.028, 0.02, 0.26), iron.lightened(0.1)], [Vector3(0, 0, -0.14), Vector3(0.04, 0.026, 0.06), iron],
+					[Vector3(0, 0, -0.33), Vector3(0.3, 0.03, 0.2), iron], [Vector3(0, 0, -0.33), Vector3(0.2, 0.03, 0.3), iron],
+					[Vector3(0, 0.017, -0.33), Vector3(0.24, 0.012, 0.24), Color(0.2, 0.2, 0.21)], [Vector3(0.0, 0.0, -0.48), Vector3(0.024, 0.04, 0.02), iron.lightened(0.15)]]
+		14:
+			# Tijolo: red, with the holes through it.
+			var clay := Color(0.62, 0.27, 0.2)
+			boxes = [[Vector3(0, 0.0, -0.03), Vector3(0.07, 0.052, 0.15), clay], [Vector3(0, 0.0, -0.03), Vector3(0.072, 0.054, 0.02), clay.darkened(0.15)],
+					[Vector3(0, 0.0, -0.065), Vector3(0.016, 0.054, 0.016), clay.darkened(0.55)], [Vector3(0, 0.0, 0.005), Vector3(0.016, 0.054, 0.016), clay.darkened(0.55)],
+					[Vector3(0.022, 0.027, -0.09), Vector3(0.018, 0.006, 0.02), clay.lightened(0.3)]]
 		_:
 			boxes = [[Vector3(0, 0.055, -0.06), Vector3(0.028, 0.034, 0.19), DARK], [Vector3(0, 0.03, -0.09), Vector3(0.024, 0.022, 0.12), STEEL], [Vector3(0, -0.02, 0.015), Vector3(0.026, 0.1, 0.042), WOOD], [Vector3(0, 0.012, -0.045), Vector3(0.008, 0.03, 0.05), DARK], [Vector3(0, 0.078, 0.02), Vector3(0.008, 0.012, 0.012), DARK]]
 	for e in boxes:

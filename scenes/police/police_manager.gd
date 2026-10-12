@@ -287,12 +287,12 @@ func ray_pick(o: Vector3, d: Vector3, max_t: float, grow: float) -> Array:
 
 ## `zone` is DB.ZONE_*. A fist to the head can lay a cop out cold for a while instead.
 ## Returns whether it did.
-func srv_damage_cop(i: int, dmg: float, attacker: int, zone := 0, ko := false) -> bool:
+func srv_damage_cop(i: int, dmg: float, attacker: int, zone := 0, weapon := {}) -> bool:
 	var c = cops[i]
 	if c.state == DOWN:
 		return false
 	Crime.report_crime(c.pos, attacker, 3)
-	if ko and zone == DB.ZONE_HEAD and c.state != KO and randf() < DB.KO_CHANCE:
+	if c.state != KO and randf() < DB.ko_chance(weapon, zone):
 		c.state = KO
 		c.t = DB.KO_COP
 		c.target = attacker

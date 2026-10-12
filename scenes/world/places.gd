@@ -25,6 +25,11 @@ static var pits: Array = []
 ## putting them there changes nobody who was already in it. Whoever asked for them is the
 ## one who tells them what to do.
 static var stands: Array = []
+## {pos (foot of it, against the wall), top (y of the roof), out (the way off the wall)}: rungs
+## to climb with forward, up to a roof.
+static var ladders: Array = []
+## Steel doors in the alleys where a hauled body is handed over for ransom (see becos.gd).
+static var cells: Array = []
 
 static var _tables := 0
 
@@ -41,6 +46,8 @@ static func clear() -> void:
 	spots.clear()
 	uses.clear()
 	stands.clear()
+	ladders.clear()
+	cells.clear()
 	_tables = 0
 
 
@@ -77,6 +84,24 @@ static func add_stand(pos: Vector3, yaw: float, idle: int, arch := "", opts := {
 
 static func add_use(kind: StringName, pos: Vector3, prompt: String, arg := 0, hold := 0.0, jail := 0) -> void:
 	uses.append({"kind": kind, "pos": pos, "prompt": prompt, "arg": arg, "hold": hold, "jail": jail})
+
+
+static func add_ladder(pos: Vector3, top: float, out: Vector3) -> int:
+	ladders.append({"pos": pos, "top": top, "out": out})
+	return ladders.size() - 1
+
+
+## The ladder whose foot or top p is at, as [index, true if at the top], or [].
+static func ladder_near(p: Vector3, r: float) -> Array:
+	for i in ladders.size():
+		var l: Dictionary = ladders[i]
+		var base: Vector3 = l.pos + l.out * 0.45
+		if absf(p.x - base.x) < r and absf(p.z - base.z) < r:
+			if p.y < 1.4 and p.y > -0.5:
+				return [i, false]
+			if absf(p.y - l.top) < 0.8:
+				return [i, true]
+	return []
 
 
 ## A fresh id to group the seats round one table.

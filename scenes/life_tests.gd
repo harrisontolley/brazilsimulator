@@ -9,8 +9,10 @@ const Kit := preload("res://scenes/characters/char_kit.gd")
 const CharRig := preload("res://scenes/characters/char_rig.gd")
 const Emotes := preload("res://scenes/characters/emotes.gd")
 
-## What _cast_of(4242) came to before the wheel was built.
-const CAST := [281228236, 438102235, 2323301200]
+## What _cast_of(4242) came to before the wheel was built. The last number is where people on
+## foot have their lanes, which moved when the alleys were cut and furnished; the first two,
+## who everybody is and who is doing what with whom, are as they always were.
+const CAST := [281228236, 438102235, 2604204798]
 
 
 static func out_dir() -> String:
@@ -94,11 +96,12 @@ static func _nav(g: Node) -> void:
 				shut += 1
 				if first == "":
 					first = "door of %s shut at %s" % [room.name, d[0]]
-	# And a walk from the sand to the back street has to go round the buildings, not through.
+	# And a walk from the sand to the back street has to go round the buildings, not through:
+	# further than the 84 m straight line, by way of the alley or the street.
 	var a := Vector3(-80, 0, 20)
 	var b := Vector3(-80, 0, 104)
 	var route: PackedVector3Array = Nav.path(a, b)
-	var route_ok := not route.is_empty() and route[route.size() - 1].distance_to(b) < 1.5 and Nav.length(a, route) > 100.0
+	var route_ok := not route.is_empty() and route[route.size() - 1].distance_to(b) < 1.5 and Nav.length(a, route) > 86.0
 	var at := a
 	for p in route:
 		route_ok = route_ok and Nav.clear(at, p)

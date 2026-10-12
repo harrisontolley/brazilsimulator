@@ -176,6 +176,11 @@ func _build() -> void:
 	made["cheer"] = _wav(_cheer(), false)
 	made["cash"] = _wav(_cash(), false)
 	made["kick"] = _wav(_thump(120.0, 0.12), false)
+	made["thwack"] = _wav(_thwack(), false)
+	made["bong"] = _wav(_bong(), false)
+	made["crack"] = _wav(_crack(), false)
+	made["gulp"] = _wav(_gulp(), false)
+	made["thud"] = _wav(_thump(70.0, 0.22), false)
 	made["firework"] = _wav(_firework(), false)
 	made["crash"] = _wav(_crash(), false)
 	made["thunder"] = _wav(_thunder(), false)
@@ -902,6 +907,54 @@ func _punch() -> PackedFloat32Array:
 	var rng := RandomNumberGenerator.new()
 	_hiss(f, rng, 0.0, 0.02, 0.7, 0.3)
 	_tone(f, 0.0, 110.0, 60.0, 0.03, 1.0)
+	return f
+
+
+## Wood on a head: a dull knock with a hollow ring to it.
+func _thwack() -> PackedFloat32Array:
+	var f := _buf(0.3)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 11
+	_hiss(f, rng, 0.0, 0.012, 0.8, 0.25)
+	_tone(f, 0.0, 230.0, 130.0, 0.04, 1.0)
+	_tone(f, 0.0, 610.0, 560.0, 0.035, 0.5)
+	_tone(f, 0.005, 1180.0, 1100.0, 0.02, 0.25)
+	return f
+
+
+## A frying pan on a skull: the cartoon BONG, ringing on a good while.
+func _bong() -> PackedFloat32Array:
+	var f := _buf(0.9)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 12
+	_hiss(f, rng, 0.0, 0.006, 0.7, 0.6)
+	_tone(f, 0.0, 520.0, 500.0, 0.22, 0.8)
+	_tone(f, 0.0, 1310.0, 1290.0, 0.14, 0.4)
+	_tone(f, 0.0, 2240.0, 2200.0, 0.08, 0.25)
+	_tone(f, 0.0, 130.0, 90.0, 0.05, 0.7)
+	return f
+
+
+## Brick on bone: dry, short, with grit in it.
+func _crack() -> PackedFloat32Array:
+	var f := _buf(0.2)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 13
+	_hiss(f, rng, 0.0, 0.018, 0.9, 0.7)
+	_tone(f, 0.0, 170.0, 80.0, 0.03, 0.9)
+	_tone(f, 0.0, 900.0, 600.0, 0.012, 0.3)
+	return f
+
+
+## A swallow under protest.
+func _gulp() -> PackedFloat32Array:
+	var f := _buf(0.5)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 14
+	_hiss(f, rng, 0.0, 0.08, 0.25, 0.1)
+	_tone(f, 0.04, 140.0, 330.0, 0.05, 0.8)
+	_tone(f, 0.22, 300.0, 120.0, 0.07, 0.8)
+	_hiss(f, rng, 0.3, 0.05, 0.3, 0.15)
 	return f
 
 

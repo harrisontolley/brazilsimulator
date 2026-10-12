@@ -89,6 +89,9 @@ const HELD_LAUNCHER := 8
 const HELD_GRENADE := 9
 const HELD_MOLOTOV := 10
 const HELD_BAT := 11
+const HELD_CLUB := 12
+const HELD_PAN := 13
+const HELD_BRICK := 14
 
 # Props that follow the hand or the pose rather than a flag bit (shader PROP_*).
 const _PROP_HELD := 64

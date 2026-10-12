@@ -49,6 +49,15 @@ void fragment() {
 			// Floor slab line under each row of windows.
 			col *= 1.0 - 0.18 * step(f.y, 0.1);
 		}
+		if (!house && abs(wn.x) > 0.5) {
+			// A wall that looks onto an alley or a side street: grimy toward the ground, damp
+			// stains running down it, and the ground floor mostly boarded up.
+			float stain = step(0.72, hash(floor(vec2(wp.z * 0.55 + seed, wp.y * 0.35))));
+			col *= mix(0.5, 1.0, smoothstep(0.0, 6.0, wp.y)) * (1.0 - 0.22 * stain);
+			if (wp.y < 3.5) {
+				win *= step(0.65, h);
+			}
+		}
 		vec3 glass = mix(vec3(0.05, 0.09, 0.14), vec3(0.2, 0.32, 0.42), h);
 		float lit = step(1.0 - 0.65 * night, hash(id + 7.3)) * night;
 		col = mix(col, glass, win);

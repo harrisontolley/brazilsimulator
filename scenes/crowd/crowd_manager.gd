@@ -19,6 +19,18 @@ const Babble := preload("res://scenes/crowd/babble.gd")
 const Places := preload("res://scenes/world/places.gd")
 const Nav := preload("res://scenes/world/nav.gd")
 
+## What a dose forced down somebody out cold does: "sleep" keeps them out `n` seconds longer,
+## "run" sends them off at a sprint when they come round, "rage" makes them hostile, "dance"
+## has them up and dancing.
+const DOSE := {
+	"rivotril": ["sleep", 20.0], "ketamine": ["sleep", 20.0], "weed": ["sleep", 8.0],
+	"cocaine": ["run", 0.0], "meth": ["run", 0.0], "lanca": ["run", 0.0], "guarana": ["run", 0.0],
+	"bomba": ["rage", 0.0],
+	"bala": ["dance", 0.0], "doce": ["dance", 0.0], "ayahuasca": ["dance", 0.0],
+}
+## Doses that kill.
+const DOSE_OD := 3
+
 ## Everything before DEAD is somebody who is still there to be dealt with.
 enum { AMBIENT, COWER, FLEE, HOSTILE, PARADE, KO, DEAD, GONE }
 
@@ -157,6 +169,7 @@ var _changed := {}         # idx -> last state event, replayed to late joiners
 var _rob := {}      # pid -> {npc, meter, quiet, last}
 var _hostile := {}  # idx -> {target, cd, until, shooter}
 var _ko := {}       # idx -> [match time they come round, pid who did it]
+var _dosed := {}    # idx -> {n: doses forced down them, fx: what the last one does, who}
 var _calls := {}    # idx -> [match time the call goes through, where, pid, severity]
 var _cower := {}    # idx -> match time someone cowering indoors gets up again
 var _calm := {}     # idx -> match time someone who ran goes back to where they were
@@ -184,6 +197,7 @@ func setup(seed_value: int) -> void:
 	_rob.clear()
 	_hostile.clear()
 	_ko.clear()
+	_dosed.clear()
 	_calls.clear()
 	_cower.clear()
 	_calm.clear()
@@ -403,6 +417,18 @@ func setup(seed_value: int) -> void:
 			"traficante":
 				top = Color(0.1, 0.1, 0.1)
 				look = Kit.F_SHORTS | Kit.F_SHIRTLESS | Kit.F_SHADES | Kit.F_CHAIN
+			"olheiro":
+				# A kid in somebody's old football shirt, with a radio and nowhere to be.
+				top = Color.from_hsv(r.randf(), 0.7, 0.95)
+				look = Kit.F_SHORTS | Kit.F_TANK
+				if r.randf() < 0.5:
+					look |= Kit.F_HAT
+			"vapor":
+				top = Color(0.08, 0.08, 0.1) if r.randf() < 0.6 else Color(0.85, 0.85, 0.9)
+				look = Kit.F_SHORTS | Kit.F_TANK | Kit.F_BUMBAG | Kit.F_CHAIN | Kit.F_SHADES
+			"velho":
+				top = Color(0.9, 0.88, 0.8) if r.randf() < 0.6 else Color(0.5, 0.58, 0.62)
+				look = Kit.F_SHORTS | Kit.F_HAT
 			"socialite":
 				# Not much, in a loud colour.
 				top = Color.from_hsv(r.randf(), r.randf_range(0.55, 0.95), 1.0) if r.randf() < 0.8 else Color(0.97, 0.97, 0.97)
@@ -669,6 +695,75 @@ func yaw_of(i: int) -> float:
 	return _yaw[i]
 
 
+func set_yaw(i: int, y: float) -> void:
+	_yaw[i] = y
+
+
+## What NPC i is drawn with, for a stand-in that has to look like them (see drag.gd).
+func look_of(i: int) -> Color:
+	return _mm.get_instance_color(i)
+
+
+func flags_of(i: int) -> float:
+	return _mm.get_instance_custom_data(i).b
+
+
+func width_of(i: int) -> float:
+	return _width[i]
+
+
+func scale_of(i: int) -> float:
+	return _scale[i]
+
+
+## Everybody within r of p who is out cold.
+func out_near(p: Vector3, r: float) -> Array:
+	var out: Array = []
+	for i in count:
+		if state[i] == KO and absf(pos[i].x - p.x) < r and absf(pos[i].z - p.z) < r and absf(pos[i].y - p.y) < 2.5:
+			out.append(i)
+	return out
+
+
+## Somebody stopped hauling NPC i: it is drawn as itself again where it was put down.
+func haul_end(i: int, at: Vector3, yaw: float) -> void:
+	if state[i] == GONE or _gibbed.has(i):
+		return
+	_yaw[i] = yaw
+	if state[i] == KO:
+		_home[i] = at
+	_place(i, at)
+	_restyle(i)
+
+
+## Server: whoever was NPC i is back at `at`, on their feet, as if nothing had happened.
+func srv_respawn(i: int, at: Vector3) -> void:
+	_hostile.erase(i)
+	_ko.erase(i)
+	_dosed.erase(i)
+	_gibbed.erase(i)
+	pos[i] = at
+	hp[i] = DB.ARCHETYPES[arch[i]].hp
+	money[i] = randi_range(DB.ARCHETYPES[arch[i]].money[0], DB.ARCHETYPES[arch[i]].money[1])
+	_srv_set(i, AMBIENT)
+
+
+## Server: NPC i is taken away and is not seen again this match.
+func srv_vanish(i: int) -> void:
+	_hostile.erase(i)
+	_ko.erase(i)
+	_dosed.erase(i)
+	_srv_set(i, GONE)
+
+
+## Server: a body that was hauled is lying where it was left; tell everyone, late joiners included.
+func srv_haul_rest(i: int, at: Vector3) -> void:
+	if state[i] != KO:
+		return
+	pos[i] = at
+	_srv_set(i, KO)
+
+
 ## Up to n people strolling the promenade who could be walking a dog.
 func pet_owners(n: int) -> Array:
 	var out: Array = []
@@ -906,9 +1001,12 @@ func _process(delta: float) -> void:
 				# Comes round with a sore head and a grudge, or just legs it.
 				var who: int = _ko[i][1]
 				_ko.erase(i)
+				var dose = _dosed.get(i)
+				_dosed.erase(i)
 				if state[i] == KO:
 					var pl = Net.game.players.get(who)
-					_srv_react(i, who, pl.global_position if pl != null else pos[i])
+					if dose == null or not _srv_dosed_wake(i, dose, pl):
+						_srv_react(i, who, pl.global_position if pl != null else pos[i])
 		for pid in _rob.keys():
 			_rob[pid].last += delta
 			if _rob[pid].last > 0.8:
@@ -1122,6 +1220,10 @@ func cl_npc(i: int, s: int, p: Vector3, dir: Vector3, t0: float, flags: int) -> 
 		_shooter.erase(i)
 	_dancing.erase(i)
 	match s:
+		AMBIENT:
+			# Stood down, or back at their post: wherever the host says they are.
+			_gibbed.erase(i)
+			_place(i, p)
 		COWER:
 			var threat := _nearest_player(p) - p
 			if threat.length_squared() > 0.0001:
@@ -1267,7 +1369,7 @@ func _plan_rounds(rng: RandomNumberGenerator) -> void:
 				indoors.append(p)
 	var stalls: Array = []
 	for v in DB.VENDORS:
-		if not v.get("indoor", false) and v.pos.y < 1.0:
+		if not v.get("indoor", false) and v.get("stall", true) and v.pos.y < 1.0:
 			var p: Vector3 = Nav.nearest_free(v.pos + Vector3(1.4, 0, -1.2), 3.0)
 			if not Nav.blocked(p):
 				stalls.append(Vector3(p.x, 0.0, p.z))
@@ -1969,19 +2071,20 @@ func srv_provoke(i: int, pid: int) -> void:
 
 ## Hurts NPC i. `ko` says the blow can knock them out: to the head it may, and one that would
 ## have killed with bare hands always does instead. Returns whether they went out cold.
-func srv_damage_npc(i: int, dmg: float, attacker: int, zone := 0, ko := false) -> bool:
+func srv_damage_npc(i: int, dmg: float, attacker: int, zone := 0, weapon := {}) -> bool:
 	if i < 0 or i >= count or state[i] >= DEAD:
 		return false
 	var g = Net.game
 	for pid in _rob.keys():
 		if _rob[pid].npc == i:
 			_rob.erase(pid)
-	if ko and state[i] != KO and ((zone == DB.ZONE_HEAD and randf() < DB.KO_CHANCE) or hp[i] - dmg <= 0.0):
+	if state[i] != KO and not weapon.is_empty() and (randf() < DB.ko_chance(weapon, zone) or hp[i] - dmg <= 0.0):
+		var out: float = weapon.get("ko_npc", DB.KO_NPC)
 		hp[i] = maxf(hp[i] - dmg, 5.0)
 		_hostile.erase(i)
-		_ko[i] = [MatchState.time + DB.KO_NPC, attacker]
+		_ko[i] = [MatchState.time + out, attacker]
 		_srv_set(i, KO)
-		g.bcast("cl_ko", [pos[i] + Vector3(0, 0.7, 0), DB.KO_NPC])
+		g.bcast("cl_ko", [pos[i] + Vector3(0, 0.7, 0), out])
 		return true
 	hp[i] -= dmg
 	npc_hit.emit(i, attacker)
@@ -2001,6 +2104,43 @@ func srv_damage_npc(i: int, dmg: float, attacker: int, zone := 0, ko := false) -
 	elif state[i] != HOSTILE and state[i] != KO and state[i] < DEAD:
 		var p = g.players.get(attacker)
 		_srv_react(i, attacker, p.global_position if p != null else pos[i])
+	return false
+
+
+## Somebody has put `item` down NPC i's throat while they are out cold.
+func srv_feed(i: int, item: String, pid: int) -> void:
+	if state[i] != KO or not DOSE.has(item):
+		return
+	var g = Net.game
+	var n: int = _dosed[i].n + 1 if _dosed.has(i) else 1
+	_dosed[i] = {"n": n, "fx": DOSE[item][0], "who": pid}
+	if n >= DOSE_OD:
+		# Too much of it: they do not wake up.
+		Crime.report_crime(pos[i], pid, 3)
+		g.bcast("cl_sound", ["retch", pos[i] + Vector3(0, 0.5, 0)])
+		srv_damage_npc(i, 9999.0, pid)
+		return
+	if DOSE[item][0] == "sleep" and _ko.has(i):
+		_ko[i][0] += DOSE[item][1]
+
+
+## How an NPC who was fed something comes round. False for an ordinary waking.
+func _srv_dosed_wake(i: int, dose: Dictionary, pl) -> bool:
+	match dose.fx:
+		"run":
+			var from: Vector3 = pl.global_position if pl != null else pos[i] + Vector3(1, 0, 0)
+			var away := Vector3(pos[i].x - from.x, 0.0, pos[i].z - from.z)
+			away = away.normalized() if away.length() > 0.05 else Vector3(1, 0, 0)
+			srv_parade(i, away, 45.0, 0)
+			return true
+		"rage":
+			hp[i] = minf(hp[i] * 2.0, 400.0)
+			_hostile[i] = {"target": dose.who, "cd": 0.8, "until": 30.0, "shooter": false}
+			_srv_set(i, HOSTILE)
+			return true
+		"dance":
+			srv_parade(i, Vector3(sin(i), 0.0, cos(i)), 3.0, 1)
+			return true
 	return false
 
 

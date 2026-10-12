@@ -15,7 +15,7 @@ extends RefCounted
 ## pull-and-glide that points wherever the swimmer is heading.
 
 enum { GROUND, AIR, SLIDE, WALLRUN, DIVE, RIDE, CROUCH, SWIM }  # Player.MV_*
-enum { ALIVE, DEAD, OUT }
+enum { ALIVE, DEAD, OUT, FLAIL }
 enum { HOP, DOUBLE, WALL }
 
 const N := 24
@@ -70,6 +70,12 @@ var catch := false
 ## The whole pose for this frame from somewhere else (an emote), or empty to get on as usual.
 ## Set before update().
 var given := PackedFloat32Array()
+## FLAIL only: how hard the limbs are going, 0 lolling to 1 windmilling, and whether the body is
+## tumbling through the air. Set before update().
+var flail := 0.0
+var tumble := false
+## Tells one body's flail from another's.
+var flail_seed := 0.0
 
 var _under := false
 var _surf_t := 9.0
@@ -90,6 +96,7 @@ var _land_t := 9.0
 var _land_k := 0.0
 var _off_t := 9.0
 var _tuck_t := 9.0
+var _spin := 0.0
 
 
 static func key(arm_l: Vector3, arm_r: Vector3, leg_l: Vector2, leg_r: Vector2, spread := 0.0, lean := 0.0, head := Vector2.ZERO, rise := 0.0, pitch := 0.0, shift := 0.0) -> PackedFloat32Array:
@@ -161,6 +168,8 @@ func update(delta: float, mode: int, state: int, spd: float, vy: float, turn: fl
 		to = K_DEAD
 	elif state == OUT:
 		to = K_OUT
+	elif state == FLAIL:
+		to = _flail(delta)
 	elif told:
 		to = given
 	else:
@@ -190,6 +199,9 @@ func update(delta: float, mode: int, state: int, spd: float, vy: float, turn: fl
 	# Chase the target: loosely just after a change so it flows, tightly once settled so a
 	# fast stride is not smoothed away.
 	var rate := 7.0 if state != ALIVE else lerpf(13.0, 42.0, clampf(_mode_t / 0.25, 0.0, 1.0))
+	if state == FLAIL:
+		# Nothing smooths a limp body: it goes where the last bump sent it.
+		rate = 28.0
 	var k := 1.0 - exp(-rate * delta)
 	for i in N:
 		if i == 0 or i == ARM_R:
@@ -245,6 +257,38 @@ func apply(mats: Array) -> void:
 	for m in mats:
 		for r in N / 4:
 			m.set_shader_parameter("rig%d" % r, Vector4(_out[r * 4], _out[r * 4 + 1], _out[r * 4 + 2], _out[r * 4 + 3]))
+
+
+## A body being hauled about by somebody else, or sent flying: out cold and on its back, with
+## every limb going its own way on its own beat, the head lolling and the chest rocking about.
+## Sums of sines at tempos that do not line up, so it never quite repeats.
+func _flail(delta: float) -> PackedFloat32Array:
+	var q := K_OUT.duplicate()
+	var w := 0.3 + 0.7 * flail
+	var t := _t * (0.7 + flail * 0.7) + flail_seed * 31.0
+	# Arms windmill and fall slack in turns: swing, raise, elbow.
+	q[0] = (sin(t * 5.1) * 1.3 + sin(t * 11.7 + 1.0) * 0.5) * w
+	q[1] = 1.1 + sin(t * 4.3 + 0.5) * 1.2 * w
+	q[2] = 0.7 + sin(t * 9.1) * 0.7 * w
+	q[ARM_R] = (sin(t * 4.7 + 2.0) * 1.3 + sin(t * 12.9) * 0.5) * w
+	q[ARM_R + 1] = 1.0 + sin(t * 5.3 + 3.0) * 1.2 * w
+	q[ARM_R + 2] = 0.7 + sin(t * 8.3 + 1.0) * 0.7 * w
+	q[SPREAD] = 0.3 + sin(t * 3.1) * 0.35 * w
+	# Legs scissor and the knees go every way.
+	q[LEG_L] = sin(t * 6.3) * 1.2 * w
+	q[LEG_L + 1] = 0.6 + sin(t * 8.9 + 2.0) * 0.7 * w
+	q[LEG_R] = sin(t * 5.7 + 2.5) * 1.2 * w
+	q[LEG_R + 1] = 0.6 + sin(t * 9.7 + 0.7) * 0.7 * w
+	q[HEAD] = sin(t * 7.1) * 0.6
+	q[HEAD + 1] = sin(t * 5.9 + 1.0) * 0.9
+	q[TWIST] = sin(t * 4.1) * 0.8 * w
+	q[BEND] = sin(t * 3.3 + 1.0) * 0.6 * w
+	q[TILT] = sin(t * 6.7) * 0.5
+	q[SWAY] = sin(t * 5.0 + 0.4) * 0.3 * w
+	q[PITCH] = PI / 2.0 + sin(t * 1.9) * 0.25 * w
+	_spin += (9.0 if tumble else 0.0) * delta
+	q[ROLL] = sin(t * 2.3) * 0.7 * w + _spin
+	return q
 
 
 func _stand(t: float) -> PackedFloat32Array:
