@@ -6,6 +6,8 @@
 //               .w = time of last one-shot (+ attack, - hit; fall start for DEAD / DOWN).
 
 uniform float now = 0.0;
+// 0..1 while the whole beach is celebrating: anyone idle throws their arms up.
+uniform float cheer = 0.0;
 
 const float HALF_PI = 1.5707963;
 
@@ -21,6 +23,11 @@ const int P_DOWN = 9;
 const int P_JUMP = 10;
 const int P_SLIDE = 11;
 const int P_DIVE = 12;
+const int P_DANCE = 13;
+const int P_CHEER = 14;
+const int P_SIT = 15;
+const int P_RIDE = 16;
+const int P_DRUM = 17;
 
 const int PART_HEAD = 1;
 const int PART_ARM_L = 2;
@@ -66,6 +73,12 @@ Pose pose_stride(float c, float amp, float knee, float arm, float elbow) {
 	return Pose(vec3(-s * arm, 0.08, elbow), vec3(s * arm, 0.08, elbow),
 			vec2(s * amp, 0.1 + knee * max(0.0, cos(c))), vec2(-s * amp, 0.1 + knee * max(0.0, -cos(c))),
 			0.0, 0.05, vec2(0.0), -0.5 * (1.0 - cos(s * amp)), 0.0, 0.0);
+}
+
+Pose pose_cheer(float t, float ph) {
+	float w = sin(t * 12.0 + ph) * 0.25;
+	return Pose(vec3(0.0, 2.7 + w, 0.2), vec3(0.0, 2.7 - w, 0.2), vec2(0.1, 0.25), vec2(0.1, 0.25),
+			0.08, -0.05, vec2(-0.3, 0.0), abs(sin(t * 6.0 + ph)) * 0.2, 0.0, 0.0);
 }
 
 void rx(inout vec3 p, inout vec3 n, vec3 o, float a) {
@@ -164,6 +177,41 @@ void char_vertex(inout vec3 p, inout vec3 n, float propf, float partf, vec4 cd, 
 			q.arm_r = vec3(1.5, 0.0, 0.05);
 			gun = true;
 		}
+	} else if (pose == P_DANCE) {
+		// Samba: quick feet, loose hips, arms out.
+		float b = t * 9.0 + ph;
+		q.arm_l = vec3(0.6 + sin(b) * 0.5, 1.1 + sin(b * 0.5) * 0.5, 1.2);
+		q.arm_r = vec3(0.6 - sin(b) * 0.5, 1.1 - sin(b * 0.5) * 0.5, 1.2);
+		q.leg_l = vec2(sin(b) * 0.35, 0.3 + max(0.0, sin(b)) * 0.6);
+		q.leg_r = vec2(-sin(b) * 0.35, 0.3 + max(0.0, -sin(b)) * 0.6);
+		q.spread = 0.1;
+		q.lean = sin(b * 0.5) * 0.12;
+		q.head = vec2(0.0, sin(b * 0.5) * 0.3);
+		q.rise = -0.04 + abs(sin(b)) * 0.06;
+	} else if (pose == P_CHEER) {
+		q = pose_cheer(t, ph);
+	} else if (pose == P_SIT) {
+		q.arm_l = vec3(0.5, 0.1, 0.6);
+		q.arm_r = vec3(0.5, 0.1, 0.6);
+		q.leg_l = vec2(1.45, 1.5);
+		q.leg_r = vec2(1.45, 1.5);
+		q.spread = 0.12;
+		q.rise = -0.36;
+	} else if (pose == P_RIDE) {
+		// Astride a motorbike, reaching for the bars.
+		q.arm_l = vec3(1.15, 0.12, 0.25);
+		q.arm_r = vec3(1.15, 0.12, 0.25);
+		q.leg_l = vec2(1.0, 1.35);
+		q.leg_r = vec2(1.0, 1.35);
+		q.spread = 0.32;
+		q.lean = 0.3;
+		q.head = vec2(-0.25, 0.0);
+		q.rise = 0.08;
+	} else if (pose == P_DRUM) {
+		q = pose_stride(c, 0.3, 0.4, 0.0, 0.0);
+		float b = t * 12.0 + ph;
+		q.arm_l = vec3(0.7 + max(0.0, sin(b)) * 0.5, 0.2, 1.3);
+		q.arm_r = vec3(0.7 + max(0.0, -sin(b)) * 0.5, 0.2, 1.3);
 	} else if (pose == P_JUMP) {
 		q.arm_l = vec3(0.3, 1.0, 0.4);
 		q.arm_r = vec3(0.3, 1.0, 0.4);
@@ -187,6 +235,9 @@ void char_vertex(inout vec3 p, inout vec3 n, float propf, float partf, vec4 cd, 
 		q.head = vec2(-0.5, 0.0);
 		q.rise = 0.25;
 		q.pitch = -1.25;
+	}
+	if (cheer > 0.0 && (pose == 0 || pose == P_WALK || pose == P_DANCE) && fract(seed * 13.0) < 0.85) {
+		q = pose_mix(q, pose_cheer(t, ph), cheer);
 	}
 	// Anyone carrying a pistol holds it out in front.
 	if (gun && pose != P_AIM && pose != P_DEAD && pose != P_DOWN) {

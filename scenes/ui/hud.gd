@@ -291,6 +291,10 @@ func _process(delta: float) -> void:
 		_target.text = "SHOUT!"
 	elif p.target_npc >= 0:
 		_target.text = "Hold E and shout to rob"
+	elif p.mv == p.MV_RIDE:
+		_target.text = "W / S throttle   A / D steer   Space hop   F get off"
+	elif g.motos.free_near(p.global_position) >= 0:
+		_target.text = "F: take the moto"
 	else:
 		_target.text = ""
 

@@ -32,6 +32,7 @@ const int F_ANGRY = 1 << 16;
 const int F_JAIL = 1 << 17;
 const int F_SUNBURN = 1 << 20;
 const int F_GOLDWATCH = 1 << 21;
+const int F_SHIRTLESS = 1 << 23;
 
 varying vec3 v_col;
 varying float v_emit;
@@ -95,6 +96,9 @@ void vertex() {
 		skin = mix(skin, vec3(0.95, 0.2, 0.15), 0.4);
 	}
 	vec3 top = jail ? vec3(1.0, 0.45, 0.05) : COLOR.rgb;
+	if ((flags & F_SHIRTLESS) != 0 && !jail) {
+		top = skin;
+	}
 	vec3 bottom = jail ? top : (suit ? top * 0.75 : bottom_tone(hash(seed, 78.2)));
 
 	vec3 col = vec3(1.0, 0.0, 1.0);

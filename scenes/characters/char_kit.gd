@@ -22,6 +22,11 @@ const DOWN := 9
 const JUMP := 10
 const SLIDE := 11
 const DIVE := 12
+const DANCE := 13
+const CHEER := 14
+const SIT := 15
+const RIDE := 16
+const DRUM := 17
 
 # Flag bits. The first twelve switch props on; the rest restyle the body.
 const F_HAT := 1 << 0
@@ -45,6 +50,8 @@ const F_JAIL := 1 << 17
 const HEAT_SHIFT := 18  # two bits: wanted level 0..3
 const F_SUNBURN := 1 << 20
 const F_GOLDWATCH := 1 << 21
+const F_CARRY := 1 << 22  # prop: a vendor's cooler slung in front (a drum, in the DRUM pose)
+const F_SHIRTLESS := 1 << 23
 
 ## Props shown per wealth tier (DB.wealth_tier).
 const TIER_PROPS := [0, F_BUMBAG | F_WATCH, F_CHAIN | F_WATCH | F_GOLDWATCH]
@@ -86,6 +93,7 @@ const _WATCH := 17
 static var _mesh: ArrayMesh
 static var _mat: ShaderMaterial
 static var _line: ShaderMaterial
+static var _cheer_until := 0.0
 
 static var _v := PackedVector3Array()
 static var _n := PackedVector3Array()
@@ -103,8 +111,15 @@ static func now() -> float:
 static func tick() -> void:
 	if _mat != null:
 		var t := now()
-		_mat.set_shader_parameter("now", t)
-		_line.set_shader_parameter("now", t)
+		var k := clampf((_cheer_until - t) / 0.6, 0.0, 1.0)
+		for m in [_mat, _line]:
+			m.set_shader_parameter("now", t)
+			m.set_shader_parameter("cheer", k)
+
+
+## Makes everyone standing about celebrate for `seconds`.
+static func cheer(seconds: float) -> void:
+	_cheer_until = now() + seconds
 
 
 ## Adds `count` characters under `parent` and returns the MultiMesh that places them.
@@ -206,6 +221,11 @@ static func _build() -> void:
 	_box(Vector3(0, 1.28, 0.19), Vector3(0.14, 0.06, 0.08), _TORSO, _CASH, 11)
 	_ell(Vector3(0, 1.12, 0.24), Vector3(0.24, 0.28, 0.19), _TORSO, _SACK, 12)
 	_box(Vector3(0, 1.41, 0.24), Vector3(0.26, 0.09, 0.14), _TORSO, _CASH, 12)
+
+	# Vendor's cooler on a strap round the neck.
+	_box(Vector3(0, 0.98, -0.3), Vector3(0.44, 0.3, 0.3), _TORSO, _WHITE, 23)
+	_box(Vector3(0, 1.14, -0.3), Vector3(0.46, 0.05, 0.32), _TORSO, _ACCENT, 23)
+	_box(Vector3(0, 1.22, -0.12), Vector3(0.36, 0.03, 0.3), _TORSO, _BLACK, 23)
 
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)

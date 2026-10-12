@@ -9,6 +9,7 @@ const Player := preload("res://scenes/player/player.gd")
 const Beach := preload("res://scenes/world/beach.gd")
 const Ambient := preload("res://scenes/world/ambient.gd")
 const Traffic := preload("res://scenes/world/traffic.gd")
+const Motos := preload("res://scenes/world/motos.gd")
 const Crowd := preload("res://scenes/crowd/crowd_manager.gd")
 const Police := preload("res://scenes/police/police_manager.gd")
 const Hud := preload("res://scenes/ui/hud.gd")
@@ -26,6 +27,7 @@ var drops := {}         # drop id -> {pos, money, items, node}
 var world: Node3D
 var ambient: Node3D
 var traffic: Node3D
+var motos: Node3D
 var crowd: Node3D
 var police: Node3D
 var hud: CanvasLayer
@@ -54,6 +56,9 @@ func _ready() -> void:
 	add_child(ambient)
 	traffic = Traffic.new()
 	add_child(traffic)
+	motos = Motos.new()
+	motos.name = "Motos"
+	add_child(motos)
 	crowd = Crowd.new()
 	crowd.name = "Crowd"
 	add_child(crowd)
@@ -86,6 +91,8 @@ func _ready() -> void:
 			_debug_showcase()
 		elif a.begins_with("--cam="):
 			_debug_cam(a.trim_prefix("--cam="))
+		elif a.begins_with("--test=") and multiplayer.is_server():
+			_debug_test(a.trim_prefix("--test="))
 		elif a.begins_with("--time="):
 			MatchState.time = float(a.trim_prefix("--time="))
 
@@ -100,6 +107,22 @@ func _debug_shot(path: String) -> void:
 	print("fps ", Engine.get_frames_per_second())
 	get_viewport().get_texture().get_image().save_png(path)
 	get_tree().quit()
+
+
+## Scripted bits of play, for checking a feature without a hand on the keyboard.
+func _debug_test(what: String) -> void:
+	await get_tree().create_timer(0.6).timeout
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	local_player.rig.zoom(2)
+	match what:
+		"ride":
+			local_player.global_position = Vector3(20, 0.2, 69.5)
+			local_player.rotation.y = -PI / 2.0
+			await get_tree().create_timer(0.3).timeout
+			interact()
+			Input.action_press("move_forward")
+		"road":
+			local_player.global_position = Vector3(0, 0.2, 57.8)
 
 
 ## Fixed camera for --shot: x,y,z,yaw,pitch in metres and degrees.
@@ -166,19 +189,20 @@ func srv_client_ready(pname: String) -> void:
 	var drop_data: Array = []
 	for id in drops:
 		drop_data.append([id, drops[id].pos, drops[id].money, drops[id].items])
-	cl_init.rpc_id(pid, MatchState.seed_value, MatchState.duration, MatchState.time, MatchState.ended, _players_data(), crowd.snapshot(), drop_data)
+	cl_init.rpc_id(pid, MatchState.seed_value, MatchState.duration, MatchState.time, MatchState.ended, _players_data(), crowd.snapshot(), drop_data, motos.snapshot())
 	ready_peers.append(pid)
 	bcast("cl_spawn", [pid, pname.left(16), DB.spawn_point(), Player.fresh_state()])
 
 
 @rpc("authority", "call_remote", "reliable")
-func cl_init(seed_value: int, duration: float, time: float, ended: bool, pdata: Array, crowd_snap: Array, drop_data: Array) -> void:
+func cl_init(seed_value: int, duration: float, time: float, ended: bool, pdata: Array, crowd_snap: Array, drop_data: Array, moto_snap: Array) -> void:
 	cl_match_start(seed_value, duration, pdata)
 	MatchState.time = time
 	MatchState.ended = ended
 	crowd.apply_snapshot(crowd_snap)
 	for d in drop_data:
 		cl_drop_add(d[0], d[1], d[2], d[3])
+	motos.apply_snapshot(moto_snap)
 
 
 @rpc("authority", "call_remote", "reliable")
@@ -189,6 +213,9 @@ func cl_match_start(seed_value: int, duration: float, pdata: Array) -> void:
 	MatchState.ended = false
 	MatchState.running = true
 	crowd.setup(seed_value)
+	motos.reset()
+	if local_player != null:
+		local_player.stop_ride()
 	for id in drops.keys():
 		cl_drop_remove(id)
 	for e in pdata:
@@ -258,6 +285,7 @@ func _srv_start_match() -> void:
 func _on_peer_left(pid: int) -> void:
 	ready_peers.erase(pid)
 	_respawn.erase(pid)
+	motos.srv_release(pid)
 	if players.has(pid):
 		bcast("cl_despawn", [pid])
 
@@ -458,6 +486,7 @@ func _srv_kill(p: CharacterBody3D, attacker: int) -> void:
 	p.wanted_t = 0.0
 	_respawn[p.id] = DB.RESPAWN_TIME
 	police.release_chase(p.id)
+	motos.srv_release(p.id)
 	var killer = players.get(attacker)
 	if killer != null and killer != p:
 		killer.st.kills += 1
@@ -580,6 +609,7 @@ func srv_arrest(pid: int) -> void:
 	p.st.jail = DB.JAIL_TIME
 	p.wanted_t = 0.0
 	police.release_chase(pid)
+	motos.srv_release(pid)
 	push_state(p)
 	srv_teleport(pid, DB.PRISON_POS + Vector3(randf_range(-5, 5), 0, randf_range(-5, 5)))
 	bcast("cl_toast", ["%s got arrested" % p.pname])
@@ -660,6 +690,13 @@ func cl_drop_remove(id: int) -> void:
 ## Local F key: open a vendor if one is close, otherwise grab the nearest drop.
 func interact() -> void:
 	var at := local_player.global_position
+	if motos.bike_of(local_player.id) >= 0:
+		to_server("srv_dismount", [], motos)
+		return
+	var bike: int = motos.free_near(at)
+	if bike >= 0 and local_player.can_fight():
+		to_server("srv_mount", [bike], motos)
+		return
 	for vi in DB.VENDORS.size():
 		if at.distance_to(DB.VENDORS[vi].pos) < VENDOR_RANGE:
 			hud.open_shop(vi)

@@ -4,8 +4,9 @@ extends CharacterBody3D
 
 const CameraRig := preload("res://scenes/player/camera_rig.gd")
 const Kit := preload("res://scenes/characters/char_kit.gd")
+const Layout := preload("res://scenes/world/layout.gd")
 
-enum { MV_GROUND, MV_AIR, MV_SLIDE, MV_WALLRUN, MV_DIVE }
+enum { MV_GROUND, MV_AIR, MV_SLIDE, MV_WALLRUN, MV_DIVE, MV_RIDE }
 
 const WALK := 4.5
 const SPRINT := 7.0
@@ -47,6 +48,11 @@ const DIVE_SPEED := 9.5
 const DIVE_UP := 3.6
 const DIVE_CD := 1.0
 const DIVE_RECOVER := 0.3
+const RIDE_ROAD := 22.0
+const RIDE_SAND := 12.0
+const RIDE_ACCEL := 13.0
+const RIDE_BRAKE := 24.0
+const RIDE_STEER := 2.0
 const SENS := 0.0025
 const ROB_RANGE := 4.0
 const HEAD := Vector3(0, 1.3, 0)
@@ -89,6 +95,10 @@ var _wall_side := 1.0
 # The wall last run or kicked off, which cannot be used again until landing.
 var _wall_last := Vector3.ZERO
 var _wall_last_d := 0.0
+
+var _ride_spd := 0.0
+var _ride_steer := 0.0
+var _ram_cd := 0.0
 
 var _vis: Node3D
 var _body: MultiMesh
@@ -285,6 +295,10 @@ func _physics_process(delta: float) -> void:
 		wish = Vector3.ZERO
 	_jumped = false
 
+	if mv == MV_RIDE:
+		_ride(active, delta)
+		return
+
 	var grounded := is_on_floor()
 	if grounded:
 		_coyote_t = COYOTE
@@ -381,8 +395,79 @@ func _physics_process(delta: float) -> void:
 		global_position += Net.game.crowd.push_out(global_position) * delta
 
 
+# --- riding ---
+
+## Called when the server puts this (local) player on a bike.
+func start_ride() -> void:
+	_set_crouch(false)
+	_ride_spd = minf(hspeed(), RIDE_SAND)
+	mv = MV_RIDE
+
+
+## Called when the server takes this (local) player off their bike.
+func stop_ride() -> void:
+	if mv == MV_RIDE:
+		mv = MV_AIR
+		_air_jumps = AIR_JUMPS
+
+
+## How far the bike is banked into its turn, for whoever draws it.
+func ride_lean() -> float:
+	return _ride_steer if is_local else 0.0
+
+
+## Throttle and brake on W / S, steer with A / D or by looking. Hitting a wall at speed throws you.
+func _ride(active: bool, delta: float) -> void:
+	var iv := Input.get_vector("move_left", "move_right", "move_forward", "move_back") if active else Vector2.ZERO
+	var paved := global_position.z > Layout.ROAD_Z and global_position.y < 1.0
+	var top := RIDE_ROAD if paved else RIDE_SAND
+	if iv.y < -0.1:
+		_ride_spd = move_toward(_ride_spd, top, RIDE_ACCEL * delta)
+	elif iv.y > 0.1:
+		_ride_spd = move_toward(_ride_spd, -4.0, RIDE_BRAKE * delta)
+	else:
+		_ride_spd = move_toward(_ride_spd, 0.0, 5.0 * delta)
+	# Deep sand drags a fast bike down.
+	if _ride_spd > top:
+		_ride_spd = move_toward(_ride_spd, top, RIDE_BRAKE * delta)
+	var grip := clampf(absf(_ride_spd) / 5.0, 0.0, 1.0) * signf(_ride_spd)
+	rotate_y(-iv.x * RIDE_STEER * grip * delta)
+	_ride_steer = lerpf(_ride_steer, -iv.x * 0.35 * absf(grip), minf(1.0, 8.0 * delta))
+
+	var fwd := -global_basis.z
+	fwd.y = 0.0
+	fwd = fwd.normalized()
+	velocity.x = fwd.x * _ride_spd
+	velocity.z = fwd.z * _ride_spd
+	if is_on_floor():
+		velocity.y = 4.6 if active and Input.is_action_just_pressed("jump") else maxf(velocity.y, 0.0)
+	else:
+		velocity.y -= GRAVITY * delta
+	floor_snap_length = 0.3 if is_on_floor() and velocity.y <= 0.0 else 0.0
+	var before := absf(_ride_spd)
+	move_and_slide()
+	var after := Vector2(get_real_velocity().x, get_real_velocity().z).length()
+	if before > 9.0 and after < before * 0.35:
+		_ride_spd = 0.0
+		knock(-fwd * 4.0 + Vector3(0, 5.0, 0))
+		Net.game.to_server("srv_crash", [], Net.game.motos)
+		return
+	_ride_spd = minf(_ride_spd, after + 2.0) if _ride_spd > 0.0 else _ride_spd
+
+	# Anyone in the way goes over the handlebars' worth of flying.
+	_ram_cd -= delta
+	if before > Net.game.motos.RAM_SPEED and _ram_cd <= 0.0:
+		var hit: int = Net.game.crowd.pick_near(global_position + Vector3(0, 0.9, 0) - fwd * 0.3, fwd, 1.6)
+		if hit >= 0:
+			_ram_cd = 0.35
+			_ride_spd *= 0.8
+			Net.game.to_server("srv_ram", [hit], Net.game.motos)
+
+
 ## Thrown through the air by something big: a bus, a crash.
 func knock(v: Vector3) -> void:
+	if mv == MV_RIDE:
+		Net.game.to_server("srv_dismount", [], Net.game.motos)
 	velocity = v
 	mv = MV_AIR
 	_air_jumps = 0
@@ -589,6 +674,8 @@ func _animate(delta: float) -> void:
 	var speed := 0.0
 	if st.dead:
 		pose = Kit.DEAD
+	elif m == MV_RIDE:
+		pose = Kit.RIDE
 	elif m == MV_SLIDE:
 		pose = Kit.SLIDE
 	elif m == MV_DIVE:
@@ -670,7 +757,7 @@ func _local_process(delta: float) -> void:
 	if _near_t <= 0.0:
 		_near_t = 0.1
 		g.crowd.refresh_near(global_position)
-	target_npc = g.crowd.pick_near(head, dir, ROB_RANGE) if can_fight() else -1
+	target_npc = g.crowd.pick_near(head, dir, ROB_RANGE) if can_fight() and mv != MV_RIDE else -1
 
 	# Meth: sniper zoom while high, shakes on the way down, twitching on overdose.
 	var aiming := captured and Input.is_action_pressed("aim")
@@ -686,6 +773,7 @@ func _local_process(delta: float) -> void:
 	match mv:
 		MV_WALLRUN: rig.roll_target = _wall_side * 0.22
 		MV_SLIDE: rig.roll_target = 0.05
+		MV_RIDE: rig.roll_target = _ride_steer * 0.5
 		_: rig.roll_target = clampf(-velocity.dot(global_basis.x) * 0.004, -0.05, 0.05)
 
 	_attack_t -= delta

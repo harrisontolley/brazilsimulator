@@ -331,9 +331,11 @@ func _srv_chase(c: Dictionary, delta: float, look: bool) -> void:
 		c.t = SEARCH_TIME
 		c.goal = _search_point(c)
 		return
-	# Armed and dangerous suspects get shot at rather than just chased.
+	# Armed and dangerous suspects get shot at rather than just chased, and so does anyone
+	# getting away from an assault on a stolen bike.
 	c.cd -= delta
-	if c.sees and heat >= 3 and d < 30.0 and c.cd <= 0.0:
+	var armed: bool = heat >= 3 or (heat >= 2 and g.motos.bike_of(c.target) >= 0)
+	if c.sees and armed and d < 30.0 and c.cd <= 0.0:
 		c.cd = 1.0
 		var hit := randf() < 0.5
 		var to_pt := target + Vector3(0, 1.0, 0) + (Vector3.ZERO if hit else Vector3(randf_range(-1, 1), randf_range(0.5, 1.5), randf_range(-1, 1)))
