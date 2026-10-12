@@ -7,6 +7,7 @@ extends Node3D
 
 const Player := preload("res://scenes/player/player.gd")
 const Beach := preload("res://scenes/world/beach.gd")
+const Ambient := preload("res://scenes/world/ambient.gd")
 const Crowd := preload("res://scenes/crowd/crowd_manager.gd")
 const Police := preload("res://scenes/police/police_manager.gd")
 const Hud := preload("res://scenes/ui/hud.gd")
@@ -21,6 +22,8 @@ const PICKUP_COUNT := 30
 var players := {}       # peer id -> Player node
 var ready_peers: Array = []  # server: peers that have loaded this scene
 var drops := {}         # drop id -> {pos, money, items, node}
+var world: Node3D
+var ambient: Node3D
 var crowd: Node3D
 var police: Node3D
 var hud: CanvasLayer
@@ -41,7 +44,11 @@ var _respawn := {}
 
 func _ready() -> void:
 	Net.game = self
-	add_child(Beach.new())
+	world = Beach.new()
+	add_child(world)
+	ambient = Ambient.new()
+	ambient.world = world
+	add_child(ambient)
 	crowd = Crowd.new()
 	crowd.name = "Crowd"
 	add_child(crowd)

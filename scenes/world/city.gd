@@ -541,7 +541,8 @@ func _far_favela() -> void:
 			var y := maxf(Layout.hill_y(x, z), 36.0)
 			# Communities bunch into the folds between hills and leave the peaks green.
 			var fold := 0.5 + 0.5 * sin(x * 0.021 + 1.3)
-			if y < 78.0 and _rng.randf() < (0.55 + 0.4 * fold) * (1.0 - (y - 36.0) / 55.0):
+			# Too steep to build on where the slope shoots up.
+			if y < 78.0 and Layout.hill_y(x, z + 6.0) - y < 9.0 and _rng.randf() < (0.55 + 0.4 * fold) * (1.0 - (y - 36.0) / 55.0):
 				var h := _rng.randf_range(3.0, 6.5)
 				_tower(Vector3(x + w * 0.5, y + h * 0.5 - 2.0, z), Vector3(w, h + 4.0, _rng.randf_range(5.0, 7.0)), _house_tint(), 1)
 			x += w

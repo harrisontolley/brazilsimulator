@@ -9,17 +9,18 @@ extends Node3D
 ## whose pose and props are set here on state changes and played by the shader.
 
 const Kit := preload("res://scenes/characters/char_kit.gd")
+const Layout := preload("res://scenes/world/layout.gd")
 
 enum { AMBIENT, COWER, FLEE, HOSTILE, DEAD, GONE }
 
-const COUNT := 2000
+const COUNT := 2500
 const FLEE_SPEED := 5.5
 const FLEE_TIME := 10.0
 const HOSTILE_SPEED := 4.8
 const ROB_RATE := 0.55
 const ROB_TICK := 0.1
 const BODY_RADIUS := 0.5
-const WORLD_AABB := AABB(Vector3(-400, -5, -120), Vector3(800, 20, 320))
+const WORLD_AABB := Layout.WORLD_AABB
 ## cl_npc flag bit: this hostile NPC has a gun out. The low two bits are its wealth tier.
 const NPC_SHOOTER := 4
 const LOCAL_TOPS := [Color(1.0, 0.85, 0.1), Color(0.1, 0.65, 0.3), Color(0.95, 0.95, 0.95), Color(0.3, 0.7, 0.95), Color(0.9, 0.35, 0.2)]
@@ -130,16 +131,17 @@ func setup(seed_value: int) -> void:
 		_width[i] = _scale[i] * a.width / a.scale
 		_yaw[i] = rng.randf() * TAU
 
-		var on_prom := rng.randf() < 0.28
-		var p := Vector3(rng.randf_range(-292.0, 292.0), 0.0, rng.randf_range(41.0, 51.0) if on_prom else rng.randf_range(-36.0, 37.0))
-		var walker := rng.randf() < (0.8 if on_prom else 0.3)
-		# Nobody sets up their towel inside a hut.
-		p = DB.clear_of_solids(p, 0.5)
+		# Where they spend the day: [home, chance of walking, walk direction, longest walk].
+		var spot := _spot(rng)
+		var p: Vector3 = spot[0]
+		var on_sand := p.z < Layout.PROM_Z
+		var walker: bool = rng.randf() < spot[1]
 		_home[i] = p
-		_lying[i] = 1 if (not walker and not on_prom and a.id != "mafia" and rng.randf() < 0.45) else 0
-		_w_dir[i] = Vector3(1.0, 0.0, 0.0 if on_prom else rng.randf_range(-0.25, 0.25)).normalized()
+		_lying[i] = 1 if (not walker and on_sand and a.id != "mafia" and rng.randf() < 0.45) else 0
+		_w_dir[i] = spot[2]
 		_w_yaw[i] = Kit.face(_w_dir[i])
-		_w_len[i] = rng.randf_range(15.0, 70.0)
+		var far: float = spot[3]
+		_w_len[i] = rng.randf_range(minf(15.0, far), far)
 		_w_spd[i] = rng.randf_range(0.9, 1.7)
 		_w_phase[i] = rng.randf() * 140.0
 		_walker[i] = 1 if walker else 0
@@ -149,7 +151,7 @@ func setup(seed_value: int) -> void:
 			towels.append(i)
 
 		# A few stragglers never leave; everyone else drains out over the match.
-		var stays := rng.randf() < 0.04
+		var stays := rng.randf() < (0.04 if p.z < Layout.WALK_Z else 0.6)
 		_leave_t[i] = INF if stays else MatchState.duration * lerpf(0.1, 0.82, pow(rng.randf(), 0.8))
 		order.append([_leave_t[i], i])
 
@@ -186,6 +188,32 @@ func setup(seed_value: int) -> void:
 	for i in count:
 		_place(i, _home[i])
 		_restyle(i)
+
+
+## Picks where an NPC lives: on the sand, strolling the calçadão, or somewhere in town.
+func _spot(rng: RandomNumberGenerator) -> Array:
+	var x := rng.randf_range(-292.0, 292.0)
+	var along := Vector3.RIGHT
+	var roll := rng.randf()
+	if roll < 0.6:
+		var p := Vector3(x, 0.0, rng.randf_range(-36.0, 37.0))
+		if Layout.on_play_area(p, 1.0):
+			p.z = rng.randf_range(-36.0, -28.0)
+		# Nobody sets up their towel inside a hut.
+		return [DB.clear_of_solids(p, 0.5), 0.3, Vector3(1.0, 0.0, rng.randf_range(-0.25, 0.25)).normalized(), 70.0]
+	if roll < 0.78:
+		return [DB.clear_of_solids(Vector3(x, 0.0, rng.randf_range(41.5, 50.0)), 0.5), 0.8, along, 70.0]
+	if roll < 0.84:
+		return [Vector3(x, 0.0, rng.randf_range(70.6, 72.4)), 0.85, along, 60.0]
+	if roll < 0.92:
+		return [Vector3(x, 0.0, rng.randf_range(103.5, 107.5)), 0.6, along, 50.0]
+	if roll < 0.95:
+		var cx: float = Layout.CROSS_X[rng.randi() % Layout.CROSS_X.size()]
+		return [Vector3(cx + rng.randf_range(-3.0, 3.0), 0.0, 86.0), 0.8, Vector3.BACK, 20.0]
+	# Up in the favela, out on the walkway in front of the houses.
+	var t := rng.randi() % Layout.TERRACES
+	var z := Layout.FAVELA_Z + t * Layout.TERRACE_D + rng.randf_range(0.6, Layout.BECO - 0.5)
+	return [Vector3(x, (t + 1) * Layout.TERRACE_H, z), 0.35, along, 30.0]
 
 
 func _build_meshes(tops: PackedColorArray, towels: PackedInt32Array) -> void:
@@ -320,7 +348,7 @@ func _process(delta: float) -> void:
 		if state[i] == FLEE:
 			var e = _ov[i]
 			var dt: float = t - e[2]
-			if dt > FLEE_TIME:
+			if dt > FLEE_TIME or dt * FLEE_SPEED > e[3]:
 				state[i] = GONE
 				_active.erase(i)
 				_hide(i)
@@ -421,7 +449,7 @@ func ray_pick(o: Vector3, d: Vector3, max_t: float, radius: float) -> Array:
 func count_near(p: Vector3, r: float) -> int:
 	var n := 0
 	for i in count:
-		if state[i] >= DEAD or (_lying[i] == 1 and state[i] == AMBIENT):
+		if state[i] >= DEAD or (_lying[i] == 1 and state[i] == AMBIENT) or absf(pos[i].y - p.y) > 2.5:
 			continue
 		var dx := pos[i].x - p.x
 		var dz := pos[i].z - p.z
@@ -461,9 +489,9 @@ func push_out(p: Vector3) -> Vector3:
 		if state[i] >= DEAD or (_lying[i] == 1 and state[i] == AMBIENT):
 			continue
 		var v := p - pos[i]
-		v.y = 0.0
-		var d := v.length()
-		if d < 0.7 and d > 0.01:
+		var d := Vector2(v.x, v.z).length()
+		if absf(v.y) < 1.2 and d < 0.7 and d > 0.01:
+			v.y = 0.0
 			out += v / d * (0.7 - d) * 8.0
 	return out
 
@@ -491,7 +519,7 @@ func cl_npc(i: int, s: int, p: Vector3, dir: Vector3, t0: float, flags: int) -> 
 				_yaw[i] = Kit.face(threat)
 			_place(i, p)
 		FLEE:
-			_ov[i] = [p, dir, t0]
+			_ov[i] = [p, dir, t0, Layout.run_dist(p, dir, FLEE_SPEED * FLEE_TIME)]
 			_active[i] = true
 			_yaw[i] = Kit.face(dir)
 		HOSTILE:
@@ -544,8 +572,15 @@ func _srv_flee(i: int, threat: Vector3) -> void:
 	_hostile.erase(i)
 	var dir := pos[i] - threat
 	dir.y = 0.0
-	# Bias toward the city so they run off the beach rather than into the sea.
-	dir = (dir.normalized() + Vector3(0, 0, 0.6)).normalized()
+	var b := Layout.band(pos[i].z)
+	if pos[i].y > 1.0 or b == 2 or b == 4:
+		# In a street or along a terrace there is only up it or down it.
+		dir = Vector3(1.0 if dir.x >= 0.0 else -1.0, 0.0, 0.0)
+	elif b % 2 == 1:
+		dir = Vector3(0.0, 0.0, 1.0 if dir.z >= 0.0 else -1.0)
+	else:
+		# Bias toward the city so they run off the beach rather than into the sea.
+		dir = (dir.normalized() + Vector3(0, 0, 0.6)).normalized()
 	_srv_set(i, FLEE, dir)
 
 
@@ -569,14 +604,19 @@ func _srv_hostile(i: int, delta: float) -> void:
 		_srv_flee(i, pos[i] - Vector3(0, 0, 1))
 		return
 	var to: Vector3 = p.global_position - pos[i]
+	var dy := absf(to.y)
 	to.y = 0.0
 	var d := to.length()
 	if d > 60.0:
 		_srv_flee(i, p.global_position)
 		return
 	var step := pos[i]
-	if d > (12.0 if h.shooter else 1.5):
-		step += to / d * HOSTILE_SPEED * delta
+	# Streets have to be gone round; nobody up on a terrace gives chase at all.
+	if d > (12.0 if h.shooter else 1.5) and pos[i].y < 1.0:
+		var via := Layout.next_point(pos[i], p.global_position) - pos[i]
+		via.y = 0.0
+		if via.length() > 0.3:
+			step += via.normalized() * HOSTILE_SPEED * delta
 	_hostile_step(i, step, delta)
 	h.cd -= delta
 	if h.cd > 0.0:
@@ -590,7 +630,7 @@ func _srv_hostile(i: int, delta: float) -> void:
 		Crime.report_noise(pos[i], 80.0, -1)
 		if hit:
 			g.srv_damage(h.target, 14.0, -1)
-	elif not h.shooter and d < 2.0:
+	elif not h.shooter and d < 2.0 and dy < 2.0:
 		h.cd = 1.0
 		g.bcast("cl_fx", [pos[i] + Vector3(0, 1.3, 0), p.global_position + Vector3(0, 1.0, 0), true, DB.WHO_NPC, i, DB.WHO_PLAYER, h.target])
 		g.srv_damage(h.target, DB.ARCHETYPES[arch[i]].melee, -1)

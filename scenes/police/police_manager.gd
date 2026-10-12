@@ -5,10 +5,11 @@ extends Node3D
 ## crowd and the cop searches where they were last seen, then goes back to patrol.
 
 const Kit := preload("res://scenes/characters/char_kit.gd")
+const Layout := preload("res://scenes/world/layout.gd")
 
 enum { PATROL, INVESTIGATE, CHASE, DOWN, SEARCH }
 
-const N := 10
+const N := 14
 const PATROL_SPEED := 1.8
 const INVESTIGATE_SPEED := 4.0
 const CHASE_SPEED := 6.4
@@ -60,7 +61,7 @@ var _frozen := false
 
 
 func _ready() -> void:
-	_mm = Kit.add_to(self, N, AABB(Vector3(-400, -5, -120), Vector3(800, 20, 320)))
+	_mm = Kit.add_to(self, N, Layout.WORLD_AABB)
 	for i in N:
 		_mm.set_instance_color(i, Color(0.1, 0.17, 0.52, fmod(0.07 + i * 0.37, 1.0)))
 	_target.resize(N)
@@ -78,7 +79,8 @@ func _ready() -> void:
 func reset() -> void:
 	cops.clear()
 	for i in N:
-		var p := Vector3(-270.0 + i * 60.0, 0.0, 47.0)
+		# Ten walk the calçadão, the rest the back street.
+		var p := Vector3(-270.0 + i * 60.0, 0.0, 47.0) if i < 10 else Vector3(-210.0 + (i - 10) * 140.0, 0.0, 105.0)
 		cops.append({"pos": p, "state": PATROL, "target": 0, "goal": _patrol_point(), "hp": 150.0, "t": 0.0, "cd": 0.0,
 				"seen": p, "sees": false, "lost": 0.0, "chase_t": 0.0, "look": i * LOOK_TICK / N, "ignore": 0, "ignore_t": 0.0})
 		_target[i] = p
@@ -86,7 +88,13 @@ func reset() -> void:
 
 
 func _patrol_point() -> Vector3:
-	return Vector3(randf_range(-280.0, 280.0), 0.0, randf_range(-30.0, 50.0))
+	var x := randf_range(-280.0, 280.0)
+	var roll := randf()
+	if roll < 0.7:
+		return Vector3(x, 0.0, randf_range(-30.0, 50.0))
+	if roll < 0.8:
+		return Vector3(x, 0.0, 71.5)
+	return Vector3(x, 0.0, randf_range(102.0, 108.0))
 
 
 func _process(delta: float) -> void:
@@ -355,16 +363,19 @@ func _srv_search(c: Dictionary, delta: float, look: bool) -> void:
 func _search_point(c: Dictionary) -> Vector3:
 	var a := randf() * TAU
 	var p: Vector3 = c.seen + Vector3(cos(a), 0.0, sin(a)) * randf_range(3.0, SEARCH_RADIUS)
-	return Vector3(clampf(p.x, -295.0, 295.0), 0.0, clampf(p.z, -34.0, 66.0))
+	return Layout.snap(Vector3(clampf(p.x, -295.0, 295.0), 0.0, maxf(p.z, -34.0)))
 
 
 func _move(c: Dictionary, goal: Vector3, speed: float, delta: float) -> bool:
-	var to: Vector3 = goal - c.pos
+	# Cops stay at street level and go round the blocks, never through them.
+	goal = Layout.snap(goal)
+	if Vector2(goal.x - c.pos.x, goal.z - c.pos.z).length() < 0.5:
+		return true
+	var to: Vector3 = Layout.next_point(c.pos, goal) - c.pos
 	to.y = 0.0
 	var d := to.length()
-	if d < 0.5:
-		return true
-	c.pos += to / d * minf(speed * delta, d)
+	if d > 0.01:
+		c.pos += to / d * minf(speed * delta, d)
 	c.pos.y = 0.0
 	return false
 
