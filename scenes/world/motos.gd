@@ -34,6 +34,7 @@ var kind: Array[int] = []    # MOTO or SKI
 ## The bike itself, for anyone else who needs to draw one.
 var bike_mesh: ArrayMesh
 var bike_mat: ShaderMaterial
+var ski_mesh: ArrayMesh
 
 var _nodes: Array[Node3D] = []
 var _engines: Array[AudioStreamPlayer3D] = []
@@ -77,6 +78,7 @@ func _ready() -> void:
 		part(Vector3(0, 0.24, 1.4), Vector3(0.3, 0.2, 0.25), Color(0.5, 0.5, 0.53)),
 		part(Vector3(0, 0.56, 1.12), Vector3(0.5, 0.08, 0.5), dark),
 	])
+	ski_mesh = ski
 	_spots = SPOTS + SKI_SPOTS
 	for i in _spots.size():
 		var is_ski := i >= SPOTS.size()

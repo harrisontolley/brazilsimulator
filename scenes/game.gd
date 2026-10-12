@@ -25,6 +25,7 @@ const Interact := preload("res://scenes/player/interact.gd")
 const Threats := preload("res://scenes/world/threats.gd")
 const Casino := preload("res://scenes/world/casino.gd")
 const Yacht := preload("res://scenes/world/yacht.gd")
+const SeaPatrol := preload("res://scenes/police/sea_patrol.gd")
 const Prison := preload("res://scenes/world/prison.gd")
 const Places := preload("res://scenes/world/places.gd")
 const WeaponKit := preload("res://scenes/weapons/weapon_kit.gd")
@@ -65,6 +66,7 @@ var interaction: Node
 var threats: Node3D
 var casino: Node
 var yacht: Node3D
+var sea_patrol: Node3D
 var prison: Node
 var local_player: CharacterBody3D
 
@@ -122,6 +124,9 @@ func _ready() -> void:
 	yacht = Yacht.new()
 	yacht.name = "Yacht"
 	add_child(yacht)
+	sea_patrol = SeaPatrol.new()
+	sea_patrol.name = "SeaPatrol"
+	add_child(sea_patrol)
 	shots = Shots.new()
 	shots.name = "Shots"
 	add_child(shots)
@@ -989,6 +994,7 @@ func cl_match_start(seed_value: int, duration: float, pdata: Array) -> void:
 	traffic.setup(seed_value)
 	motos.reset()
 	yacht.reset()
+	sea_patrol.reset()
 	if local_player != null:
 		local_player.stop_ride()
 	for id in drops.keys():
@@ -1679,6 +1685,9 @@ func _srv_strike(p, item: String, origin: Vector3, dir: Vector3, reach: float, k
 			DB.WHO_DOG:
 				if dogs.srv_damage(hit.id, dmg, pid):
 					res |= DB.FX_KILL
+			DB.WHO_SEACOP:
+				if sea_patrol.srv_damage(hit.id, dmg, pid):
+					res |= DB.FX_KILL
 		bcast("cl_fx", [from if pass_k > 0 else origin, from + dir * hit.t, w.melee, DB.WHO_PLAYER, pid, hit.type, hit.id, res, item, mode | (FX_THROUGH if pass_k > 0 else 0)])
 		if p.st.jail > 0.0 and w.melee and hit.type != DB.WHO_NONE:
 			prison.srv_fight(p, from + dir * hit.t, res & DB.FX_KO != 0)
@@ -1814,6 +1823,9 @@ func _ray_hit(o: Vector3, d: Vector3, max_t: float, grow: float, exclude: int) -
 	var dog: Array = dogs.ray_pick(o, d, best.t, grow)
 	if dog[0] >= 0:
 		best = {"type": DB.WHO_DOG, "id": dog[0], "t": dog[1], "zone": DB.ZONE_BODY}
+	var sc: Array = sea_patrol.ray_pick(o, d, best.t, grow)
+	if sc[0] >= 0:
+		best = {"type": DB.WHO_SEACOP, "id": sc[0], "t": sc[1], "zone": sc[2]}
 	return best
 
 
@@ -1894,7 +1906,7 @@ func cl_fx(from: Vector3, to: Vector3, melee: bool, src_type: int, src_id: int, 
 				var who := "a dog"
 				match hit_type:
 					DB.WHO_PLAYER: who = players[hit_id].pname if players.has(hit_id) else "somebody"
-					DB.WHO_COP: who = "a policeman"
+					DB.WHO_COP, DB.WHO_SEACOP: who = "a policeman"
 					DB.WHO_NPC: who = "a " + DB.ARCHETYPES[crowd.arch[hit_id]].id
 				hud.feed("%s %s%s" % ["Knocked out" if res & DB.FX_KILL == 0 else "Killed", who, "  (head)" if res & DB.FX_HEAD else ""], Color(1.0, 0.82, 0.12) if res & DB.FX_HEAD else Color(0.97, 0.91, 0.78))
 
@@ -1913,6 +1925,7 @@ func _fx_actor(type: int, id: int, attack: bool) -> void:
 		DB.WHO_COP: police.fx_event(id, attack)
 		DB.WHO_NPC: crowd.fx_event(id, attack)
 		DB.WHO_DOG: dogs.fx_event(id, attack)
+		DB.WHO_SEACOP: sea_patrol.fx_event(id, attack)
 
 
 ## A client reporting that it walked in front of vehicle `vi`.

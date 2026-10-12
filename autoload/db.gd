@@ -156,6 +156,7 @@ const WHO_PLAYER := 1
 const WHO_COP := 2
 const WHO_NPC := 3
 const WHO_DOG := 4
+const WHO_SEACOP := 5
 
 const FOOD := ["coco", "espetinho", "acai", "caipirinha", "guarana"]
 const LOOT := ["phone", "watch", "camera", "chain"]

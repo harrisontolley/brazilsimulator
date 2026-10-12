@@ -256,10 +256,15 @@ func setup(seed_value: int) -> void:
 	_babble = Babble.new()
 	add_child(_babble)
 
+	var sea_rng := RandomNumberGenerator.new()
+	sea_rng.seed = seed_value ^ 0x5EA
 	for i in count:
 		# Where they spend the day decides a lot about who they are.
 		var spot: Dictionary = planned[i] if i < planned.size() else _spot(rng)
-		var roll := rng.randf()
+		# People on the water draw their looks from dice of their own, so that putting them
+		# there changes nobody on land.
+		var r: RandomNumberGenerator = sea_rng if spot.get("afloat", false) else rng
+		var roll := r.randf()
 		var ai := 0
 		for k in DB.ARCHETYPES.size():
 			roll -= DB.ARCHETYPES[k].weight
@@ -272,31 +277,31 @@ func setup(seed_value: int) -> void:
 		arch[i] = ai
 		state[i] = AMBIENT
 		hp[i] = a.hp
-		money[i] = rng.randi_range(a.money[0], a.money[1])
+		money[i] = r.randi_range(a.money[0], a.money[1])
 		_tier[i] = DB.wealth_tier(money[i])
 		_ev[i] = 0.0
-		_scale[i] = a.scale * rng.randf_range(0.92, 1.08)
+		_scale[i] = a.scale * r.randf_range(0.92, 1.08)
 		_width[i] = _scale[i] * a.width / a.scale
-		_yaw[i] = spot.get("yaw", rng.randf() * TAU)
+		_yaw[i] = spot.get("yaw", r.randf() * TAU)
 		_idle[i] = spot.get("idle", Kit.STAND)
 		_grp[i] = spot.get("grp", -1)
 		_sit[i] = 1 if spot.get("sit", false) else 0
 
 		var p: Vector3 = spot.p
 		var on_sand := p.z < Layout.PROM_Z
-		var walker: bool = rng.randf() < spot.walk
+		var walker: bool = r.randf() < spot.walk
 		_home[i] = p
-		_lying[i] = 1 if (not walker and on_sand and a.id != "mafia" and not spot.has("idle") and rng.randf() < 0.45) else 0
+		_lying[i] = 1 if (not walker and on_sand and a.id != "mafia" and not spot.has("idle") and r.randf() < 0.45) else 0
 		_w_dir[i] = spot.dir
 		_w_yaw[i] = Kit.face(_w_dir[i])
 		var far: float = spot.far
-		_w_len[i] = rng.randf_range(minf(15.0, far), far)
-		_w_spd[i] = spot.get("speed", rng.randf_range(0.9, 1.7))
-		_w_phase[i] = rng.randf() * 140.0
+		_w_len[i] = r.randf_range(minf(15.0, far), far)
+		_w_spd[i] = spot.get("speed", r.randf_range(0.9, 1.7))
+		_w_phase[i] = r.randf() * 140.0
 		# People out for a stroll stop now and then; people running or playing do not.
-		_w_cycle[i] = rng.randf_range(16.0, 55.0)
-		_w_stop[i] = rng.randf_range(2.5, 7.0) if _w_spd[i] < 2.5 and rng.randf() < 0.8 else 0.0
-		var style := rng.randf()
+		_w_cycle[i] = r.randf_range(16.0, 55.0)
+		_w_stop[i] = r.randf_range(2.5, 7.0) if _w_spd[i] < 2.5 and r.randf() < 0.8 else 0.0
+		var style := r.randf()
 		_w_pose[i] = Kit.WALK
 		if a.id != "vendor" and _w_spd[i] < 2.5:
 			if style < 0.1:
@@ -329,7 +334,7 @@ func setup(seed_value: int) -> void:
 		_was[i] = (1 if walker else 0) | (2 if _lying[i] == 1 else 0)
 		# Left to themselves on a pavement, people get their phones out or hunker down.
 		if not walker and not on_sand and _lying[i] == 0 and not spot.has("idle"):
-			var habit := rng.randf()
+			var habit := r.randf()
 			if habit < 0.22:
 				_idle[i] = Kit.PHONE
 			elif habit < 0.3:
@@ -339,9 +344,9 @@ func setup(seed_value: int) -> void:
 
 		# A few stragglers never leave; everyone else drains out over the match.
 		# People with a job to do indoors, or nowhere else they are allowed to be, stay put.
-		var stays: bool = rng.randf() < (0.5 if _grp[i] >= 0 else (0.04 if p.z < Layout.WALK_Z else 0.6)) or (_grp[i] >= 0 and Places.room_at(p) >= 0) or spot.get("stay", false)
+		var stays: bool = r.randf() < (0.5 if _grp[i] >= 0 else (0.04 if p.z < Layout.WALK_Z else 0.6)) or (_grp[i] >= 0 and Places.room_at(p) >= 0) or spot.get("stay", false)
 		_afloat[i] = 1 if spot.get("afloat", false) else 0
-		_leave_t[i] = INF if stays else MatchState.duration * lerpf(0.1, 0.82, pow(rng.randf(), 0.8))
+		_leave_t[i] = INF if stays else MatchState.duration * lerpf(0.1, 0.82, pow(r.randf(), 0.8))
 		order.append([_leave_t[i], i])
 
 		# Outfit: the archetype should be readable from the silhouette and colours alone.
@@ -349,16 +354,16 @@ func setup(seed_value: int) -> void:
 		var look := 0
 		match a.id:
 			"tourist":
-				top = Color.from_hsv(rng.randf(), 0.8, 0.95)
+				top = Color.from_hsv(r.randf(), 0.8, 0.95)
 				look = Kit.F_SHORTS
-				if rng.randf() < 0.6:
+				if r.randf() < 0.6:
 					look |= Kit.F_HAT
-				if rng.randf() < 0.45:
+				if r.randf() < 0.45:
 					look |= Kit.F_CAMERA
-				if rng.randf() < 0.55:
+				if r.randf() < 0.55:
 					look |= Kit.F_SUNBURN
 			"local":
-				top = LOCAL_TOPS[rng.randi() % LOCAL_TOPS.size()]
+				top = LOCAL_TOPS[r.randi() % LOCAL_TOPS.size()]
 				look = Kit.F_SHORTS | Kit.F_TANK
 			"vendor":
 				top = Color(0.98, 0.98, 0.95)
@@ -370,32 +375,32 @@ func setup(seed_value: int) -> void:
 				top = Color(0.1, 0.17, 0.52)
 				look = Kit.F_POLICE | Kit.F_SUIT
 			"malandro":
-				top = [Color(0.55, 0.05, 0.08), Color(0.08, 0.08, 0.1), Color(0.95, 0.95, 0.95)][rng.randi() % 3]
+				top = [Color(0.55, 0.05, 0.08), Color(0.08, 0.08, 0.1), Color(0.95, 0.95, 0.95)][r.randi() % 3]
 				look = Kit.F_SHORTS | Kit.F_TANK | Kit.F_CHAIN
-				if rng.randf() < 0.6:
+				if r.randf() < 0.6:
 					look |= Kit.F_HAT
-				if rng.randf() < 0.5:
+				if r.randf() < 0.5:
 					look |= Kit.F_SHADES
 			"traficante":
 				top = Color(0.1, 0.1, 0.1)
 				look = Kit.F_SHORTS | Kit.F_SHIRTLESS | Kit.F_SHADES | Kit.F_CHAIN
 			"socialite":
 				# Not much, in a loud colour.
-				top = Color.from_hsv(rng.randf(), rng.randf_range(0.55, 0.95), 1.0) if rng.randf() < 0.8 else Color(0.97, 0.97, 0.97)
+				top = Color.from_hsv(r.randf(), r.randf_range(0.55, 0.95), 1.0) if r.randf() < 0.8 else Color(0.97, 0.97, 0.97)
 				look = Kit.F_SHORTS | Kit.F_TANK | Kit.F_SHIRTLESS
-				if rng.randf() < 0.45:
+				if r.randf() < 0.45:
 					look |= Kit.F_SHADES
-				if rng.randf() < 0.12:
+				if r.randf() < 0.12:
 					look |= Kit.F_HAT
 			"magnata":
 				top = Color(0.97, 0.97, 0.95)
 				look = Kit.F_SHORTS | Kit.F_SHIRTLESS | Kit.F_SHADES | Kit.F_SUNBURN
 			_:
-				top = Color(0.09, 0.09, 0.11) if rng.randf() < 0.7 else Color(0.95, 0.95, 0.95)
+				top = Color(0.09, 0.09, 0.11) if r.randf() < 0.7 else Color(0.95, 0.95, 0.95)
 				look = Kit.F_SUIT | Kit.F_SHADES
-		if _lying[i] == 1 and rng.randf() < 0.5:
+		if _lying[i] == 1 and r.randf() < 0.5:
 			look |= Kit.F_SHADES
-		top.a = rng.randf() * 0.999 + a.get("build", 0)
+		top.a = r.randf() * 0.999 + a.get("build", 0)
 		tops.append(top)
 		_look[i] = look | spot.get("look", 0)
 		# The boca's soldiers carry rifles, and carry them where everyone can see.

@@ -432,6 +432,8 @@ func _srv_heat(delta: float) -> void:
 			if (c.state == CHASE or c.state == SEARCH) and c.target == pid:
 				chased = true
 				seen = seen or (c.state == CHASE and c.sees)
+		# The boats count as eyes too.
+		seen = seen or g.sea_patrol.sees(pid)
 		var pu = _pursuit.get(pid)
 		if pu == null:
 			pu = {"t": 0.0, "budget": PURSUIT_BUDGET[heat], "grace": 0.0}

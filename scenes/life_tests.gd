@@ -38,6 +38,8 @@ static func run(g: Node, what: String) -> bool:
 			await _jetski(g)
 		"yacht":
 			await _yacht(g)
+		"seacops":
+			await _seacops(g)
 		"arsenal", "shotgun", "sniper", "rocket", "grenade", "molotov":
 			await _arsenal(g, what)
 		_:
@@ -1001,3 +1003,53 @@ static func _yacht(g: Node) -> void:
 	if paid != y.SAFE_TAKE or p.st.heat < 2:
 		bad.append("safe paid %d, heat %d" % [paid, p.st.heat])
 	g.debug_result("yacht", bad.is_empty(), "%d aboard (%d guards, %d girls, %d rich); warned %s; aboard after %.1f s, alarm %.1f, shot for %.0f in 6 s by %d guards, %d guests scared; stairs %.1f s; gun at y %.2f; safe %d  %s" % [y.aboard.size(), y.guards.size(), girls, rich, warned, boarded, alarmed, shot, armed, scared, climbed, gun_y, paid, "; ".join(bad)])
+
+
+## Wanted and in the water: the boats come out, shoot, keep the heat up, lose a diver, and
+## go home again; and they can be shot off their skis.
+static func _seacops(g: Node) -> void:
+	var p = g.local_player
+	var sp = g.sea_patrol
+	var bad: Array = []
+	p.st.hp = 100000.0
+	p.st.heat = 3
+	p.wanted_t = 30.0
+	g.push_state(p)
+	p.global_position = Vector3(20, -1.0, -120)
+	var out := await _until(g, 6.0, func(): return sp.units.any(func(u): return u.state == sp.OUT))
+	var n := 0
+	for u in sp.units:
+		n += 1 if u.state == sp.OUT else 0
+	if out < 0.0 or n < 2:
+		bad.append("launch: %.1f s, %d out" % [out, n])
+	var near := await _until(g, 20.0, func(): return sp.units.any(func(u): return u.state == sp.OUT and u.pos.distance_to(p.global_position) < 28.0))
+	var hp0: float = p.st.hp
+	await _until(g, 12.0, func(): return p.st.hp < hp0 or p.st.jail > 0.0)
+	var shot: float = hp0 - p.st.hp
+	if near < 0.0 or (shot <= 0.0 and p.st.jail <= 0.0):
+		bad.append("no fire: near %.1f, lost %.0f" % [near, shot])
+	var seen: bool = sp.sees(p.id)
+	# One of them shot off his ski.
+	var k := 0
+	for i in sp.units.size():
+		if sp.units[i].state == sp.OUT:
+			k = i
+	var u: Dictionary = sp.units[k]
+	var from: Vector3 = u.pos + Vector3(6, 1.0, 0)
+	var aim: Vector3 = (u.pos + Vector3(0, 0.6, 0) - from).normalized()
+	var pick: Array = sp.ray_pick(from, aim, 20.0, 0.0)
+	var killed: bool = sp.srv_damage(k, 999.0, p.id)
+	if pick[0] != k or not killed or u.state != sp.DOWN:
+		bad.append("shooting one: picked %d of %d, killed %s" % [pick[0], k, killed])
+	# Under, and they lose sight.
+	p.st.jail = 0.0
+	p.st.heat = 3
+	p.global_position = Vector3(-60, -1.0, -150)
+	await _until(g, 3.0, func(): return p.mv == p.MV_SWIM)
+	g._air[p.id] = 9999.0
+	Input.action_press("crouch")
+	var lost := await _until(g, 6.0, func(): return not sp.sees(p.id) and p.head_under())
+	if lost < 0.0:
+		bad.append("diving did not lose them")
+	_keys_up()
+	g.debug_result("seacops", bad.is_empty(), "out after %.1f s (%d of them), alongside after %.1f s, shot for %.0f, seen %s, one killed %s, lost by diving %.1f s  %s" % [out, n, near, shot, seen, killed, lost, "; ".join(bad)])

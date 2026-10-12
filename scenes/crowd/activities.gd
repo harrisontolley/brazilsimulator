@@ -241,8 +241,12 @@ func _plan_spots() -> void:
 	for k in Places.spots.size():
 		var s: Dictionary = Places.spots[k]
 		if k % 6 == 0:
+			# (A group out on the water is planned without disturbing the dice for the land.)
+			var keep := _rng.state
 			g = _group(ROOM, s.pos, _rng.randf_range(4.0, 8.0))
 			g["poses"] = []
+			if s.get("opts", {}).get("afloat", false):
+				_rng.state = keep
 		g.poses.append(s.poses)
 		_member(g, s.pos, s.yaw, s.poses[0], s.arch)
 		_specs[_specs.size() - 1].merge(s.get("opts", {}))
