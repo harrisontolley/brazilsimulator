@@ -1,0 +1,736 @@
+extends CharacterBody3D
+## One per connected peer on every machine. The owning client drives movement;
+## `st` is server-owned state replicated through Game.cl_state.
+
+const CameraRig := preload("res://scenes/player/camera_rig.gd")
+const Kit := preload("res://scenes/characters/char_kit.gd")
+
+enum { MV_GROUND, MV_AIR, MV_SLIDE, MV_WALLRUN, MV_DIVE }
+
+const WALK := 4.5
+const SPRINT := 7.0
+const JUMP := 5.6
+const GRAVITY := 16.0
+# Quake-style movement: friction only bites on the ground, and air acceleration is strong
+# but only toward a tiny wish speed, so turning with a strafe key held builds speed.
+const GROUND_ACCEL := 10.0
+const FRICTION := 6.0
+const STOP_SPEED := 2.0
+const AIR_ACCEL := 60.0
+const AIR_WISH_CAP := 0.9
+## Below this speed the air also gives plain steering, so a standing jump is controllable.
+const AIR_STEER_SPEED := 4.0
+const AIR_STEER := 18.0
+const AIR_JUMPS := 1
+const DOUBLE_JUMP := 5.2
+const COYOTE := 0.1
+const JUMP_BUFFER := 0.12
+const SLIDE_MIN := 5.0
+const SLIDE_END := 3.0
+const SLIDE_FRICTION := 0.7
+const SLIDE_BOOST := 2.5
+const SLIDE_CD := 0.8
+const SLIDE_HOP := 1.0
+## A slide has to last this long before hopping out of it pays a boost.
+const SLIDE_HOP_MIN := 0.15
+## Slide and slide-hop boosts stop adding speed here; past it only air strafing does.
+const BOOST_CAP := 11.5
+const STAND_H := 1.5
+const CROUCH_H := 0.8
+const CROUCH_HEAD := 0.62
+const WALL_MIN_SPEED := 4.5
+const WALL_GRAVITY := 2.5
+const WALL_TIME := 1.6
+const WALL_JUMP_OUT := 6.0
+const WALL_JUMP_UP := 5.4
+const DIVE_SPEED := 9.5
+const DIVE_UP := 3.6
+const DIVE_CD := 1.0
+const DIVE_RECOVER := 0.3
+const SENS := 0.0025
+const ROB_RANGE := 4.0
+const HEAD := Vector3(0, 1.3, 0)
+## Kit characters are adult-sized; the players are kids.
+const BODY_SCALE := 0.78
+const VM_RIGHT := Vector3(0.3, -0.3, -0.75)
+const VM_LEFT := Vector3(-0.3, -0.32, -0.7)
+
+var id := 0
+var pname := "Kid"
+var is_local := false
+var st: Dictionary = fresh_state()
+var net_pos := Vector3.ZERO
+var net_yaw := 0.0
+var wanted_t := 0.0  # server only
+var rig: Node3D
+var target_npc := -1
+var robbing := false
+## What the legs are doing (MV_*). Simulated by the owner; others get it as net_mv.
+var mv := MV_GROUND
+## Replicated mv in the low three bits; bit 3 set while wall running with the wall on the right.
+var net_mv := 0
+
+var _cap: CapsuleShape3D
+var _shape: CollisionShape3D
+var _crouched := false
+var _air_jumps := 0
+var _coyote_t := 0.0
+var _buffer_t := 0.0
+var _jumped := false
+var _jump_was := false
+var _slide_t := 0.0
+var _slide_cd := 0.0
+var _dive_cd := 0.0
+var _recover_t := 0.0
+var _ramp_vy := 0.0
+var _wall_n := Vector3.ZERO
+var _wall_t := 0.0
+var _wall_side := 1.0
+# The wall last run or kicked off, which cannot be used again until landing.
+var _wall_last := Vector3.ZERO
+var _wall_last_d := 0.0
+
+var _vis: Node3D
+var _body: MultiMesh
+var _label: Label3D
+var _last_pos := Vector3.ZERO
+var _spd := 0.0
+var _vy := 0.0
+var _ev := 0.0  # Kit one-shot event time
+var _was_dead := false
+# First-person hands.
+var _vm: Node3D
+var _vm_r: Node3D
+var _vm_l: Node3D
+var _vm_gun: MeshInstance3D
+var _vm_t := -10.0
+var _vm_side := 1.0
+var _send_t := 0.0
+var _near_t := 0.0
+var _rob_t := 0.0
+var _attack_t := 0.0
+var _voice: AudioStreamPlayer3D
+var _voice_rate := 0
+
+
+static func fresh_state() -> Dictionary:
+	return {
+		"hp": 100.0, "money": 0, "kills": 0,
+		"inv": {"fists": 1}, "equipped": "fists", "ammo": 0,
+		"heat": 0, "seen": false, "jail": 0.0, "dead": false,
+		"drugs": {}, "tol": {},
+	}
+
+
+func _ready() -> void:
+	collision_layer = 2
+	collision_mask = 1 if is_local else 0
+	_cap = CapsuleShape3D.new()
+	_cap.radius = 0.32
+	_cap.height = STAND_H
+	_shape = CollisionShape3D.new()
+	_shape.shape = _cap
+	_shape.position.y = STAND_H * 0.5
+	add_child(_shape)
+
+	_vis = Node3D.new()
+	add_child(_vis)
+	_body = Kit.add_to(_vis, 1, AABB(Vector3(-2.5, -0.5, -2.5), Vector3(5, 3.5, 5)))
+	_body.set_instance_transform(0, Transform3D(Basis.from_scale(Vector3.ONE * BODY_SCALE), Vector3.ZERO))
+	_body.set_instance_color(0, Color.from_hsv(fmod(id * 0.137, 1.0), 0.75, 0.9, fmod(id * 0.618, 1.0)))
+	_last_pos = position
+
+	if is_local:
+		rig = CameraRig.new()
+		rig.position = HEAD
+		add_child(rig)
+		_build_viewmodel()
+	else:
+		_label = Label3D.new()
+		_label.text = pname
+		_label.font_size = 64
+		_label.outline_size = 16
+		_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		_label.position.y = 1.75
+		_vis.add_child(_label)
+
+
+## Fists and pistol seen in first person, where the body itself is hidden.
+func _build_viewmodel() -> void:
+	_vm = Node3D.new()
+	rig.cam.add_child(_vm)
+	var fist := SphereMesh.new()
+	fist.radius = 0.06
+	fist.height = 0.12
+	var arm := CapsuleMesh.new()
+	arm.radius = 0.042
+	arm.height = 0.5
+	var skin := Color(0.85, 0.62, 0.44)
+	_vm_r = Node3D.new()
+	_vm_l = Node3D.new()
+	for hand in [_vm_r, _vm_l]:
+		_vm.add_child(hand)
+		hand.add_child(_mesh(fist, Vector3.ZERO, skin))
+		var fore := _mesh(arm, Vector3(0.0, -0.07, 0.27), skin)
+		fore.rotation.x = 1.84
+		hand.add_child(fore)
+	var gun := BoxMesh.new()
+	gun.size = Vector3(0.05, 0.1, 0.3)
+	_vm_gun = _mesh(gun, Vector3(0.0, 0.08, -0.13), Color(0.1, 0.1, 0.1))
+	_vm_r.add_child(_vm_gun)
+
+
+func _mesh(mesh: Mesh, p: Vector3, c: Color) -> MeshInstance3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = c
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.material_override = mat
+	mi.position = p
+	return mi
+
+
+# --- derived stats (read on both client and server) ---
+
+func drug_phase(drug: String) -> String:
+	return st.drugs.get(drug, {}).get("phase", "")
+
+
+func speed_mult() -> float:
+	var m := 1.0
+	match drug_phase("cocaine"):
+		"high": m *= 1.6
+		"down": m *= 0.45
+		"od": m *= 0.8
+	match drug_phase("weed"):
+		"high": m *= 0.75
+		"od": m *= 0.35
+	return m
+
+
+func melee_mult() -> float:
+	match drug_phase("cocaine"):
+		"high": return 2.0
+		"down": return 0.6
+	return 1.0
+
+
+func damage_taken_mult() -> float:
+	return 0.5 if drug_phase("weed") == "high" else 1.0
+
+
+func is_sniper() -> bool:
+	return drug_phase("meth") == "high"
+
+
+func mic_mult() -> float:
+	return 0.5 if drug_phase("weed") == "od" else 1.0
+
+
+func can_act() -> bool:
+	return not st.dead and not MatchState.ended
+
+
+func can_fight() -> bool:
+	return can_act() and st.jail <= 0.0
+
+
+func aim_dir() -> Vector3:
+	return -rig.cam.global_basis.z
+
+
+# --- input ---
+
+func _unhandled_input(e: InputEvent) -> void:
+	if not is_local:
+		return
+	var captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+	if e is InputEventMouseMotion and captured:
+		# Scales with the aim zoom, not with the speed widening on top of it.
+		var s: float = SENS * rig.fov_target / 75.0
+		rotate_y(-e.relative.x * s)
+		rig.pitch(-e.relative.y * s)
+	elif e is InputEventMouseButton and e.pressed:
+		if e.button_index == MOUSE_BUTTON_WHEEL_UP:
+			rig.zoom(-1)
+		elif e.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			rig.zoom(1)
+		elif not captured and not Net.game.hud.shop_open:
+			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	elif e.is_action_pressed("ui_cancel"):
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func _physics_process(delta: float) -> void:
+	if not is_local:
+		return
+	var active := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and can_act()
+	var wish := Vector3.ZERO
+	if active:
+		var iv := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
+		wish = global_basis * Vector3(iv.x, 0, iv.y)
+		wish.y = 0.0
+		wish = wish.normalized()
+	var jump_held := active and Input.is_action_pressed("jump")
+	# Edge taken here, not from is_action_just_pressed: one press must never read as two taps.
+	var jump_tap := jump_held and not _jump_was
+	_jump_was = jump_held
+	var crouch := active and Input.is_action_pressed("crouch")
+	var top := (SPRINT if Input.is_action_pressed("sprint") else WALK) * speed_mult()
+	_buffer_t = JUMP_BUFFER if jump_tap else _buffer_t - delta
+	_slide_cd -= delta
+	_dive_cd -= delta
+	_recover_t -= delta
+	if _recover_t > 0.0:
+		wish = Vector3.ZERO
+	_jumped = false
+
+	var grounded := is_on_floor()
+	if grounded:
+		_coyote_t = COYOTE
+		_air_jumps = AIR_JUMPS
+		_wall_last = Vector3.ZERO
+		if mv == MV_AIR or mv == MV_WALLRUN:
+			# Holding jump hops straight off again; holding crouch carries the landing into a slide.
+			if crouch and not jump_held and _buffer_t <= 0.0 and hspeed() >= SLIDE_MIN:
+				_start_slide()
+			else:
+				mv = MV_GROUND
+		elif mv == MV_DIVE and velocity.y <= 0.0:
+			_land_dive(crouch)
+	else:
+		_coyote_t -= delta
+		if mv == MV_GROUND or mv == MV_SLIDE:
+			mv = MV_AIR
+			# Running off the lip of a ramp keeps the climb it had.
+			velocity.y = maxf(velocity.y, _ramp_vy)
+			_ramp_vy = 0.0
+
+	if active and Input.is_action_just_pressed("dive") and _dive_cd <= 0.0 and mv != MV_DIVE:
+		_start_dive(wish)
+
+	match mv:
+		MV_GROUND:
+			if _crouched and not _set_crouch(false):
+				mv = MV_SLIDE
+			elif jump_held or _buffer_t > 0.0:
+				# Jumping on the landing tick skips friction entirely: that is the bunny hop.
+				_jump()
+			elif crouch and _recover_t <= 0.0 and hspeed() >= SLIDE_MIN:
+				_start_slide()
+			else:
+				_friction(FRICTION, delta)
+				_accelerate(wish, top, GROUND_ACCEL * top, delta)
+		MV_SLIDE:
+			_slide_t += delta
+			var hs := hspeed()
+			if (jump_held or _buffer_t > 0.0) and _set_crouch(false):
+				if _slide_t > SLIDE_HOP_MIN:
+					_boost(SLIDE_HOP)
+				_jump()
+			elif (not crouch or hs < SLIDE_END) and _set_crouch(false):
+				mv = MV_GROUND
+			else:
+				_friction(SLIDE_FRICTION, delta)
+				_accelerate(wish, 1.5, 12.0, delta)
+				# Stuck under something too low to stand in: shuffle along.
+				if hs < 2.0:
+					_accelerate(wish, 2.0, 30.0, delta)
+		MV_AIR:
+			if _crouched:
+				_set_crouch(false)
+			velocity.y -= GRAVITY * delta
+			if _buffer_t > 0.0 and _coyote_t > 0.0:
+				_jump()
+			elif jump_tap and _can_wall() and not _same_wall(get_wall_normal()):
+				_wall_jump(get_wall_normal())
+			elif jump_tap and _air_jumps > 0:
+				_double_jump(wish)
+			_accelerate(wish, AIR_WISH_CAP, AIR_ACCEL, delta)
+			if hspeed() < AIR_STEER_SPEED:
+				_accelerate(wish, AIR_STEER_SPEED, AIR_STEER, delta)
+			if mv == MV_AIR and _can_wall() and hspeed() >= WALL_MIN_SPEED and velocity.y > -9.0 and not _same_wall(get_wall_normal()):
+				mv = MV_WALLRUN
+				_wall_n = get_wall_normal()
+				_wall_t = 0.0
+				_air_jumps = AIR_JUMPS
+				velocity.y = clampf(velocity.y, 2.0, 3.0)
+		MV_WALLRUN:
+			_wall_run(crouch, delta)
+		MV_DIVE:
+			velocity.y -= GRAVITY * delta
+			_accelerate(wish, AIR_WISH_CAP * 0.5, AIR_ACCEL, delta)
+
+	if grounded and not _jumped and velocity.y < 0.0:
+		velocity.y = 0.0
+	if st.dead:
+		velocity = Vector3.ZERO
+		mv = MV_GROUND
+		_set_crouch(false)
+	floor_snap_length = 0.3 if grounded and not _jumped else 0.0
+	var fall := velocity.y
+	move_and_slide()
+	if is_on_floor():
+		# Only steady footing counts as a ramp; a landing or take-off tick moves in y for other reasons.
+		# The climb is remembered for a moment, since the body flattens out rounding the lip.
+		_ramp_vy = maxf(clampf(get_real_velocity().y, 0.0, hspeed()), _ramp_vy - 12.0 * delta) if grounded and not _jumped else 0.0
+		if not grounded:
+			rig.dip = clampf(-fall * 0.012, 0.0, 0.22)
+	# Bodies only get in the way of someone on their feet, not sliding past or hopping over.
+	if global_position.y < 1.0 and mv != MV_SLIDE and mv != MV_DIVE:
+		global_position += Net.game.crowd.push_out(global_position) * delta
+
+
+## This player's net_mv as others should see it.
+func net_byte() -> int:
+	if not is_local:
+		return net_mv
+	return mv | (8 if mv == MV_WALLRUN and _wall_side > 0.0 else 0)
+
+
+func hspeed() -> float:
+	return Vector2(velocity.x, velocity.z).length()
+
+
+func _friction(amount: float, delta: float) -> void:
+	var s := hspeed()
+	if s < 0.05:
+		velocity.x = 0.0
+		velocity.z = 0.0
+		return
+	var k := maxf(s - maxf(s, STOP_SPEED) * amount * delta, 0.0) / s
+	velocity.x *= k
+	velocity.z *= k
+
+
+## Adds speed along `wish` only while the speed already going that way is under `wish_speed`.
+func _accelerate(wish: Vector3, wish_speed: float, accel: float, delta: float) -> void:
+	var add := wish_speed - (velocity.x * wish.x + velocity.z * wish.z)
+	if add <= 0.0:
+		return
+	var a := minf(accel * delta, add)
+	velocity.x += wish.x * a
+	velocity.z += wish.z * a
+
+
+## Speeds up along the current heading, as far as BOOST_CAP.
+func _boost(amount: float) -> void:
+	var s := hspeed()
+	if s < 0.1 or s >= BOOST_CAP:
+		return
+	var k := (s + minf(amount, BOOST_CAP - s)) / s
+	velocity.x *= k
+	velocity.z *= k
+
+
+func _jump() -> void:
+	velocity.y = JUMP + maxf(_ramp_vy, 0.0)
+	_ramp_vy = 0.0
+	_buffer_t = 0.0
+	_coyote_t = 0.0
+	_jumped = true
+	mv = MV_AIR
+
+
+## Second jump in mid-air. Half turns the momentum toward where the keys point.
+func _double_jump(wish: Vector3) -> void:
+	_air_jumps -= 1
+	_buffer_t = 0.0
+	velocity.y = DOUBLE_JUMP
+	if wish != Vector3.ZERO:
+		var s := maxf(hspeed(), WALK)
+		var h := (Vector3(velocity.x, 0.0, velocity.z).lerp(wish * s, 0.5)).normalized() * s
+		velocity.x = h.x
+		velocity.z = h.z
+
+
+func _start_slide() -> void:
+	mv = MV_SLIDE
+	_slide_t = 0.0
+	_set_crouch(true)
+	if _slide_cd <= 0.0:
+		_slide_cd = SLIDE_CD
+		_boost(SLIDE_BOOST)
+
+
+func _start_dive(wish: Vector3) -> void:
+	var dir := wish
+	if dir == Vector3.ZERO:
+		dir = -global_basis.z
+		dir.y = 0.0
+		dir = dir.normalized()
+	var s := maxf(hspeed(), DIVE_SPEED * speed_mult())
+	velocity.x = dir.x * s
+	velocity.z = dir.z * s
+	velocity.y = DIVE_UP if is_on_floor() else maxf(velocity.y, DIVE_UP * 0.6)
+	_dive_cd = DIVE_CD
+	_jumped = true
+	mv = MV_DIVE
+	_set_crouch(true)
+
+
+## Crouch held: the dive runs out into a slide. Otherwise a belly flop that costs speed.
+func _land_dive(crouch: bool) -> void:
+	if crouch and hspeed() >= SLIDE_END:
+		mv = MV_SLIDE
+		_slide_t = 0.0
+		return
+	velocity.x *= 0.45
+	velocity.z *= 0.45
+	_recover_t = DIVE_RECOVER
+	mv = MV_GROUND if _set_crouch(false) else MV_SLIDE
+
+
+## Touching a runnable wall while airborne. No running up the prison walls.
+func _can_wall() -> bool:
+	return is_on_wall_only() and absf(get_wall_normal().y) < 0.2 and st.jail <= 0.0
+
+
+func _same_wall(n: Vector3) -> bool:
+	return _wall_last != Vector3.ZERO and n.dot(_wall_last) > 0.9 and absf(n.dot(global_position) - _wall_last_d) < 0.8
+
+
+func _leave_wall(n: Vector3) -> void:
+	_wall_last = n
+	_wall_last_d = n.dot(global_position)
+	mv = MV_AIR
+
+
+func _wall_jump(n: Vector3) -> void:
+	velocity.x += n.x * WALL_JUMP_OUT
+	velocity.z += n.z * WALL_JUMP_OUT
+	velocity.y = WALL_JUMP_UP
+	_air_jumps = AIR_JUMPS
+	_buffer_t = 0.0
+	_jumped = true
+	_leave_wall(n)
+
+
+func _wall_run(crouch: bool, delta: float) -> void:
+	var n := _wall_n
+	_wall_side = 1.0 if n.dot(global_basis.x) < 0.0 else -1.0
+	_wall_t += delta
+	if _buffer_t > 0.0:
+		_wall_jump(n)
+		return
+	var from := global_position + Vector3(0, 0.7, 0)
+	var q := PhysicsRayQueryParameters3D.create(from, from - n * 0.8, 1)
+	var along := Vector3(velocity.x, 0.0, velocity.z)
+	along -= n * along.dot(n)
+	var s := along.length()
+	if crouch or _wall_t > WALL_TIME or s < WALL_MIN_SPEED * 0.6 or get_world_3d().direct_space_state.intersect_ray(q).is_empty():
+		_leave_wall(n)
+		return
+	along = along / s * maxf(s, minf(s + 8.0 * delta, SPRINT))
+	# Lean into the wall to stay on it; gravity creeps back in the longer the run lasts.
+	velocity.x = along.x - n.x * 2.0
+	velocity.z = along.z - n.z * 2.0
+	velocity.y = maxf(velocity.y - (WALL_GRAVITY + 5.0 * _wall_t) * delta, -3.0)
+
+
+## Shrinks or restores the body. Standing back up fails while something is overhead.
+func _set_crouch(on: bool) -> bool:
+	if on == _crouched:
+		return true
+	if not on and test_move(global_transform, Vector3.UP * (STAND_H - CROUCH_H)):
+		return false
+	_crouched = on
+	var h := CROUCH_H if on else STAND_H
+	_cap.height = h
+	_shape.position.y = h * 0.5
+	return true
+
+
+func _process(delta: float) -> void:
+	if not multiplayer.is_server():
+		# Server ticks the real timers; mirror them locally for display and movement.
+		st.jail = maxf(0.0, st.jail - delta)
+		for d in st.drugs:
+			st.drugs[d].t = maxf(0.0, st.drugs[d].t - delta)
+		for d in st.tol:
+			st.tol[d] = maxf(0.0, st.tol[d] - DB.TOLERANCE_DECAY * delta)
+	if is_local:
+		_vis.visible = st.dead or not rig.first_person()
+		_local_process(delta)
+	else:
+		_label.visible = not st.dead
+		global_position = global_position.lerp(net_pos, minf(1.0, 14.0 * delta))
+		rotation.y = lerp_angle(rotation.y, net_yaw, minf(1.0, 14.0 * delta))
+	_animate(delta)
+
+
+## Picks the body's pose and worn state from how it is moving and from `st`.
+func _animate(delta: float) -> void:
+	var moved := global_position - _last_pos
+	_last_pos = global_position
+	if delta > 0.0:
+		var k := minf(1.0, 10.0 * delta)
+		_spd = lerpf(_spd, Vector2(moved.x, moved.z).length() / delta, k)
+		_vy = lerpf(_vy, moved.y / delta, k)
+	if st.dead != _was_dead:
+		_was_dead = st.dead
+		if st.dead:
+			_ev = Kit.now()
+
+	var m: int = mv if is_local else net_mv & 7
+	var side: float = _wall_side if is_local else (1.0 if net_mv & 8 else -1.0)
+	var pose := Kit.STAND
+	var speed := 0.0
+	if st.dead:
+		pose = Kit.DEAD
+	elif m == MV_SLIDE:
+		pose = Kit.SLIDE
+	elif m == MV_DIVE:
+		pose = Kit.DIVE
+	elif m == MV_WALLRUN:
+		pose = Kit.RUN
+		speed = SPRINT
+	elif m == MV_AIR:
+		pose = Kit.JUMP
+	elif _spd > 5.6:
+		pose = Kit.RUN
+		speed = SPRINT
+	elif _spd > 0.5:
+		pose = Kit.WALK
+		speed = WALK
+	# Wall runners tip over with their feet toward the wall.
+	_vis.rotation.z = lerp_angle(_vis.rotation.z, side * 0.4 if m == MV_WALLRUN and not st.dead else 0.0, minf(1.0, 10.0 * delta))
+
+	# Everything another player needs to know about you is worn on the body.
+	var flags := clampi(st.heat, 0, 3) << Kit.HEAT_SHIFT
+	if st.jail > 0.0:
+		flags |= Kit.F_JAIL
+	else:
+		flags |= Kit.F_SHORTS
+	if st.equipped == "pistol":
+		flags |= Kit.F_GUN
+	if st.money >= 1000:
+		flags |= Kit.F_SACK_L
+	elif st.money >= 200:
+		flags |= Kit.F_SACK_S
+	elif st.money > 0:
+		flags |= Kit.F_WAD
+	_body.set_instance_custom_data(0, Kit.custom(pose, speed, flags, _ev))
+
+
+## Plays a punch / recoil (attack) or a flinch on this player's body.
+func fx_event(attack: bool) -> void:
+	if st.dead:
+		return
+	_ev = Kit.now() if attack else -Kit.now()
+	if is_local and not attack:
+		rig.kick = 0.05
+
+
+## Where the local player's shots visibly leave from in first person.
+func muzzle() -> Vector3:
+	return rig.cam.global_transform * Vector3(0.24, -0.16, -0.95)
+
+
+func _animate_viewmodel() -> void:
+	_vm.visible = rig.first_person() and not st.dead
+	var gun: bool = st.equipped == "pistol"
+	_vm_gun.visible = gun
+	var dt := Kit.now() - _vm_t
+	var e := smoothstep(0.0, 0.06, dt) * (1.0 - smoothstep(0.08, 0.28, dt))
+	var sway := Vector3(0.0, sin(Kit.now() * 9.0) * 0.012, 0.0) * minf(_spd / WALK, 1.5)
+	_vm_r.position = VM_RIGHT + sway
+	_vm_l.position = VM_LEFT - sway
+	_vm_r.rotation.x = 0.0
+	if gun:
+		# Recoil: the pistol jumps back and tips up.
+		_vm_r.position = Vector3(0.24, -0.24, -0.7) + sway + Vector3(0.0, 0.03, 0.1) * e
+		_vm_r.rotation.x = 0.35 * e
+		_vm_l.position = VM_LEFT + Vector3(0.0, -0.12, 0.1)
+	elif _vm_side > 0.0:
+		_vm_r.position += Vector3(-0.2, 0.14, -0.45) * e
+	else:
+		_vm_l.position += Vector3(0.2, 0.14, -0.45) * e
+
+
+func _local_process(delta: float) -> void:
+	var g = Net.game
+	var captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+	var head := global_position + HEAD
+	var dir := aim_dir()
+	_animate_viewmodel()
+
+	_near_t -= delta
+	if _near_t <= 0.0:
+		_near_t = 0.1
+		g.crowd.refresh_near(global_position)
+	target_npc = g.crowd.pick_near(head, dir, ROB_RANGE) if can_fight() else -1
+
+	# Meth: sniper zoom while high, shakes on the way down, twitching on overdose.
+	var aiming := captured and Input.is_action_pressed("aim")
+	rig.fov_target = (20.0 if is_sniper() else 55.0) if aiming else 75.0
+	match drug_phase("meth"):
+		"down": rig.shake = 0.012
+		"od": rig.shake = 0.04
+		_: rig.shake = 0.0
+
+	# Speed reads through the camera: wider view, a lean off the wall, a low head in a slide.
+	rig.fov_boost = 0.0 if aiming else clampf((hspeed() - SPRINT) * 1.6, 0.0, 22.0)
+	rig.height_target = CROUCH_HEAD if _crouched else HEAD.y
+	match mv:
+		MV_WALLRUN: rig.roll_target = _wall_side * 0.22
+		MV_SLIDE: rig.roll_target = 0.05
+		_: rig.roll_target = clampf(-velocity.dot(global_basis.x) * 0.004, -0.05, 0.05)
+
+	_attack_t -= delta
+	_rob_t -= delta
+	robbing = false
+	if captured and can_fight():
+		if Input.is_action_pressed("attack") and _attack_t <= 0.0:
+			_attack_t = DB.ITEMS[st.equipped].cooldown
+			g.to_server("srv_attack", [dir])
+			if DB.ITEMS[st.equipped].melee or st.ammo > 0:
+				_vm_t = Kit.now()
+				_vm_side = -_vm_side
+		if Input.is_action_pressed("rob") and target_npc >= 0:
+			robbing = true
+			if _rob_t <= 0.0:
+				_rob_t = 0.1
+				g.to_server("srv_rob", [target_npc, Mic.loudness * mic_mult()], g.crowd)
+		if Input.is_action_just_pressed("weapon_1"):
+			g.to_server("srv_equip", ["fists"])
+		if Input.is_action_just_pressed("weapon_2"):
+			g.to_server("srv_equip", ["pistol"])
+		for d in DB.DRUGS:
+			if Input.is_action_just_pressed(DB.ITEMS[d].key):
+				g.to_server("srv_use", [d])
+		if Input.is_action_just_pressed("interact"):
+			g.interact()
+
+	_send_t -= delta
+	if _send_t <= 0.0 and not multiplayer.is_server():
+		_send_t = 0.05
+		g.srv_move.rpc_id(1, global_position, rotation.y, net_byte())
+
+
+# --- proximity voice playback ---
+
+func voice_push(rate: int, data: PackedByteArray) -> void:
+	if _voice == null or rate != _voice_rate:
+		if _voice != null:
+			_voice.queue_free()
+		var gen := AudioStreamGenerator.new()
+		gen.mix_rate = rate
+		gen.buffer_length = 0.5
+		_voice = AudioStreamPlayer3D.new()
+		_voice.stream = gen
+		_voice.unit_size = 8.0
+		_voice.max_distance = Mic.VOICE_RANGE + 5.0
+		_voice.position = HEAD
+		add_child(_voice)
+		_voice.play()
+		_voice_rate = rate
+	var n := data.size() / 2
+	var frames := PackedVector2Array()
+	frames.resize(n)
+	for i in n:
+		var v := data.decode_s16(i * 2) / 32768.0
+		frames[i] = Vector2(v, v)
+	var pb = _voice.get_stream_playback()
+	if pb != null and pb.can_push_buffer(n):
+		pb.push_buffer(frames)
