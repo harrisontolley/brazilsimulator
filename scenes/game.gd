@@ -176,6 +176,59 @@ func debug_result(test: String, ok: bool, detail := "") -> void:
 	get_tree().quit(0 if ok else 1)
 
 
+## Runs a whole match of traffic through its clock function, with nobody waiting for it,
+## and checks that nothing touches, nothing leaves the road, and the seed alone decides
+## where everything is.
+func _debug_traffic() -> void:
+	var seed_value := MatchState.seed_value
+	var n: int = traffic.vehicles.size()
+	var sample := func() -> PackedVector3Array:
+		var out := PackedVector3Array()
+		for t in [0.0, 31.7, 263.3, 611.9, 899.0]:
+			for i in n:
+				out.append(traffic.pos_of(i, t))
+		return out
+	var before: PackedVector3Array = sample.call()
+	traffic.setup(seed_value + 1)
+	var differs: bool = sample.call() != before
+	traffic.setup(seed_value)
+	var same: bool = sample.call() == before
+	var half: Array[Vector3] = []
+	for v in traffic.vehicles:
+		half.append(v.half)
+	var at := PackedVector3Array()
+	at.resize(n)
+	# Sorting along the road means only near neighbours need comparing.
+	var keys := PackedFloat64Array()
+	keys.resize(n)
+	var touching := 0
+	var strays := 0
+	var first := ""
+	for step in 3600:
+		var t := step * 0.25
+		for i in n:
+			var p: Vector3 = traffic.pos_of(i, t)
+			at[i] = p
+			keys[i] = floorf((p.x + 1000.0) * 100.0) * 1000.0 + i
+			if p.z - half[i].z < 52.8 or p.z + half[i].z > 69.4:
+				strays += 1
+				if first == "":
+					first = "vehicle %d off the road at t=%.2f z=%.2f" % [i, t, p.z]
+		keys.sort()
+		for a in n:
+			var i := int(fmod(keys[a], 1000.0))
+			for b in range(a + 1, n):
+				var j := int(fmod(keys[b], 1000.0))
+				var gap := absf(at[j].x - at[i].x)
+				if gap > 12.0:
+					break
+				if gap < half[i].x + half[j].x and absf(at[j].z - at[i].z) < half[i].z + half[j].z:
+					touching += 1
+					if first == "":
+						first = "vehicles %d and %d touch at t=%.2f x=%.1f" % [i, j, t, at[i].x]
+	debug_result("traffic", touching == 0 and strays == 0 and same and differs, "vehicles=%d touching=%d strays=%d same_seed_same=%s other_seed_differs=%s %s" % [n, touching, strays, same, differs, first])
+
+
 ## Scripted bits of play, for checking a feature without a hand on the keyboard.
 func _debug_test(what: String) -> void:
 	await get_tree().create_timer(0.6).timeout
@@ -190,6 +243,8 @@ func _debug_test(what: String) -> void:
 			Input.action_press("move_forward")
 		"road":
 			local_player.global_position = Vector3(0, 0.2, 57.8)
+		"traffic":
+			_debug_traffic()
 		"ball":
 			local_player.global_position = Layout.PITCHES[1][0] + Vector3(-4, 0.2, 0)
 			local_player.rotation.y = -PI / 2.0
@@ -562,6 +617,7 @@ func cl_match_start(seed_value: int, duration: float, pdata: Array) -> void:
 	MatchState.ended = false
 	MatchState.running = true
 	crowd.setup(seed_value)
+	traffic.setup(seed_value)
 	motos.reset()
 	if local_player != null:
 		local_player.stop_ride()
