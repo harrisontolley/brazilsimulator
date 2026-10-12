@@ -29,6 +29,9 @@ const ARCHETYPES := [
 	{"id": "tourist", "weight": 0.5, "money": [30, 120], "resistance": 0.15, "fight": 0.0, "shoot": 0.0, "gun": 0.0, "hp": 40.0, "melee": 0.0, "scale": 1.0, "width": 1.0},
 	{"id": "local", "weight": 0.38, "money": [5, 60], "resistance": 0.3, "fight": 0.2, "shoot": 0.0, "gun": 0.0, "hp": 60.0, "melee": 8.0, "scale": 0.97, "width": 0.97},
 	{"id": "mafia", "weight": 0.12, "money": [400, 1500], "resistance": 0.65, "fight": 0.7, "shoot": 0.5, "gun": 0.35, "hp": 120.0, "melee": 16.0, "scale": 1.15, "width": 1.45},
+	# Never rolled: these two are placed where they belong.
+	{"id": "vendor", "weight": 0.0, "money": [60, 220], "resistance": 0.25, "fight": 0.1, "shoot": 0.0, "gun": 0.0, "hp": 50.0, "melee": 8.0, "scale": 1.0, "width": 1.0},
+	{"id": "traficante", "weight": 0.0, "money": [250, 900], "resistance": 0.6, "fight": 0.9, "shoot": 0.85, "gun": 0.6, "hp": 100.0, "melee": 14.0, "scale": 1.05, "width": 1.15},
 ]
 
 ## Cash an NPC must be carrying to show mid / rich props.
@@ -54,7 +57,7 @@ const VENDORS := [
 	{"name": "QUIOSQUE 5", "kind": "shop", "till": true, "pos": Vector3(250, 0, 47), "stock": FOOD, "color": Color(0.95, 0.6, 0.1)},
 	{"name": "JOGO DO BICHO", "kind": "bicho", "pos": Vector3(130, 0, 47), "stock": [], "color": Color(0.85, 0.75, 0.1)},
 	{"name": "JOGO DO BICHO", "kind": "bicho", "pos": Vector3(-70, 0, 107.0), "stock": [], "color": Color(0.85, 0.75, 0.1)},
-	{"name": "BOCA", "kind": "shop", "discount": 0.7, "pos": Vector3(-120, 12.2, 162.5), "stock": ["cocaine", "weed", "meth"], "color": Color(0.2, 0.7, 0.3)},
+	{"name": "BOCA", "kind": "shop", "discount": 0.7, "pos": BOCA_POS, "stock": ["cocaine", "weed", "meth"], "color": Color(0.2, 0.7, 0.3)},
 	{"name": "RECEPTADOR", "kind": "fence", "pos": Vector3(212, 6.2, 146.5), "stock": [], "color": Color(0.5, 0.3, 0.6)},
 ]
 
@@ -67,6 +70,9 @@ const BETS := [50, 200, 1000]
 const PRISON_POS := Vector3(0, 0.2, 121)
 const RELEASE_POS := Vector3(0, 0.2, 105)
 const BAILE_POS := Vector3(66, 9, 157)
+const BOCA_POS := Vector3(-120, 12.2, 162.5)
+## Samba circles on the promenade.
+const RODAS := [Vector3(40, 0, 45.5), Vector3(-195, 0, 45.5), Vector3(215, 0, 45.5)]
 const CAMPINHO_POS := Vector3(-46, 15, 172.5)
 const JAIL_TIME := 30.0
 const RESPAWN_TIME := 4.0

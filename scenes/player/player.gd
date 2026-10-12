@@ -128,7 +128,7 @@ static func fresh_state() -> Dictionary:
 		"hp": 100.0, "money": 0, "kills": 0,
 		"inv": {"fists": 1}, "equipped": "fists", "ammo": 0,
 		"heat": 0, "seen": false, "jail": 0.0, "dead": false,
-		"drugs": {}, "tol": {},
+		"drugs": {}, "tol": {}, "bet": {},
 	}
 
 
@@ -226,7 +226,16 @@ func melee_mult() -> float:
 
 
 func damage_taken_mult() -> float:
-	return 0.5 if drug_phase("weed") == "high" else 1.0
+	return (0.5 if drug_phase("weed") == "high" else 1.0) * (0.85 if is_drunk() else 1.0)
+
+
+func is_drunk() -> bool:
+	return drug_phase("caipirinha") == "high"
+
+
+## Dutch courage: a drink makes the shouting land harder.
+func intimidation_mult() -> float:
+	return 1.4 if is_drunk() else 1.0
 
 
 func is_sniper() -> bool:
@@ -775,6 +784,8 @@ func _local_process(delta: float) -> void:
 		MV_SLIDE: rig.roll_target = 0.05
 		MV_RIDE: rig.roll_target = _ride_steer * 0.5
 		_: rig.roll_target = clampf(-velocity.dot(global_basis.x) * 0.004, -0.05, 0.05)
+	if is_drunk():
+		rig.roll_target += sin(Kit.now() * 1.3) * 0.07
 
 	_attack_t -= delta
 	_rob_t -= delta

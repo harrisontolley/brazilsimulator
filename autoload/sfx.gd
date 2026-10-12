@@ -1,0 +1,411 @@
+extends Node
+## Every sound in the game, synthesized at startup: there are no audio files.
+##
+## One-shots go through play(). Looping music and machines are emitters the scene owns.
+## The four ambient beds (surf, crowd, traffic, rain) are mixed here from where the local
+## player is standing.
+
+const RATE := 16000
+const VOICES := 20
+
+## 0..1, set by whoever knows it is raining.
+var rain := 0.0
+
+var _streams := {}
+var _pool: Array[AudioStreamPlayer3D] = []
+var _next := 0
+var _beds := {}
+var _rng := RandomNumberGenerator.new()
+var _task := -1
+var _horn_t := 0.0
+
+
+func _ready() -> void:
+	_rng.seed = 77
+	for i in VOICES:
+		var p := AudioStreamPlayer3D.new()
+		p.unit_size = 7.0
+		p.max_distance = 140.0
+		p.attenuation_filter_cutoff_hz = 20500.0
+		add_child(p)
+		_pool.append(p)
+	for bed in ["surf", "crowd", "traffic", "rain"]:
+		var p := AudioStreamPlayer.new()
+		p.volume_db = -80.0
+		add_child(p)
+		_beds[bed] = p
+	# Synthesis takes a second or two; do it off the main thread while the menu is up.
+	_task = WorkerThreadPool.add_task(_build)
+
+
+func _exit_tree() -> void:
+	if _task >= 0:
+		WorkerThreadPool.wait_for_task_completion(_task)
+
+
+## Plays a one-shot at a place in the world.
+func play(sound: String, at: Vector3, db := 0.0, pitch := 1.0) -> void:
+	var s = _streams.get(sound)
+	if s == null:
+		return
+	var p := _pool[_next]
+	_next = (_next + 1) % VOICES
+	p.stream = s
+	p.position = at
+	p.volume_db = db
+	p.pitch_scale = pitch * _rng.randf_range(0.94, 1.06)
+	p.play()
+
+
+## A looping source for the caller to add to the scene and move about. It starts itself
+## once the sound exists.
+func emitter(sound: String, db := 0.0, unit := 8.0, reach := 90.0, autoplay := true) -> AudioStreamPlayer3D:
+	var p := AudioStreamPlayer3D.new()
+	p.unit_size = unit
+	p.max_distance = reach
+	p.volume_db = db
+	p.attenuation_filter_cutoff_hz = 20500.0
+	p.set_meta("sound", sound)
+	if not autoplay:
+		p.set_meta("held", true)
+	p.tree_entered.connect(_start.bind(p), CONNECT_DEFERRED)
+	return p
+
+
+func _start(p: AudioStreamPlayer3D) -> void:
+	while not _streams.has(p.get_meta("sound")):
+		await get_tree().create_timer(0.3).timeout
+		if not is_instance_valid(p):
+			return
+	if p.is_inside_tree():
+		p.stream = _streams[p.get_meta("sound")]
+		if not p.has_meta("held"):
+			p.play()
+
+
+func _process(delta: float) -> void:
+	var g = Net.game
+	var levels := {"surf": 0.0, "crowd": 0.0, "traffic": 0.0, "rain": 0.0}
+	if g != null and g.local_player != null:
+		var at: Vector3 = g.local_player.global_position
+		levels.surf = clampf(1.0 - (at.z + 38.0) / 110.0, 0.05, 1.0) * 0.55
+		levels.crowd = clampf(g.crowd.near.size() / 30.0, 0.0, 1.0) * 0.5
+		var flow: float = g.traffic.flow(MatchState.time)
+		levels.traffic = clampf(1.0 - absf(at.z - 61.0) / 55.0, 0.0, 1.0) * clampf(1.0 - at.y / 60.0, 0.2, 1.0) * (0.25 + 0.5 * flow)
+		levels.rain = rain * 0.7
+		# A stopped road is a road full of horns.
+		_horn_t -= delta
+		if flow < 0.2 and _horn_t <= 0.0 and absf(at.z - 61.0) < 70.0:
+			_horn_t = _rng.randf_range(0.25, 1.1)
+			var v: Dictionary = g.traffic.vehicles[_rng.randi() % g.traffic.vehicles.size()]
+			var vp: Vector3 = v.body.global_position
+			if absf(vp.x - at.x) < 90.0:
+				play("horn", vp + Vector3(0, 1, 0), -4.0, _rng.randf_range(0.8, 1.25))
+	for bed in _beds:
+		var p: AudioStreamPlayer = _beds[bed]
+		var want: float = levels[bed]
+		var now := db_to_linear(p.volume_db)
+		var v := lerpf(now, want, minf(1.0, 2.5 * delta))
+		p.volume_db = linear_to_db(maxf(v, 0.0001))
+		if v > 0.002 and not p.playing and _streams.has(bed):
+			p.stream = _streams[bed]
+			p.play()
+		elif v <= 0.002 and p.playing:
+			p.stop()
+
+
+# --- synthesis (runs on a worker thread) ---
+
+func _build() -> void:
+	var made := {}
+	made["surf"] = _wav(_surf(), true)
+	made["crowd"] = _wav(_murmur(), true)
+	made["traffic"] = _wav(_hum(), true)
+	made["rain"] = _wav(_rain(), true)
+	made["samba"] = _wav(_samba(), true)
+	made["funk"] = _wav(_funk(), true)
+	made["siren"] = _wav(_siren(), true)
+	made["engine"] = _wav(_engine(), true)
+	made["heli"] = _wav(_heli(), true)
+	made["shot"] = _wav(_shot(), false)
+	made["punch"] = _wav(_punch(), false)
+	made["horn"] = _wav(_horn(), false)
+	made["whistle"] = _wav(_whistle(), false)
+	made["cheer"] = _wav(_cheer(), false)
+	made["cash"] = _wav(_cash(), false)
+	made["kick"] = _wav(_thump(120.0, 0.12), false)
+	made["firework"] = _wav(_firework(), false)
+	made["crash"] = _wav(_crash(), false)
+	made["thunder"] = _wav(_thunder(), false)
+	_adopt.call_deferred(made)
+
+
+func _adopt(made: Dictionary) -> void:
+	_streams = made
+
+
+func _wav(f: PackedFloat32Array, loop: bool) -> AudioStreamWAV:
+	var peak := 0.001
+	for v in f:
+		peak = maxf(peak, absf(v))
+	var bytes := PackedByteArray()
+	bytes.resize(f.size() * 2)
+	var k := 30000.0 / maxf(peak, 1.0)
+	for i in f.size():
+		bytes.encode_s16(i * 2, int(f[i] * k))
+	var w := AudioStreamWAV.new()
+	w.format = AudioStreamWAV.FORMAT_16_BITS
+	w.mix_rate = RATE
+	w.stereo = false
+	w.data = bytes
+	if loop:
+		w.loop_mode = AudioStreamWAV.LOOP_FORWARD
+		w.loop_begin = 0
+		w.loop_end = f.size()
+	return w
+
+
+func _buf(seconds: float) -> PackedFloat32Array:
+	var f := PackedFloat32Array()
+	f.resize(int(seconds * RATE))
+	return f
+
+
+## Adds a decaying sine, optionally sliding in pitch, starting `at` seconds in.
+func _tone(f: PackedFloat32Array, at: float, hz: float, hz_end: float, decay: float, amp: float) -> void:
+	var start := int(at * RATE)
+	var n := mini(int(decay * 6.0 * RATE), f.size() - start)
+	var ph := 0.0
+	for i in n:
+		var t := float(i) / RATE
+		ph += TAU * lerpf(hz, hz_end, minf(1.0, t / (decay * 3.0))) / RATE
+		f[start + i] += sin(ph) * exp(-t / decay) * amp
+
+
+## Adds a burst of noise, low-passed by `soft` (1 = white), starting `at` seconds in.
+func _hiss(f: PackedFloat32Array, rng: RandomNumberGenerator, at: float, decay: float, amp: float, soft := 1.0) -> void:
+	var start := int(at * RATE)
+	var n := mini(int(decay * 6.0 * RATE), f.size() - start)
+	var y := 0.0
+	for i in n:
+		y += soft * (rng.randf_range(-1.0, 1.0) - y)
+		f[start + i] += y * exp(-float(i) / RATE / decay) * amp
+
+
+func _surf() -> PackedFloat32Array:
+	var f := _buf(4.0)
+	var rng := RandomNumberGenerator.new()
+	var y := 0.0
+	for i in f.size():
+		var t := float(i) / RATE
+		y += 0.09 * (rng.randf_range(-1.0, 1.0) - y)
+		var swell := 0.5 + 0.5 * sin(TAU * t / 4.0)
+		f[i] = y * (0.25 + 0.75 * swell * swell)
+	return f
+
+
+func _murmur() -> PackedFloat32Array:
+	var f := _buf(3.0)
+	var rng := RandomNumberGenerator.new()
+	var a := 0.0
+	var b := 0.0
+	for i in f.size():
+		var t := float(i) / RATE
+		var x := rng.randf_range(-1.0, 1.0)
+		a += 0.16 * (x - a)
+		b += 0.03 * (x - b)
+		f[i] = (a - b) * (0.6 + 0.2 * sin(TAU * t / 1.5) + 0.2 * sin(TAU * t + 1.0))
+	return f
+
+
+func _hum() -> PackedFloat32Array:
+	var f := _buf(2.0)
+	var rng := RandomNumberGenerator.new()
+	var y := 0.0
+	for i in f.size():
+		var t := float(i) / RATE
+		y += 0.035 * (rng.randf_range(-1.0, 1.0) - y)
+		f[i] = y * 2.0 + sin(TAU * 55.0 * t) * 0.12 + sin(TAU * 82.0 * t) * 0.06
+	return f
+
+
+func _rain() -> PackedFloat32Array:
+	var f := _buf(2.0)
+	var rng := RandomNumberGenerator.new()
+	var y := 0.0
+	for i in f.size():
+		var x := rng.randf_range(-1.0, 1.0)
+		y += 0.35 * (x - y)
+		f[i] = (x - y) * 0.6 + y * 0.3
+	return f
+
+
+## One bar of batucada: surdo, caixa, tamborim and agogô.
+func _samba() -> PackedFloat32Array:
+	var step := 0.15
+	var f := _buf(step * 16.0)
+	var rng := RandomNumberGenerator.new()
+	var caixa := [1.0, 0.4, 0.4, 0.8, 0.4, 0.4, 0.9, 0.4, 0.5, 0.4, 0.9, 0.4, 1.0, 0.4, 0.6, 0.5]
+	for s in 16:
+		var at := s * step
+		_hiss(f, rng, at, 0.02, 0.22 * caixa[s])
+		if s == 4 or s == 12:
+			_tone(f, at, 82.0, 62.0, 0.11, 0.9)
+		elif s == 0 or s == 8:
+			_tone(f, at, 70.0, 60.0, 0.035, 0.5)
+		if s in [0, 2, 3, 5, 7, 8, 10, 12, 13, 15]:
+			_tone(f, at, 1900.0, 1700.0, 0.012, 0.22)
+		if s in [0, 6, 10]:
+			_tone(f, at, 880.0, 880.0, 0.05, 0.2)
+		if s in [3, 8, 13]:
+			_tone(f, at, 660.0, 660.0, 0.05, 0.2)
+	return f
+
+
+## One bar of tamborzão, the baile funk beat.
+func _funk() -> PackedFloat32Array:
+	var step := 60.0 / 130.0 / 4.0
+	var f := _buf(step * 16.0)
+	var rng := RandomNumberGenerator.new()
+	for s in 16:
+		var at := s * step
+		if s in [0, 6, 8]:
+			_tone(f, at, 95.0, 42.0, 0.07, 1.0)
+		if s in [3, 7, 11, 13]:
+			_hiss(f, rng, at, 0.03, 0.45, 0.6)
+		if s in [2, 5, 10, 14, 15]:
+			_tone(f, at, 230.0, 200.0, 0.03, 0.4)
+	return f
+
+
+func _siren() -> PackedFloat32Array:
+	var f := _buf(1.2)
+	for i in f.size():
+		var t := float(i) / RATE
+		var hz := 650.0 if t < 0.6 else 870.0
+		f[i] = sin(TAU * hz * t) * 0.6 + sin(TAU * hz * 3.0 * t) * 0.18
+	return f
+
+
+func _engine() -> PackedFloat32Array:
+	var f := _buf(0.5)
+	var rng := RandomNumberGenerator.new()
+	var y := 0.0
+	for i in f.size():
+		var t := float(i) / RATE
+		y += 0.2 * (rng.randf_range(-1.0, 1.0) - y)
+		var saw := fposmod(t * 90.0, 1.0) * 2.0 - 1.0
+		f[i] = saw * 0.5 + sin(TAU * 45.0 * t) * 0.4 + y * 0.2
+	return f
+
+
+func _heli() -> PackedFloat32Array:
+	var f := _buf(1.0)
+	var rng := RandomNumberGenerator.new()
+	var y := 0.0
+	for i in f.size():
+		var t := float(i) / RATE
+		y += 0.06 * (rng.randf_range(-1.0, 1.0) - y)
+		var chop := pow(0.5 + 0.5 * sin(TAU * 11.0 * t), 3.0)
+		f[i] = y * (0.3 + chop * 1.5) + sin(TAU * 44.0 * t) * 0.1
+	return f
+
+
+func _shot() -> PackedFloat32Array:
+	var f := _buf(0.45)
+	var rng := RandomNumberGenerator.new()
+	_hiss(f, rng, 0.0, 0.05, 1.0)
+	_hiss(f, rng, 0.0, 0.12, 0.5, 0.15)
+	_tone(f, 0.0, 150.0, 55.0, 0.05, 0.8)
+	return f
+
+
+func _punch() -> PackedFloat32Array:
+	var f := _buf(0.2)
+	var rng := RandomNumberGenerator.new()
+	_hiss(f, rng, 0.0, 0.02, 0.7, 0.3)
+	_tone(f, 0.0, 110.0, 60.0, 0.03, 1.0)
+	return f
+
+
+func _thump(hz: float, seconds: float) -> PackedFloat32Array:
+	var f := _buf(seconds)
+	var rng := RandomNumberGenerator.new()
+	_hiss(f, rng, 0.0, 0.006, 0.4)
+	_tone(f, 0.0, hz, hz * 0.6, seconds / 5.0, 1.0)
+	return f
+
+
+func _horn() -> PackedFloat32Array:
+	var f := _buf(0.5)
+	for i in f.size():
+		var t := float(i) / RATE
+		var e := minf(1.0, t / 0.02) * minf(1.0, (0.5 - t) / 0.05)
+		var a := sin(TAU * 370.0 * t) + sin(TAU * 1110.0 * t) * 0.35
+		var b := sin(TAU * 466.0 * t) + sin(TAU * 1398.0 * t) * 0.35
+		f[i] = (a + b) * e * 0.4
+	return f
+
+
+func _whistle() -> PackedFloat32Array:
+	var f := _buf(0.55)
+	var rng := RandomNumberGenerator.new()
+	var ph := 0.0
+	for i in f.size():
+		var t := float(i) / RATE
+		ph += TAU * (2700.0 + sin(TAU * 32.0 * t) * 180.0) / RATE
+		var e := minf(1.0, t / 0.01) * minf(1.0, (0.55 - t) / 0.06)
+		f[i] = (sin(ph) * 0.8 + rng.randf_range(-0.1, 0.1)) * e
+	return f
+
+
+func _cheer() -> PackedFloat32Array:
+	var f := _buf(2.4)
+	var rng := RandomNumberGenerator.new()
+	var a := 0.0
+	var b := 0.0
+	for i in f.size():
+		var t := float(i) / RATE
+		var x := rng.randf_range(-1.0, 1.0)
+		a += 0.25 * (x - a)
+		b += 0.04 * (x - b)
+		var e := minf(1.0, t / 0.25) * exp(-maxf(0.0, t - 0.6) * 1.6)
+		f[i] = (a - b) * e * (0.8 + 0.2 * sin(TAU * 7.0 * t))
+	return f
+
+
+func _cash() -> PackedFloat32Array:
+	var f := _buf(0.4)
+	_tone(f, 0.0, 1320.0, 1320.0, 0.05, 0.6)
+	_tone(f, 0.07, 1760.0, 1760.0, 0.06, 0.6)
+	return f
+
+
+func _firework() -> PackedFloat32Array:
+	var f := _buf(1.6)
+	var rng := RandomNumberGenerator.new()
+	_tone(f, 0.0, 500.0, 1900.0, 0.12, 0.15)
+	_hiss(f, rng, 0.42, 0.22, 1.0, 0.12)
+	_tone(f, 0.42, 90.0, 40.0, 0.12, 0.9)
+	for k in 30:
+		_hiss(f, rng, 0.55 + rng.randf() * 0.8, 0.004, 0.25)
+	return f
+
+
+func _crash() -> PackedFloat32Array:
+	var f := _buf(0.7)
+	var rng := RandomNumberGenerator.new()
+	_hiss(f, rng, 0.0, 0.09, 1.0, 0.5)
+	for hz in [420.0, 610.0, 890.0, 1340.0]:
+		_tone(f, 0.0, hz, hz * 0.97, 0.08, 0.25)
+	_tone(f, 0.0, 80.0, 45.0, 0.06, 0.8)
+	return f
+
+
+func _thunder() -> PackedFloat32Array:
+	var f := _buf(2.5)
+	var rng := RandomNumberGenerator.new()
+	_hiss(f, rng, 0.0, 0.5, 1.0, 0.03)
+	_hiss(f, rng, 0.15, 0.3, 0.6, 0.06)
+	_hiss(f, rng, 0.6, 0.4, 0.5, 0.02)
+	return f

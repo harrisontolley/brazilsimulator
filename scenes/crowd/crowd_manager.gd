@@ -19,6 +19,9 @@ const FLEE_TIME := 10.0
 const HOSTILE_SPEED := 4.8
 const ROB_RATE := 0.55
 const ROB_TICK := 0.1
+## Mic level under which a sunbather sleeps on, and how long their bag takes to go through.
+const PICK_LOUD := 0.08
+const PICK_TIME := 2.5
 const BODY_RADIUS := 0.5
 const WORLD_AABB := Layout.WORLD_AABB
 ## cl_npc flag bit: this hostile NPC has a gun out. The low two bits are its wealth tier.
@@ -52,6 +55,7 @@ var _leave_ptr := 0
 var _look := PackedInt32Array()    # Kit clothing flags from the archetype
 var _tier := PackedByteArray()     # wealth tier still on show (drops to 0 once robbed)
 var _ev := PackedFloat32Array()    # Kit one-shot event time
+var _idle := PackedByteArray()     # Kit pose when standing about (dancers, drummers)
 var _mm: MultiMesh
 var _blood: MultiMesh
 var _blood_n := 0
@@ -104,6 +108,7 @@ func setup(seed_value: int) -> void:
 	_look.resize(count)
 	_tier.resize(count)
 	_ev.resize(count)
+	_idle.resize(count)
 	_leave_order.resize(count)
 
 	var rng := RandomNumberGenerator.new()
@@ -113,6 +118,8 @@ func setup(seed_value: int) -> void:
 	var order: Array = []
 
 	for i in count:
+		# Where they spend the day decides a lot about who they are.
+		var spot := _spot(rng)
 		var roll := rng.randf()
 		var ai := 0
 		for k in DB.ARCHETYPES.size():
@@ -120,6 +127,8 @@ func setup(seed_value: int) -> void:
 			if roll <= 0.0:
 				ai = k
 				break
+		if spot.has("arch"):
+			ai = _arch_index(spot.arch)
 		var a = DB.ARCHETYPES[ai]
 		arch[i] = ai
 		state[i] = AMBIENT
@@ -129,20 +138,19 @@ func setup(seed_value: int) -> void:
 		_ev[i] = 0.0
 		_scale[i] = a.scale * rng.randf_range(0.92, 1.08)
 		_width[i] = _scale[i] * a.width / a.scale
-		_yaw[i] = rng.randf() * TAU
+		_yaw[i] = spot.get("yaw", rng.randf() * TAU)
+		_idle[i] = spot.get("idle", Kit.STAND)
 
-		# Where they spend the day: [home, chance of walking, walk direction, longest walk].
-		var spot := _spot(rng)
-		var p: Vector3 = spot[0]
+		var p: Vector3 = spot.p
 		var on_sand := p.z < Layout.PROM_Z
-		var walker: bool = rng.randf() < spot[1]
+		var walker: bool = rng.randf() < spot.walk
 		_home[i] = p
-		_lying[i] = 1 if (not walker and on_sand and a.id != "mafia" and rng.randf() < 0.45) else 0
-		_w_dir[i] = spot[2]
+		_lying[i] = 1 if (not walker and on_sand and a.id != "mafia" and not spot.has("idle") and rng.randf() < 0.45) else 0
+		_w_dir[i] = spot.dir
 		_w_yaw[i] = Kit.face(_w_dir[i])
-		var far: float = spot[3]
+		var far: float = spot.far
 		_w_len[i] = rng.randf_range(minf(15.0, far), far)
-		_w_spd[i] = rng.randf_range(0.9, 1.7)
+		_w_spd[i] = spot.get("speed", rng.randf_range(0.9, 1.7))
 		_w_phase[i] = rng.randf() * 140.0
 		_walker[i] = 1 if walker else 0
 		if walker:
@@ -171,6 +179,12 @@ func setup(seed_value: int) -> void:
 			"local":
 				top = LOCAL_TOPS[rng.randi() % LOCAL_TOPS.size()]
 				look = Kit.F_SHORTS | Kit.F_TANK
+			"vendor":
+				top = Color(0.98, 0.98, 0.95)
+				look = Kit.F_SHORTS | Kit.F_HAT | Kit.F_CARRY
+			"traficante":
+				top = Color(0.1, 0.1, 0.1)
+				look = Kit.F_SHORTS | Kit.F_SHIRTLESS | Kit.F_SHADES | Kit.F_CHAIN | Kit.F_GUN
 			_:
 				top = Color(0.09, 0.09, 0.11) if rng.randf() < 0.7 else Color(0.95, 0.95, 0.95)
 				look = Kit.F_SUIT | Kit.F_SHADES
@@ -178,7 +192,7 @@ func setup(seed_value: int) -> void:
 			look |= Kit.F_SHADES
 		top.a = rng.randf()
 		tops.append(top)
-		_look[i] = look
+		_look[i] = look | spot.get("look", 0)
 
 	order.sort_custom(func(x, y): return x[0] < y[0])
 	for k in count:
@@ -190,30 +204,71 @@ func setup(seed_value: int) -> void:
 		_restyle(i)
 
 
-## Picks where an NPC lives: on the sand, strolling the calçadão, or somewhere in town.
-func _spot(rng: RandomNumberGenerator) -> Array:
+func _arch_index(id: String) -> int:
+	for k in DB.ARCHETYPES.size():
+		if DB.ARCHETYPES[k].id == id:
+			return k
+	return 0
+
+
+## Picks where an NPC lives and what they do there: p (home), walk (chance of pacing up
+## and down), dir and far (which way and how far), and optionally speed, arch, idle (the
+## pose they stand in), look (extra clothing flags) and yaw.
+func _spot(rng: RandomNumberGenerator) -> Dictionary:
 	var x := rng.randf_range(-292.0, 292.0)
 	var along := Vector3.RIGHT
 	var roll := rng.randf()
-	if roll < 0.6:
+	if roll < 0.52:
 		var p := Vector3(x, 0.0, rng.randf_range(-36.0, 37.0))
 		if Layout.on_play_area(p, 1.0):
 			p.z = rng.randf_range(-36.0, -28.0)
 		# Nobody sets up their towel inside a hut.
-		return [DB.clear_of_solids(p, 0.5), 0.3, Vector3(1.0, 0.0, rng.randf_range(-0.25, 0.25)).normalized(), 70.0]
+		return {"p": DB.clear_of_solids(p, 0.5), "walk": 0.3, "dir": Vector3(1.0, 0.0, rng.randf_range(-0.25, 0.25)).normalized(), "far": 70.0}
+	if roll < 0.56:
+		# Ambulantes working the sand with a cooler of mate and biscoito.
+		return {"p": DB.clear_of_solids(Vector3(x, 0.0, rng.randf_range(-30.0, 30.0)), 0.5), "walk": 1.0, "dir": Vector3(1.0, 0.0, rng.randf_range(-0.2, 0.2)).normalized(), "far": 90.0, "arch": "vendor"}
+	if roll < 0.6:
+		# A kickabout: both sides chasing up and down a pitch.
+		var rect: Array = Layout.PITCHES[rng.randi() % Layout.PITCHES.size()]
+		var c: Vector3 = rect[0]
+		var h: Vector2 = rect[1]
+		var run := rng.randf_range(6.0, 14.0)
+		var p := c + Vector3(rng.randf_range(-1.0, 1.0) * (h.x - run * 0.5 - 1.0), 0.0, rng.randf_range(-1.0, 1.0) * (h.y - 2.5))
+		return {"p": p, "walk": 1.0, "dir": Vector3(1.0, 0.0, rng.randf_range(-0.3, 0.3)).normalized(), "far": run, "speed": rng.randf_range(2.8, 4.5), "arch": "local", "look": Kit.F_SHIRTLESS if rng.randf() < 0.5 else 0}
+	if roll < 0.615:
+		# Futevolei: two a side, facing the net.
+		var rect: Array = Layout.COURTS[rng.randi() % Layout.COURTS.size()]
+		var c: Vector3 = rect[0]
+		var side := -1.0 if rng.randf() < 0.5 else 1.0
+		return {"p": c + Vector3(side * rng.randf_range(2.0, 6.5), 0.0, rng.randf_range(-3.0, 3.0)), "walk": 0.0, "dir": along, "far": 1.0, "arch": "local", "yaw": Kit.face(Vector3(-side, 0, 0)), "idle": Kit.STAND, "look": Kit.F_SHIRTLESS}
 	if roll < 0.78:
-		return [DB.clear_of_solids(Vector3(x, 0.0, rng.randf_range(41.5, 50.0)), 0.5), 0.8, along, 70.0]
-	if roll < 0.84:
-		return [Vector3(x, 0.0, rng.randf_range(70.6, 72.4)), 0.85, along, 60.0]
-	if roll < 0.92:
-		return [Vector3(x, 0.0, rng.randf_range(103.5, 107.5)), 0.6, along, 50.0]
-	if roll < 0.95:
+		return {"p": DB.clear_of_solids(Vector3(x, 0.0, rng.randf_range(41.5, 50.0)), 0.5), "walk": 0.8, "dir": along, "far": 70.0}
+	if roll < 0.795:
+		# Roda de samba on the calçadão: a ring of drummers and the people dancing to them.
+		var c: Vector3 = DB.RODAS[rng.randi() % DB.RODAS.size()]
+		var a := rng.randf() * TAU
+		var drummer := rng.randf() < 0.4
+		var r := 2.2 if drummer else rng.randf_range(3.2, 5.0)
+		return {"p": c + Vector3(cos(a) * r, 0.0, sin(a) * r * 0.7), "walk": 0.0, "dir": along, "far": 1.0, "arch": "local", "yaw": Kit.face(Vector3(-cos(a), 0, -sin(a))), "idle": Kit.DRUM if drummer else Kit.DANCE, "look": Kit.F_CARRY if drummer else 0}
+	if roll < 0.845:
+		return {"p": Vector3(x, 0.0, rng.randf_range(70.6, 72.4)), "walk": 0.85, "dir": along, "far": 60.0}
+	if roll < 0.915:
+		return {"p": Vector3(x, 0.0, rng.randf_range(103.5, 107.5)), "walk": 0.6, "dir": along, "far": 50.0}
+	if roll < 0.94:
 		var cx: float = Layout.CROSS_X[rng.randi() % Layout.CROSS_X.size()]
-		return [Vector3(cx + rng.randf_range(-3.0, 3.0), 0.0, 86.0), 0.8, Vector3.BACK, 20.0]
+		return {"p": Vector3(cx + rng.randf_range(-3.0, 3.0), 0.0, 86.0), "walk": 0.8, "dir": Vector3.BACK, "far": 20.0}
+	if roll < 0.955:
+		# The baile: everyone on the terrace is dancing.
+		var c := DB.BAILE_POS
+		return {"p": c + Vector3(rng.randf_range(-9.0, 9.0), 0.0, rng.randf_range(-3.0, 1.2)), "walk": 0.0, "dir": along, "far": 1.0, "arch": "local", "idle": Kit.DANCE, "yaw": Kit.face(Vector3(rng.randf_range(-0.5, 0.5), 0, 1))}
+	if roll < 0.963:
+		# The boca's soldiers.
+		var boca: Vector3 = DB.BOCA_POS
+		return {"p": Vector3(boca.x + rng.randf_range(-9.0, 9.0), boca.y - 0.2, boca.z + rng.randf_range(-1.4, 0.6)), "walk": 0.0, "dir": along, "far": 1.0, "arch": "traficante", "yaw": Kit.face(Vector3.FORWARD)}
 	# Up in the favela, out on the walkway in front of the houses.
 	var t := rng.randi() % Layout.TERRACES
 	var z := Layout.FAVELA_Z + t * Layout.TERRACE_D + rng.randf_range(0.6, Layout.BECO - 0.5)
-	return [Vector3(x, (t + 1) * Layout.TERRACE_H, z), 0.35, along, 30.0]
+	return {"p": Vector3(x, (t + 1) * Layout.TERRACE_H, z), "walk": 0.35, "dir": along, "far": 30.0}
 
 
 func _build_meshes(tops: PackedColorArray, towels: PackedInt32Array) -> void:
@@ -286,8 +341,10 @@ func _restyle(i: int) -> void:
 			if _lying[i] == 1:
 				pose = Kit.SUNBATHE
 			elif _walker[i] == 1:
-				pose = Kit.WALK
+				pose = Kit.RUN if _w_spd[i] > 2.5 else Kit.WALK
 				speed = _w_spd[i]
+			else:
+				pose = _idle[i]
 		COWER:
 			pose = Kit.COWER
 		FLEE:
@@ -421,11 +478,16 @@ func pick_near(o: Vector3, d: Vector3, max_t: float) -> int:
 	for i in near:
 		if state[i] >= DEAD:
 			continue
-		var t := DB.ray_point(o, d, pos[i] + Vector3(0, 0.9, 0), BODY_RADIUS, best_t)
+		var t := DB.ray_point(o, d, pos[i] + Vector3(0, 0.3 if is_lying(i) else 0.9, 0), BODY_RADIUS, best_t)
 		if t >= 0.0:
 			best = i
 			best_t = t
 	return best
+
+
+## Flat out on a towel, eyes shut: someone whose bag can be gone through.
+func is_lying(i: int) -> bool:
+	return _lying[i] == 1 and state[i] == AMBIENT
 
 
 ## Full-crowd ray test (server). Returns [index, distance]; index -1 on a miss.
@@ -636,6 +698,14 @@ func _srv_hostile(i: int, delta: float) -> void:
 		g.srv_damage(h.target, DB.ARCHETYPES[arch[i]].melee, -1)
 
 
+## Makes an NPC who was minding their own business go after a player, if they are the type.
+func srv_provoke(i: int, pid: int) -> void:
+	if i < 0 or i >= count or state[i] != AMBIENT or DB.ARCHETYPES[arch[i]].fight <= 0.0:
+		return
+	_hostile[i] = {"target": pid, "cd": 0.8, "until": 15.0, "shooter": false}
+	_srv_set(i, HOSTILE)
+
+
 func srv_damage_npc(i: int, dmg: float, attacker: int) -> void:
 	if i < 0 or i >= count or state[i] >= DEAD:
 		return
@@ -672,11 +742,16 @@ func srv_rob(i: int, loud: float) -> void:
 			return
 		if r != null:
 			_srv_rob_abort(pid)
-		r = {"npc": i, "meter": 0.0, "quiet": 0.0, "last": 0.0}
+		# Someone asleep on a towel can be robbed without a word, if you keep it that way.
+		r = {"npc": i, "meter": 0.0, "quiet": 0.0, "last": 0.0, "pick": is_lying(i) and loud < PICK_LOUD}
 		_rob[pid] = r
-		_srv_set(i, COWER)
-	elif state[i] != COWER:
+		if not r.pick:
+			_srv_set(i, COWER)
+	elif state[i] != (AMBIENT if r.pick else COWER):
 		_rob.erase(pid)
+		return
+	if r.pick:
+		_srv_pickpocket(pid, p, r, loud)
 		return
 	if pos[i].distance_to(p.global_position) > 6.0:
 		_srv_rob_abort(pid)
@@ -684,7 +759,7 @@ func srv_rob(i: int, loud: float) -> void:
 	r.last = 0.0
 
 	var a = DB.ARCHETYPES[arch[i]]
-	var pressure: float = loud * DB.ITEMS[p.st.equipped].intimidation
+	var pressure: float = loud * DB.ITEMS[p.st.equipped].intimidation * p.intimidation_mult()
 	r.meter = clampf(r.meter + (pressure - a.resistance) * ROB_RATE * ROB_TICK, 0.0, 1.0)
 	# Louder carries further: more police and players hear it.
 	if loud > 0.12:
@@ -695,9 +770,21 @@ func srv_rob(i: int, loud: float) -> void:
 	if r.meter >= 1.0:
 		_rob.erase(pid)
 		var cash := money[i]
+		var tier := DB.wealth_tier(cash)
 		money[i] = 0
 		p.st.money += cash
 		var msg := "Robbed R$%d" % cash
+		# The rich hand over more than cash. It only pays once a fence has bought it.
+		var loot := ""
+		if _look[i] & Kit.F_CAMERA and randf() < 0.5:
+			loot = "camera"
+		elif tier == 2 and randf() < 0.6:
+			loot = "chain"
+		elif tier >= 1 and randf() < 0.4:
+			loot = "watch" if randf() < 0.5 else "phone"
+		if loot != "":
+			g._give(p.st, loot, 1)
+			msg += " + %s" % DB.ITEMS[loot].name
 		if randf() < a.gun:
 			p.st.inv["pistol"] = 1
 			p.st.ammo += 6
@@ -714,6 +801,42 @@ func srv_rob(i: int, loud: float) -> void:
 		_srv_react(i, pid, p.global_position)
 		return
 	g.send(pid, "cl_rob_meter", [r.meter])
+
+
+## Going through a sunbather's bag. Any noise wakes them, and now and then they just wake.
+func _srv_pickpocket(pid: int, p, r: Dictionary, loud: float) -> void:
+	var g = Net.game
+	var i: int = r.npc
+	if pos[i].distance_to(p.global_position) > 4.0:
+		_rob.erase(pid)
+		g.send(pid, "cl_rob_meter", [0.0])
+		return
+	r.last = 0.0
+	r.meter += ROB_TICK / PICK_TIME
+	if loud > PICK_LOUD * 2.0 or randf() < 0.035 * ROB_TICK * 10.0:
+		_rob.erase(pid)
+		g.send(pid, "cl_rob_meter", [0.0])
+		g.send(pid, "cl_toast", ["They woke up!"])
+		Crime.report_crime(pos[i], pid, 1)
+		_lying[i] = 0
+		_srv_react(i, pid, p.global_position)
+		return
+	if r.meter < 1.0:
+		g.send(pid, "cl_rob_meter", [r.meter])
+		return
+	_rob.erase(pid)
+	var cash := int(money[i] * 0.6)
+	money[i] -= cash
+	p.st.money += cash
+	var msg := "Lifted R$%d" % cash
+	if randf() < 0.35:
+		g._give(p.st, "phone", 1)
+		msg += " + %s" % DB.ITEMS["phone"].name
+	g.push_state(p)
+	g.send(pid, "cl_toast", [msg])
+	g.send(pid, "cl_rob_meter", [0.0])
+	# The bag is lighter; what they are seen wearing stays as it was.
+	_srv_set(i, AMBIENT)
 
 
 func _srv_rob_abort(pid: int) -> void:

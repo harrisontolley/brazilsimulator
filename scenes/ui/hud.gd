@@ -29,6 +29,9 @@ var _scores: PanelContainer
 var _scores_text: Label
 var _shop: PanelContainer
 var _shop_list: VBoxContainer
+var _loot: Label
+var _banner: Label
+var _banner_t := 0.0
 var _ping_nodes: Array = []
 var _pings: Array = []  # {pos, t}
 var _rob_meter := 0.0
@@ -65,6 +68,7 @@ func _ready() -> void:
 	_weapon = _label(tl, 18)
 	_drugs = _label(tl, 16)
 	_effects = _label(tl, 16, Color(1.0, 0.75, 0.3))
+	_loot = _label(tl, 16, Color(0.85, 0.7, 1.0))
 
 	# Top centre: clock and how full the beach still is.
 	var tc := _vbox(Control.PRESET_CENTER_TOP, Vector2(0, 12))
@@ -78,7 +82,7 @@ func _ready() -> void:
 	_heat.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	var help := _label(tr, 13, Color(1, 1, 1, 0.65))
 	help.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	help.text = "WASD move  Shift sprint\nHold Space to hop: strafe + turn in the air for speed\nSpace in the air: double jump   at a wall: wall jump\nCtrl / C slide (jump out of it for a boost)   Q dive\nScroll: first / third person\nLMB attack  RMB aim\nHold E + SHOUT to rob (V = fake shout)\nF pick up / shop   1-2 weapons   3-5 drugs\nTab scores   Esc free mouse"
+	help.text = "WASD move  Shift sprint\nHold Space to hop: strafe + turn in the air for speed\nSpace in the air: double jump   at a wall: wall jump\nCtrl / C slide (jump out of it for a boost)   Q dive\nScroll: first / third person\nLMB attack  RMB aim\nHold E + SHOUT to rob (V = fake shout)\nHold E silently on a sunbather to pickpocket\nF pick up / shop / take a moto   1-2 weapons   3-5 drugs\nRun into a football to dribble, hit it to shoot\nTab scores   Esc free mouse"
 
 	# Bottom centre: robbery.
 	var bc := _vbox(Control.PRESET_CENTER_BOTTOM, Vector2(0, -24))
@@ -95,6 +99,7 @@ func _ready() -> void:
 	var cross := _label(_vbox(Control.PRESET_CENTER, Vector2.ZERO), 22)
 	cross.text = "+"
 	_big = _label(_vbox(Control.PRESET_CENTER, Vector2(0, -140)), 40, Color(1.0, 0.9, 0.3))
+	_banner = _label(_vbox(Control.PRESET_CENTER_TOP, Vector2(0, 120)), 34, Color(1.0, 0.55, 0.15))
 
 	for i in 8:
 		var dot := ColorRect.new()
@@ -197,32 +202,86 @@ func add_ping(pos: Vector3) -> void:
 		_pings.pop_front()
 
 
+## Big announcement across the top: a world event starting.
+func banner(text: String) -> void:
+	_banner.text = text
+	_banner_t = 6.0
+
+
 func show_winner() -> void:
 	var rows := _ranked()
 	_winner = rows[0].pname if not rows.is_empty() else ""
 
 
 func open_shop(vi: int) -> void:
-	for c in _shop_list.get_children():
-		c.queue_free()
 	var v = DB.VENDORS[vi]
-	var title := Label.new()
-	title.text = v.name
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_shop_list.add_child(title)
+	_open_panel(v.name)
 	for item in v.stock:
 		var def = DB.ITEMS[item]
 		var b := Button.new()
-		b.text = "%s   R$%d" % [def.name, def.price]
+		b.text = "%s   R$%d" % [def.name, Net.game.price_at(v, item)]
+		if def.type == "food":
+			b.text += "   (+%d hp)" % int(def.heal)
 		b.pressed.connect(func(): Net.game.to_server("srv_buy", [vi, item]))
 		_shop_list.add_child(b)
+	if v.get("till", false):
+		var b := Button.new()
+		b.text = "HOLD UP THE TILL  (needs a pistol)"
+		b.add_theme_color_override("font_color", Color(1.0, 0.4, 0.3))
+		b.pressed.connect(func():
+			Net.game.to_server("srv_till", [vi])
+			close_shop())
+		_shop_list.add_child(b)
+	_close_button()
+
+
+## Jogo do bicho: pick a stake, then an animal.
+func open_bicho(vi: int) -> void:
+	_open_panel("JOGO DO BICHO   pays %dx   next draw in %ds" % [DB.BICHO_PAYS, int(DB.BICHO_EVERY - fmod(MatchState.time, DB.BICHO_EVERY))])
+	var stake := [DB.BETS[0]]
+	var stakes := HBoxContainer.new()
+	stakes.alignment = BoxContainer.ALIGNMENT_CENTER
+	_shop_list.add_child(stakes)
+	var group := ButtonGroup.new()
+	for amount in DB.BETS:
+		var b := Button.new()
+		b.text = "R$%d" % amount
+		b.toggle_mode = true
+		b.button_group = group
+		b.button_pressed = amount == stake[0]
+		b.pressed.connect(func(): stake[0] = amount)
+		stakes.add_child(b)
+	var grid := GridContainer.new()
+	grid.columns = 5
+	_shop_list.add_child(grid)
+	for n in DB.BICHOS.size():
+		var b := Button.new()
+		b.text = "%02d %s" % [n + 1, DB.BICHOS[n]]
+		b.custom_minimum_size.x = 120
+		b.pressed.connect(func():
+			Net.game.to_server("srv_bet", [vi, n, stake[0]])
+			close_shop())
+		grid.add_child(b)
+	_close_button()
+
+
+func _open_panel(title_text: String) -> void:
+	for c in _shop_list.get_children():
+		c.queue_free()
+	var title := Label.new()
+	title.text = title_text
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_shop_list.add_child(title)
+	_shop.visible = true
+	shop_open = true
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func _close_button() -> void:
 	var close := Button.new()
 	close.text = "Close"
 	close.pressed.connect(close_shop)
 	_shop_list.add_child(close)
-	_shop.visible = true
-	shop_open = true
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
 func close_shop() -> void:
@@ -263,8 +322,19 @@ func _process(delta: float) -> void:
 		var phase: String = p.drug_phase(d)
 		if phase != "":
 			fx.append("%s: %s %ds" % [DB.ITEMS[d].name, {"high": "HIGH", "down": "COMEDOWN", "od": "OVERDOSE"}[phase], ceili(st.drugs[d].t)])
+	if p.is_drunk():
+		fx.append("Caipirinha: TIPSY %ds" % ceili(st.drugs["caipirinha"].t))
 	_drugs.text = "\n".join(lines)
 	_effects.text = "\n".join(fx)
+	var loot: Array = []
+	for item in DB.LOOT:
+		if st.inv.get(item, 0) > 0:
+			loot.append("%s x%d" % [DB.ITEMS[item].name, st.inv[item]])
+	_loot.text = "" if loot.is_empty() else "Stolen: %s\n(sell to the RECEPTADOR up in the favela)" % ", ".join(loot)
+	if not st.get("bet", {}).is_empty():
+		_loot.text += "\nBet: R$%d on %s  (draw in %ds)" % [st.bet.amount, DB.BICHOS[st.bet.animal], int(DB.BICHO_EVERY - fmod(MatchState.time, DB.BICHO_EVERY))]
+	_banner_t -= delta
+	_banner.visible = _banner_t > 0.0
 
 	var left := int(MatchState.time_left())
 	_clock.text = "%d:%02d" % [left / 60, left % 60]
@@ -290,7 +360,7 @@ func _process(delta: float) -> void:
 	if p.robbing:
 		_target.text = "SHOUT!"
 	elif p.target_npc >= 0:
-		_target.text = "Hold E and shout to rob"
+		_target.text = "Hold E and keep QUIET to go through their bag" if g.crowd.is_lying(p.target_npc) else "Hold E and shout to rob"
 	elif p.mv == p.MV_RIDE:
 		_target.text = "W / S throttle   A / D steer   Space hop   F get off"
 	elif g.motos.free_near(p.global_position) >= 0:

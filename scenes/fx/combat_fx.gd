@@ -67,6 +67,38 @@ func strike(from: Vector3, to: Vector3, melee: bool, hit: bool) -> void:
 		_burst(to, 0.2, Color(0.95, 0.9, 0.75))
 
 
+## A puff of coloured paper: goals, parades, anything worth celebrating.
+func confetti(at: Vector3, pieces := 28, spread := 3.0) -> void:
+	var bit := BoxMesh.new()
+	bit.size = Vector3(0.14, 0.14, 0.02)
+	for k in pieces:
+		var mi := _node(bit, Color.from_hsv(randf(), 0.85, 1.0))
+		mi.position = at
+		mi.rotation = Vector3(randf() * TAU, randf() * TAU, 0)
+		var out := Vector3(randf_range(-1, 1), randf_range(0.2, 1.2), randf_range(-1, 1)) * spread
+		var tw := create_tween()
+		tw.tween_property(mi, "position", at + out, 0.35).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+		tw.tween_property(mi, "position", at + out * 1.3 - Vector3(0, spread + 1.5, 0), 1.4)
+		tw.parallel().tween_property(mi, "rotation", mi.rotation + Vector3(9, 7, 0), 1.4)
+		tw.tween_callback(mi.queue_free)
+
+
+## A firework shell bursting at `at`.
+func firework(at: Vector3, color: Color) -> void:
+	_burst(at, 9.0, color)
+	_burst(at, 5.0, Color.WHITE)
+	var light := OmniLight3D.new()
+	light.light_color = color
+	light.light_energy = 6.0
+	light.omni_range = 60.0
+	light.position = at
+	add_child(light)
+	var lt := create_tween()
+	lt.tween_property(light, "light_energy", 0.0, 0.7)
+	lt.tween_callback(light.queue_free)
+	Sfx.play("firework", at, 8.0)
+
+
 func _burst(p: Vector3, size: float, color: Color) -> void:
 	var mi := _node(_star, color, true)
 	mi.position = p

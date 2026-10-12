@@ -9,6 +9,7 @@ const Player := preload("res://scenes/player/player.gd")
 const Beach := preload("res://scenes/world/beach.gd")
 const Ambient := preload("res://scenes/world/ambient.gd")
 const Traffic := preload("res://scenes/world/traffic.gd")
+const Balls := preload("res://scenes/world/balls.gd")
 const Motos := preload("res://scenes/world/motos.gd")
 const Crowd := preload("res://scenes/crowd/crowd_manager.gd")
 const Police := preload("res://scenes/police/police_manager.gd")
@@ -20,6 +21,7 @@ const END_SCREEN_TIME := 15.0
 const PICKUP_RANGE := 2.6
 const VENDOR_RANGE := 4.5
 const PICKUP_COUNT := 30
+const TILL_COOLDOWN := 120.0
 
 var players := {}       # peer id -> Player node
 var ready_peers: Array = []  # server: peers that have loaded this scene
@@ -28,6 +30,7 @@ var world: Node3D
 var ambient: Node3D
 var traffic: Node3D
 var motos: Node3D
+var balls: Node3D
 var crowd: Node3D
 var police: Node3D
 var hud: CanvasLayer
@@ -45,6 +48,8 @@ var _last_attack := {}
 var _last_ping := {}
 var _respawn := {}
 var _last_hit := {}
+var _till_ready := {}   # vendor index -> match time its till is full again
+var _bicho_round := 0
 
 
 func _ready() -> void:
@@ -59,6 +64,9 @@ func _ready() -> void:
 	motos = Motos.new()
 	motos.name = "Motos"
 	add_child(motos)
+	balls = Balls.new()
+	balls.name = "Balls"
+	add_child(balls)
 	crowd = Crowd.new()
 	crowd.name = "Crowd"
 	add_child(crowd)
@@ -268,7 +276,10 @@ func _players_data() -> Array:
 func _srv_start_match() -> void:
 	MatchState.seed_value = randi()
 	_respawn.clear()
+	_till_ready.clear()
+	_bicho_round = 0
 	police.reset()
+	balls.reset()
 	var pdata: Array = []
 	for id in players:
 		var p = players[id]
@@ -314,6 +325,10 @@ func _srv_process(delta: float) -> void:
 		_end_t = END_SCREEN_TIME
 		bcast("cl_match_end")
 		return
+
+	if int(MatchState.time / DB.BICHO_EVERY) > _bicho_round:
+		_bicho_round = int(MatchState.time / DB.BICHO_EVERY)
+		_srv_bicho_draw()
 
 	_od_t += delta
 	var od_tick := _od_t >= 0.5
@@ -523,6 +538,15 @@ func srv_attack(dir: Vector3) -> void:
 			dir = (dir + Vector3(randf_range(-1, 1), randf_range(-1, 1), randf_range(-1, 1)) * w.spread).normalized()
 
 	var hit := _ray_hit(origin, dir, reach, radius, pid)
+	# A football in the way takes the hit instead, and takes off.
+	var ball_t: float = balls.srv_strike(origin, dir, hit.t, pid, 1.0 if w.melee else 1.5)
+	if ball_t >= 0.0:
+		bcast("cl_fx", [origin, origin + dir * ball_t, w.melee, DB.WHO_PLAYER, pid, DB.WHO_NONE, -1])
+		bcast("cl_sound", ["kick", origin + dir * ball_t])
+		if not w.melee:
+			Crime.report_noise(origin, 90.0, pid)
+			Crime.report_crime(origin, pid, 3)
+		return
 	var dmg: float = w.damage * (p.melee_mult() if w.melee else 1.0)
 	match hit.type:
 		DB.WHO_PLAYER: srv_damage(hit.id, dmg, pid)
@@ -567,6 +591,15 @@ func cl_fx(from: Vector3, to: Vector3, melee: bool, src_type: int, src_id: int, 
 	if not melee and src_type == DB.WHO_PLAYER and local_player != null and src_id == local_player.id and local_player.rig.first_person():
 		from = local_player.muzzle()
 	fx.strike(from, to, melee, hit_type != DB.WHO_NONE)
+	if not melee:
+		Sfx.play("shot", from, 4.0)
+	elif hit_type != DB.WHO_NONE:
+		Sfx.play("punch", to)
+
+
+@rpc("authority", "call_remote", "unreliable")
+func cl_sound(sound: String, at: Vector3) -> void:
+	Sfx.play(sound, at)
 
 
 func _fx_actor(type: int, id: int, attack: bool) -> void:
@@ -698,8 +731,12 @@ func interact() -> void:
 		to_server("srv_mount", [bike], motos)
 		return
 	for vi in DB.VENDORS.size():
-		if at.distance_to(DB.VENDORS[vi].pos) < VENDOR_RANGE:
-			hud.open_shop(vi)
+		var v = DB.VENDORS[vi]
+		if at.distance_to(v.pos) < VENDOR_RANGE:
+			match v.kind:
+				"bicho": hud.open_bicho(vi)
+				"fence": to_server("srv_sell", [vi])
+				_: hud.open_shop(vi)
 			return
 	var best := -1
 	var best_d := PICKUP_RANGE
@@ -724,28 +761,130 @@ func srv_pickup(id: int) -> void:
 	for item in drop.items:
 		_give(p.st, item, drop.items[item])
 	bcast("cl_drop_remove", [id])
+	send(p.id, "cl_sound", ["cash", drop.pos])
 	push_state(p)
+
+
+## The vendor a player is standing at, or null if they are not at vendor `vi`.
+func _vendor_for(p, vi: int):
+	if p == null or not p.can_fight() or vi < 0 or vi >= DB.VENDORS.size():
+		return null
+	var v = DB.VENDORS[vi]
+	return v if p.global_position.distance_to(v.pos) <= VENDOR_RANGE + 1.5 else null
+
+
+## What `item` costs at vendor v.
+func price_at(v: Dictionary, item: String) -> int:
+	return int(DB.ITEMS[item].price * v.get("discount", 1.0))
 
 
 @rpc("any_peer", "call_remote", "reliable")
 func srv_buy(vi: int, item: String) -> void:
 	var p = players.get(Net.sender())
-	if p == null or not p.can_fight() or vi < 0 or vi >= DB.VENDORS.size():
-		return
-	var v = DB.VENDORS[vi]
-	if not v.stock.has(item) or p.global_position.distance_to(v.pos) > VENDOR_RANGE + 1.5:
+	var v = _vendor_for(p, vi)
+	if v == null or not v.stock.has(item):
 		return
 	var def = DB.ITEMS[item]
-	if p.st.money < def.price or (def.type == "weapon" and p.st.inv.has(item)):
+	var price := price_at(v, item)
+	if p.st.money < price or (def.type == "weapon" and p.st.inv.has(item)):
 		return
-	p.st.money -= def.price
+	p.st.money -= price
 	match def.type:
 		"ammo": p.st.ammo += def.amount
 		"weapon":
 			p.st.inv[item] = 1
 			p.st.ammo += 12
+		"food":
+			p.st.hp = minf(100.0, p.st.hp + def.heal)
+			if def.get("buff", false):
+				p.st.drugs[item] = {"phase": "high", "t": def.duration}
 		_: _give(p.st, item, 1)
 	push_state(p)
+
+
+## Emptying a kiosk till at gunpoint. It takes a while to fill up again.
+@rpc("any_peer", "call_remote", "reliable")
+func srv_till(vi: int) -> void:
+	var pid := Net.sender()
+	var p = players.get(pid)
+	var v = _vendor_for(p, vi)
+	if v == null or not v.get("till", false):
+		return
+	if p.st.equipped != "pistol":
+		send(pid, "cl_toast", ["Nobody hands over a till to bare fists"])
+		return
+	if MatchState.time < _till_ready.get(vi, 0.0):
+		send(pid, "cl_toast", ["Till is empty - someone got here first"])
+		return
+	_till_ready[vi] = MatchState.time + TILL_COOLDOWN
+	var cash := randi_range(150, 350)
+	p.st.money += cash
+	push_state(p)
+	send(pid, "cl_toast", ["Cleaned out the till: R$%d" % cash])
+	send(pid, "cl_sound", ["cash", v.pos])
+	Crime.report_noise(v.pos, 55.0, pid)
+	Crime.report_crime(v.pos, pid, 2)
+
+
+## Jogo do bicho: one bet at a time on one of the 25 animals.
+@rpc("any_peer", "call_remote", "reliable")
+func srv_bet(vi: int, animal: int, amount: int) -> void:
+	var pid := Net.sender()
+	var p = players.get(pid)
+	var v = _vendor_for(p, vi)
+	if v == null or v.kind != "bicho" or animal < 0 or animal >= DB.BICHOS.size() or not DB.BETS.has(amount):
+		return
+	if not p.st.bet.is_empty():
+		send(pid, "cl_toast", ["You already have a bet riding on the next draw"])
+		return
+	if p.st.money < amount:
+		return
+	p.st.money -= amount
+	p.st.bet = {"animal": animal, "amount": amount}
+	push_state(p)
+	send(pid, "cl_toast", ["R$%d on %s. Boa sorte!" % [amount, DB.BICHOS[animal]]])
+
+
+func _srv_bicho_draw() -> void:
+	var winner := randi() % DB.BICHOS.size()
+	var any := false
+	for id in players:
+		var p = players[id]
+		if p.st.bet.is_empty():
+			continue
+		any = true
+		if p.st.bet.animal == winner:
+			var won: int = p.st.bet.amount * DB.BICHO_PAYS
+			p.st.money += won
+			send(id, "cl_toast", ["Deu %s!  You won R$%d" % [DB.BICHOS[winner], won]])
+			send(id, "cl_sound", ["cash", p.global_position])
+		else:
+			send(id, "cl_toast", ["Deu %s. Your %s lost." % [DB.BICHOS[winner], DB.BICHOS[p.st.bet.animal]]])
+		p.st.bet = {}
+		push_state(p)
+	if not any:
+		return
+
+
+## Turns everything stolen in a player's pockets into cash.
+@rpc("any_peer", "call_remote", "reliable")
+func srv_sell(vi: int) -> void:
+	var pid := Net.sender()
+	var p = players.get(pid)
+	var v = _vendor_for(p, vi)
+	if v == null or v.kind != "fence":
+		return
+	var total := 0
+	for item in DB.LOOT:
+		total += p.st.inv.get(item, 0) * DB.ITEMS[item].price
+		p.st.inv.erase(item)
+	if total == 0:
+		send(pid, "cl_toast", ["Nothing to sell. Bring watches, phones, cameras, chains."])
+		return
+	p.st.money += total
+	push_state(p)
+	send(pid, "cl_toast", ["Fenced the lot for R$%d" % total])
+	send(pid, "cl_sound", ["cash", v.pos])
 
 
 @rpc("any_peer", "call_remote", "reliable")

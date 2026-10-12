@@ -19,6 +19,7 @@ Net="*res://autoload/net.gd"
 MatchState="*res://autoload/match_state.gd"
 Crime="*res://autoload/crime.gd"
 Mic="*res://autoload/mic.gd"
+Sfx="*res://autoload/sfx.gd"
 
 [display]
 
