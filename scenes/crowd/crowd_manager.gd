@@ -22,6 +22,8 @@ const ROB_TICK := 0.1
 ## Mic level under which a sunbather sleeps on, and how long their bag takes to go through.
 const PICK_LOUD := 0.08
 const PICK_TIME := 2.5
+## A hold-up in progress is one crime that goes on, not ten a second.
+const ROB_CRIME_EVERY := 1.0
 const BODY_RADIUS := 0.5
 const WORLD_AABB := Layout.WORLD_AABB
 ## cl_npc flag bit: this hostile NPC has a gun out. The low two bits are its wealth tier.
@@ -889,7 +891,7 @@ func srv_rob(i: int, loud: float) -> void:
 		if r != null:
 			_srv_rob_abort(pid)
 		# Someone asleep on a towel can be robbed without a word, if you keep it that way.
-		r = {"npc": i, "meter": 0.0, "quiet": 0.0, "last": 0.0, "pick": is_lying(i) and loud < PICK_LOUD}
+		r = {"npc": i, "meter": 0.0, "quiet": 0.0, "last": 0.0, "crime": 0.0, "pick": is_lying(i) and loud < PICK_LOUD}
 		_rob[pid] = r
 		if not r.pick:
 			_srv_set(i, COWER)
@@ -910,7 +912,10 @@ func srv_rob(i: int, loud: float) -> void:
 	# Louder carries further: more police and players hear it.
 	if loud > 0.12:
 		Crime.report_noise(pos[i], loud * 70.0, pid)
-	Crime.report_crime(pos[i], pid, 1)
+	r.crime -= ROB_TICK
+	if r.crime <= 0.0:
+		r.crime = ROB_CRIME_EVERY
+		Crime.report_crime(pos[i], pid, 1)
 	r.quiet = r.quiet + ROB_TICK if pressure < a.resistance else maxf(0.0, r.quiet - ROB_TICK)
 
 	if r.meter >= 1.0:
@@ -995,6 +1000,13 @@ func _srv_rob_abort(pid: int) -> void:
 
 
 # --- debug ---
+
+## For tests: everybody goes home, so nothing but walls is in the way.
+func debug_clear() -> void:
+	for i in count:
+		state[i] = GONE
+		_hide(i)
+
 
 ## --showcase: lines up one NPC of each look and state in front of `at` (host only).
 func debug_showcase(at: Vector3) -> void:

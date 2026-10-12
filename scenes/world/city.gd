@@ -15,6 +15,8 @@ const GRAFFITI := ["RIO 40°", "PAZ", "FAVELA VIVE", "SAUDADE", "É NÓIS", "AMO
 ## Stretches of favela terrace left clear of houses, as [terrace, x from, x to].
 const YARDS := [[2, 52.0, 80.0], [4, -62.0, -30.0], [3, -124.0, -116.0], [1, 208.0, 216.0]]
 
+const Places := preload("res://scenes/world/places.gd")
+
 var _rng := RandomNumberGenerator.new()
 var _tanks: Array = []
 var _dishes: Array = []
@@ -27,6 +29,7 @@ func _ready() -> void:
 	_rng.seed = 4242
 	_init_kit()
 	_streets()
+	_cacambas()
 	_row_a()
 	_row_b()
 	_delegacia()
@@ -167,9 +170,29 @@ func _car(p: Vector3, yaw: float, tint: Color) -> void:
 	_box(p + b * Vector3(2.06, 0.7, 0), Vector3(0.04, 0.16, 1.5), Color(1.0, 0.95, 0.8), rot)
 	_box(p + b * Vector3(-2.06, 0.7, 0), Vector3(0.04, 0.16, 1.5), Color(0.8, 0.1, 0.1), rot)
 	_collider(p + Vector3(0, 0.75, 0), Vector3(4.1, 1.5, 1.8), rot)
+	# Room to wriggle under, for anyone with a reason to.
+	Places.add_hide(p + Vector3(0, 0.2, -1.5), "carro", p + Vector3(0, 0.2, -1.8))
 	for wx in [-1.3, 1.3]:
 		for wz in [-0.85, 0.85]:
 			_wheels.append(Transform3D(b * Basis(Vector3.RIGHT, PI / 2.0), p + b * Vector3(wx, 0.32, wz)))
+
+
+## Skips along the back wall of the front row: somewhere to climb into until it blows over.
+func _cacambas() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 6161
+	var green := Color(0.16, 0.38, 0.24)
+	for i in 16:
+		var x := -285.0 + i * 37.0 + rng.randf_range(-6.0, 6.0)
+		if _near_cross(x, 8.0) or (x > -110.0 and x < -66.0) or (x > 144.0 and x < 184.0):
+			continue
+		var p := Vector3(x, 0, 100.3)
+		_block(p + Vector3(0, 0.65, 0), Vector3(2.4, 1.3, 1.3), green if i % 3 != 0 else Color(0.2, 0.3, 0.55))
+		_box(p + Vector3(0, 1.36, 0.15), Vector3(2.5, 0.08, 1.1), DARK, Vector3(0.12, 0, 0))
+		_box(p + Vector3(0, 0.75, 0.66), Vector3(1.4, 0.3, 0.02), Color(0.95, 0.95, 0.9))
+		for wx in [-0.95, 0.95]:
+			_box(p + Vector3(wx, 0.08, 0.5), Vector3(0.2, 0.16, 0.2), DARK)
+		Places.add_hide(p + Vector3(0, 0.2, 1.5), "cacamba", p + Vector3(0, 0.2, 1.8))
 
 
 ## Market stall: a striped awning over crates of fruit.

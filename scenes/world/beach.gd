@@ -2,6 +2,7 @@ extends "res://scenes/world/world_kit.gd"
 ## Procedural stylised Rio: sea (-z), sand, wave promenade, and the backdrop of hills.
 ## The avenida and everything inland of it is built by city.gd.
 
+const Places := preload("res://scenes/world/places.gd")
 const City := preload("res://scenes/world/city.gd")
 
 const SAND := Color(0.86, 0.74, 0.5)
@@ -36,6 +37,7 @@ func _ready() -> void:
 	_postos()
 	_pitches()
 	_parkour()
+	_cover()
 	_instances(_cyl(0.0, 1.5, 0.55, 10), _vertex_mat(), _cones, _cone_tints)
 	_instances(_cyl(0.04, 0.04, 2.2, 5), _mat(Color(0.9, 0.9, 0.9)), _poles)
 	_instances(_ball(1.0, 2.0, 8), _vertex_mat(), _balls, _ball_tints)
@@ -195,6 +197,10 @@ func _decor() -> void:
 		_box(at + Vector3(-1.3, 0.35, 1.0), Vector3(1.0, 0.7, 0.6), Color(0.2, 0.5, 0.85))
 		_box(at + Vector3(2.3, 2.2, 2.3), Vector3(0.05, 4.4, 0.05), STEEL)
 		_flag(at + Vector3(2.3, 4.0, 2.3))
+		# Shade nobody looks twice into, and a canopy the helicopter cannot see through.
+		_collider(at + Vector3(0, 2.45, 0), Vector3(4.6, 0.1, 4.6))
+		Places.add_cover(AABB(at - Vector3(2.3, 0.5, 2.3), Vector3(4.6, 3.0, 4.6)), 0.6, false)
+		Places.add_hide(at + Vector3(-1.3, 0.2, 0.2), "barraca", at + Vector3(-1.3, 0.2, -0.6))
 		x += rng.randf_range(34.0, 46.0)
 
 
@@ -285,6 +291,46 @@ func _kiosk(p: Vector3, roof: Color, text: String) -> void:
 			_box(t + off + Vector3(0, 0.23, 0), Vector3(0.36, 0.46, 0.36), roof.lightened(0.2))
 		_parasol(t, roof.lightened(0.15))
 	_sign(text, p + Vector3(0, 3.7, 0), 96, Color.WHITE, 0.0, true)
+	Places.add_hide(p + Vector3(0, 0.2, 1.9), "quiosque", p + Vector3(0, 0.2, 2.3))
+
+
+## Things to duck behind on the open sand: striped windbreaks, upturned fishing boats to
+## crawl under, and the scrub along the top of the beach.
+func _cover() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 8128
+	var n := 0
+	while n < 16:
+		var p := Vector3(rng.randf_range(-285, 285), 0, rng.randf_range(-22, 26))
+		if Layout.on_play_area(p, 3.0):
+			continue
+		n += 1
+		var yaw := rng.randf_range(-0.5, 0.5)
+		var tint: Color = PROP_TINTS[rng.randi() % PROP_TINTS.size()]
+		_solid(p + Vector3(0, 0.6, 0), Vector3(3.2, 1.2, 0.08), Color(0.97, 0.97, 0.94), Vector3(0, yaw, 0))
+		for k in 4:
+			_box(p + Basis(Vector3.UP, yaw) * Vector3(-1.2 + k * 0.8, 0.6, 0), Vector3(0.4, 1.2, 0.1), tint, Vector3(0, yaw, 0))
+		for side in [-1.6, 1.6]:
+			_box(p + Basis(Vector3.UP, yaw) * Vector3(side, 0.75, 0), Vector3(0.06, 1.5, 0.06), WOOD, Vector3(0, yaw, 0))
+	for i in 10:
+		var p := Vector3(-270.0 + i * 60.0 + rng.randf_range(-12, 12), 0, rng.randf_range(-29, -24))
+		var yaw := rng.randf_range(-0.6, 0.6)
+		var hull := Color.from_hsv(rng.randf(), 0.55, 0.85)
+		_solid(p + Vector3(0, 0.4, 0), Vector3(3.8, 0.8, 1.3), hull, Vector3(0, yaw, 0))
+		_box(p + Vector3(0, 0.84, 0), Vector3(3.9, 0.1, 0.16), hull.darkened(0.4), Vector3(0, yaw, 0))
+		_box(p + Vector3(0, 0.25, 0), Vector3(3.84, 0.14, 1.34), Color(0.95, 0.95, 0.92), Vector3(0, yaw, 0))
+		Places.add_hide(p + Vector3(0, 0.2, 1.4), "barco", p + Vector3(0, 0.2, 1.7))
+	# Restinga scrub: no good standing up in, plenty crouched.
+	for i in 22:
+		var p := Vector3(-290.0 + i * 27.0 + rng.randf_range(-8, 8), 0, rng.randf_range(30.5, 37.5))
+		if Layout.on_play_area(p, 3.0):
+			continue
+		var w := rng.randf_range(3.0, 5.5)
+		var d := rng.randf_range(2.0, 3.2)
+		for k in 7:
+			var g := Color(0.16, 0.42 + rng.randf() * 0.14, 0.18)
+			_box(p + Vector3(rng.randf_range(-0.5, 0.5) * w, 0.45, rng.randf_range(-0.5, 0.5) * d), Vector3(rng.randf_range(1.0, 1.7), rng.randf_range(0.7, 1.1), rng.randf_range(1.0, 1.6)), g, Vector3(0, rng.randf() * PI, 0))
+		Places.add_cover(AABB(p - Vector3(w * 0.5 + 0.4, 0.5, d * 0.5 + 0.4), Vector3(w + 0.8, 2.5, d + 0.8)), 0.4, true)
 
 
 ## Benches, bins, lamps, pay phones, showers and an outdoor gym along the calçadão.

@@ -18,6 +18,8 @@ const Hud := preload("res://scenes/ui/hud.gd")
 const Kit := preload("res://scenes/characters/char_kit.gd")
 const Layout := preload("res://scenes/world/layout.gd")
 const CombatFx := preload("res://scenes/fx/combat_fx.gd")
+const Interact := preload("res://scenes/player/interact.gd")
+const Places := preload("res://scenes/world/places.gd")
 
 const END_SCREEN_TIME := 15.0
 const PICKUP_RANGE := 2.6
@@ -38,6 +40,7 @@ var crowd: Node3D
 var police: Node3D
 var hud: CanvasLayer
 var fx: Node3D
+var interaction: Node
 var local_player: CharacterBody3D
 
 var _players_root: Node3D
@@ -57,6 +60,7 @@ var _bicho_round := 0
 
 func _ready() -> void:
 	Net.game = self
+	Places.clear()
 	world = Beach.new()
 	add_child(world)
 	ambient = Ambient.new()
@@ -87,6 +91,10 @@ func _ready() -> void:
 	add_child(fx)
 	hud = Hud.new()
 	add_child(hud)
+	interaction = Interact.new()
+	interaction.name = "Interact"
+	add_child(interaction)
+	_setup_interact()
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 	if multiplayer.is_server():
@@ -239,6 +247,62 @@ func _debug_test(what: String) -> void:
 			await get_tree().create_timer(0.6).timeout
 			await _debug_frames("stand", 1, 0.1)
 			debug_result("moves", true)
+		"evade":
+			# What a cop can and cannot see: behind its back, crouched, tucked away.
+			var pl := local_player
+			var cop: Dictionary = police.debug_solo(Vector3(0, 0, 20), Vector3.RIGHT)
+			crowd.debug_clear()
+			pl.global_position = Vector3(-12, 0.2, 20)
+			await get_tree().create_timer(0.3).timeout
+			Crime.report_crime(pl.global_position, 1, 1)
+			var behind: int = pl.st.heat
+			pl.global_position = Vector3(12, 0.2, 20)
+			await get_tree().create_timer(0.3).timeout
+			var stand: bool = police._sees(cop, pl, 18.0, Police.FOV_PATROL)
+			Input.action_press("crouch")
+			await get_tree().create_timer(0.6).timeout
+			var crouched: bool = police._sees(cop, pl, 18.0, Police.FOV_PATROL)
+			Input.action_release("crouch")
+			await get_tree().create_timer(0.4).timeout
+			Crime.report_crime(pl.global_position, 1, 1)
+			var front: int = pl.st.heat
+			var hide: int = Places.hide_near(pl.global_position, 400.0)
+			pl.global_position = Places.hides[hide].pos
+			interaction.srv_act(interaction.acts.size() - Places.hides.size() + hide, 0)
+			await get_tree().create_timer(0.3).timeout
+			var tucked: bool = pl.st.hide == hide and not police._sees(cop, pl, 400.0, PI)
+			srv_unhide_me()
+			await get_tree().create_timer(0.2).timeout
+			var ok: bool = behind == 0 and front == 1 and stand and not crouched and tucked and pl.st.hide < 0
+			debug_result("evade", ok, "behind %d front %d stand %s crouched %s tucked %s" % [behind, front, stand, crouched, tucked])
+		"chase":
+			# One cop after someone it can see but not reach: it must run out of puff, and the
+			# heat must then die down a level at a time.
+			var pl := local_player
+			var cop: Dictionary = police.debug_solo(Vector3(0, 0, 20), Vector3.RIGHT)
+			crowd.debug_clear()
+			pl.global_position = Vector3(10, 0.2, 20)
+			await get_tree().create_timer(0.3).timeout
+			Crime.report_crime(pl.global_position, 1, 2)
+			var heat0: int = pl.st.heat
+			# Out of reach on a rooftop over the avenida, in plain view.
+			pl.global_position = Vector3(10, 30.0, 20)
+			pl.set_physics_process(false)
+			Engine.time_scale = 10.0
+			var t0 := MatchState.time
+			var gave_up := -1.0
+			var steps: Array = []
+			var heat: int = heat0
+			while MatchState.time - t0 < 200.0 and pl.st.heat > 0:
+				await get_tree().process_frame
+				if gave_up < 0.0 and cop.state == Police.PATROL:
+					gave_up = MatchState.time - t0
+				if pl.st.heat != heat:
+					heat = pl.st.heat
+					steps.append("%d@%.0f" % [heat, MatchState.time - t0])
+			Engine.time_scale = 1.0
+			var budget: float = Police.PURSUIT_BUDGET[2] + Police.ESCALATE_BONUS
+			debug_result("chase", heat0 == 2 and gave_up > 0.0 and gave_up < budget + 20.0 and pl.st.heat == 0 and steps.size() == 2, "gave up %.0fs (budget %.0f) steps %s" % [gave_up, budget, steps])
 		"crouch":
 			local_player.global_position = Vector3(-20, 0.2, 45)
 			Input.action_press("crouch")
@@ -792,8 +856,10 @@ func srv_run_over(vi: int) -> void:
 
 func srv_arrest(pid: int) -> void:
 	var p = players.get(pid)
-	if p == null or not p.can_fight():
+	if p == null or not p.at_large():
 		return
+	p.st.hide = -1
+	p.st.vis = 0
 	# Gear and contraband confiscated; cash stays in your pocket.
 	p.st.inv = {"fists": 1}
 	p.st.equipped = "fists"
@@ -881,23 +947,48 @@ func cl_drop_remove(id: int) -> void:
 
 
 ## Local F key: open a vendor if one is close, otherwise grab the nearest drop.
+## Uses whatever is in reach, as F would. For scripted tests.
 func interact() -> void:
-	var at := local_player.global_position
-	if motos.bike_of(local_player.id) >= 0:
-		to_server("srv_dismount", [], motos)
+	interaction.press()
+
+
+## Registers the things F does that this scene owns: vendors, hiding places, bikes, drops.
+func _setup_interact() -> void:
+	for vi in DB.VENDORS.size():
+		interaction.add(&"vendor", DB.VENDORS[vi].pos, VENDOR_RANGE, DB.VENDORS[vi].name, vi)
+	for hi in Places.hides.size():
+		var h: Dictionary = Places.hides[hi]
+		interaction.add(&"hide", h.pos, 2.4, "hide " + DB.HIDE_KINDS[h.kind].name, hi)
+	interaction.on(&"vendor", _use_vendor)
+	interaction.on(&"hide", Callable(), _srv_hide)
+	interaction.on(&"unhide", func(_a: Dictionary) -> void: to_server("srv_unhide_me"))
+	interaction.on(&"dismount", func(_a: Dictionary) -> void: to_server("srv_dismount", [], motos))
+	interaction.on(&"mount", func(a: Dictionary) -> void: to_server("srv_mount", [a.arg], motos))
+	interaction.on(&"pickup", func(a: Dictionary) -> void: to_server("srv_pickup", [a.arg]))
+	interaction.provide(_offer_near)
+
+
+func _use_vendor(a: Dictionary) -> void:
+	match DB.VENDORS[a.arg].kind:
+		"bicho": hud.open_bicho(a.arg)
+		"fence": to_server("srv_sell", [a.arg])
+		_: hud.open_shop(a.arg)
+
+
+## What comes and goes: the way out of a hiding place, a bike to get on or off, loot on the ground.
+func _offer_near(p, out: Array) -> void:
+	var at: Vector3 = p.global_position
+	if p.st.get("hide", -1) >= 0:
+		out.append(Interact.offer(&"unhide", at, "climb out", 0, 100))
+		return
+	if motos.bike_of(p.id) >= 0:
+		out.append(Interact.offer(&"dismount", at, "get off", 0, 100))
+		return
+	if not p.can_fight():
 		return
 	var bike: int = motos.free_near(at)
-	if bike >= 0 and local_player.can_fight():
-		to_server("srv_mount", [bike], motos)
-		return
-	for vi in DB.VENDORS.size():
-		var v = DB.VENDORS[vi]
-		if at.distance_to(v.pos) < VENDOR_RANGE:
-			match v.kind:
-				"bicho": hud.open_bicho(vi)
-				"fence": to_server("srv_sell", [vi])
-				_: hud.open_shop(vi)
-			return
+	if bike >= 0:
+		out.append(Interact.offer(&"mount", at, "take the moto", bike, 2))
 	var best := -1
 	var best_d := PICKUP_RANGE
 	for id in drops:
@@ -906,7 +997,47 @@ func interact() -> void:
 			best = id
 			best_d = d
 	if best >= 0:
-		to_server("srv_pickup", [best])
+		out.append(Interact.offer(&"pickup", at, "pick up", best, 1))
+
+
+# --- hiding ---
+
+func _srv_hide(p, a: Dictionary, _arg: int) -> void:
+	if not p.can_fight():
+		return
+	for pid in players:
+		if players[pid].st.get("hide", -1) == a.arg:
+			send(p.id, "cl_toast", ["Somebody is already in there"])
+			return
+	p.st.hide = a.arg
+	push_state(p)
+	# Anyone who watched you climb in knows exactly where to look.
+	police.srv_hid(p.id, a.pos)
+	srv_teleport(p.id, a.pos)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func srv_unhide_me() -> void:
+	srv_unhide(Net.sender(), false)
+
+
+## Out of the hiding place: by choice, or hauled out by the cop who found them.
+func srv_unhide(pid: int, found: bool) -> void:
+	var p = players.get(pid)
+	if p == null or p.st.get("hide", -1) < 0:
+		return
+	var h: Dictionary = Places.hides[p.st.hide]
+	p.st.hide = -1
+	push_state(p)
+	srv_teleport(pid, h.exit)
+	if found:
+		send(pid, "cl_toast", ["TE ACHEI!  Run!"])
+
+
+@rpc("authority", "call_remote", "unreliable")
+func cl_ko(at: Vector3, seconds: float) -> void:
+	fx.ko_stars(at, seconds)
+	Sfx.play("punch", at, 3.0, 0.7)
 
 
 @rpc("any_peer", "call_remote", "reliable")

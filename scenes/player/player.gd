@@ -144,7 +144,7 @@ static func fresh_state() -> Dictionary:
 	return {
 		"hp": 100.0, "money": 0, "kills": 0,
 		"inv": {"fists": 1}, "equipped": "fists", "ammo": 0,
-		"heat": 0, "seen": false, "jail": 0.0, "dead": false,
+		"heat": 0, "vis": 0, "hide": -1, "jail": 0.0, "dead": false,
 		"drugs": {}, "tol": {}, "bet": {},
 	}
 
@@ -274,7 +274,17 @@ func can_act() -> bool:
 
 
 func can_fight() -> bool:
+	return can_act() and st.jail <= 0.0 and st.get("hide", -1) < 0
+
+
+## Out in the world where the police, the bikes and the shops are: alive and not inside.
+func at_large() -> bool:
 	return can_act() and st.jail <= 0.0
+
+
+## How fast this body is covering ground, as anyone watching would judge it.
+func ground_speed() -> float:
+	return _spd
 
 
 ## Bent double and creeping (or keeping still): much harder for a cop to pick out.
@@ -335,6 +345,15 @@ func _physics_process(delta: float) -> void:
 	if _recover_t > 0.0:
 		wish = Vector3.ZERO
 	_jumped = false
+
+	if st.get("hide", -1) >= 0:
+		# Tucked away: keep still. Jumping is the quick way out.
+		velocity = Vector3.ZERO
+		mv = MV_GROUND
+		_set_crouch(false)
+		if jump_tap:
+			Net.game.to_server("srv_unhide_me")
+		return
 
 	if mv == MV_RIDE:
 		_ride(active, delta)
@@ -711,9 +730,10 @@ func _process(delta: float) -> void:
 		for d in st.tol:
 			st.tol[d] = maxf(0.0, st.tol[d] - DB.TOLERANCE_DECAY * delta)
 	if is_local:
-		_vis.visible = st.dead or not rig.first_person()
+		_vis.visible = (st.dead or not rig.first_person()) and st.get("hide", -1) < 0
 		_local_process(delta)
 	else:
+		_vis.visible = st.get("hide", -1) < 0
 		_label.visible = not st.dead
 		global_position = global_position.lerp(net_pos, minf(1.0, 14.0 * delta))
 		rotation.y = lerp_angle(rotation.y, net_yaw, minf(1.0, 14.0 * delta))
@@ -879,8 +899,6 @@ func _local_process(delta: float) -> void:
 		for d in DB.DRUGS:
 			if Input.is_action_just_pressed(DB.ITEMS[d].key):
 				g.to_server("srv_use", [d])
-		if Input.is_action_just_pressed("interact"):
-			g.interact()
 
 	_send_t -= delta
 	if _send_t <= 0.0 and not multiplayer.is_server():

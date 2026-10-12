@@ -3,6 +3,8 @@ extends CanvasLayer
 ## scoreboard, vendor shop and drug screen effects.
 
 const HEAT_TEXT := ["", "WANTED: robbery", "WANTED: assault", "WANTED: armed - police will shoot"]
+## By Police.VIS_*: whether they can see you right now.
+const VIS_TEXT := ["", "\nSEARCHING - stay out of sight", "\nSPOTTED", "\nHIDDEN - cooling off faster"]
 const PING_TIME := 2.5
 const PING_RADIUS := 230.0
 
@@ -21,6 +23,8 @@ var _crowd: Label
 var _heat: Label
 var _speed: Label
 var _target: Label
+var _prompt: Label
+var _hold_bar: ProgressBar
 var _rob_bar: ProgressBar
 var _mic_bar: ProgressBar
 var _toast: Label
@@ -82,12 +86,17 @@ func _ready() -> void:
 	_heat.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	var help := _label(tr, 13, Color(1, 1, 1, 0.65))
 	help.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	help.text = "WASD move  Shift sprint\nHold Space to hop: strafe + turn in the air for speed\nSpace in the air: double jump   at a wall: wall jump\nCtrl / C slide (jump out of it for a boost)   Q dive\nScroll: first / third person\nLMB attack  RMB aim\nHold E + SHOUT to rob (V = fake shout)\nHold E silently on a sunbather to pickpocket\nF pick up / shop / take a moto   1-2 weapons   3-5 drugs\nRun into a football to dribble, hit it to shoot\nTab scores   Esc free mouse"
+	help.text = "WASD move  Shift sprint\nHold Space to hop: strafe + turn in the air for speed\nSpace in the air: double jump   at a wall: wall jump\nCtrl / C slide (jump out of it for a boost), or crouch and creep   Q dive\nScroll: first / third person\nLMB attack  RMB aim\nHold E + SHOUT to rob (V = fake shout)\nHold E silently on a sunbather to pickpocket\nF use / pick up / shop / hide / take a moto   1-2 weapons   3-5 drugs\nRun into a football to dribble, hit it to shoot\nTab scores   Esc free mouse"
 
 	# Bottom centre: robbery.
 	var bc := _vbox(Control.PRESET_CENTER_BOTTOM, Vector2(0, -24))
 	_speed = _label(bc, 22)
 	_target = _label(bc, 18)
+	_prompt = _label(bc, 20, Color(0.75, 1.0, 0.8))
+	_hold_bar = _bar(Color(0.5, 1.0, 0.6))
+	_hold_bar.max_value = 1.0
+	_hold_bar.visible = false
+	bc.add_child(_hold_bar)
 	_rob_bar = _bar(Color(1.0, 0.8, 0.1))
 	_rob_bar.max_value = 1.0
 	bc.add_child(_rob_bar)
@@ -185,6 +194,13 @@ func _ignore_mouse(c: Control) -> void:
 
 
 # --- events from Game ---
+
+## What F would do right now, and how far through a hold it is.
+func set_prompt(text: String, frac: float) -> void:
+	_prompt.text = text
+	_hold_bar.visible = frac > 0.0
+	_hold_bar.value = frac
+
 
 func toast(text: String) -> void:
 	_toast.text = text
@@ -346,7 +362,7 @@ func _process(delta: float) -> void:
 	_toast.visible = _toast_t > 0.0
 	_heat.text = HEAT_TEXT[clampi(st.heat, 0, 3)]
 	if st.heat > 0:
-		_heat.text += "\nSPOTTED" if st.get("seen", false) else "\nout of sight - cooling off"
+		_heat.text += VIS_TEXT[clampi(st.get("vis", 0), 0, 3)]
 
 	# Speed past a flat-out sprint is momentum the player built; show it warming up.
 	var spd: float = p.hspeed()
@@ -363,8 +379,8 @@ func _process(delta: float) -> void:
 		_target.text = "Hold E and keep QUIET to go through their bag" if g.crowd.is_lying(p.target_npc) else "Hold E and shout to rob"
 	elif p.mv == p.MV_RIDE:
 		_target.text = "W / S throttle   A / D steer   Space hop   F get off"
-	elif g.motos.free_near(p.global_position) >= 0:
-		_target.text = "F: take the moto"
+	elif p.is_crouched():
+		_target.text = "Crouched: harder to spot, hardest of all keeping still"
 	else:
 		_target.text = ""
 

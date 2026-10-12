@@ -126,3 +126,27 @@ func _node(mesh: Mesh, color: Color, billboard := false) -> MeshInstance3D:
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mi)
 	return mi
+
+
+## Seeing stars: a ring of them going round above someone knocked out, for `seconds`.
+func ko_stars(at: Vector3, seconds: float) -> void:
+	var ring := Node3D.new()
+	ring.position = at
+	add_child(ring)
+	var mesh := SphereMesh.new()
+	mesh.radius = 0.07
+	mesh.height = 0.14
+	mesh.radial_segments = 6
+	mesh.rings = 3
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(1.0, 0.9, 0.2)
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	for k in 4:
+		var star := MeshInstance3D.new()
+		star.mesh = mesh
+		star.material_override = mat
+		star.position = Vector3(cos(k * PI / 2.0), 0.0, sin(k * PI / 2.0)) * 0.3
+		ring.add_child(star)
+	var tw := create_tween()
+	tw.tween_property(ring, "rotation:y", seconds * 5.0, seconds)
+	tw.tween_callback(ring.queue_free)

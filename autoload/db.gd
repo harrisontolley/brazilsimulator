@@ -75,6 +75,25 @@ const BOCA_POS := Vector3(-120, 12.2, 162.5)
 const RODAS := [Vector3(40, 0, 45.5), Vector3(-195, 0, 45.5), Vector3(215, 0, 45.5)]
 const CAMPINHO_POS := Vector3(-46, 15, 172.5)
 const JAIL_TIME := 30.0
+## Where a hit landed.
+const ZONE_BODY := 0
+const ZONE_HEAD := 1
+## A bare fist to the head puts someone out cold this often, and for how long.
+const KO_CHANCE := 0.45
+const KO_NPC := 25.0
+const KO_COP := 12.0
+const KO_PLAYER := 3.5
+const KO_IMMUNE := 8.0
+## Places to hide: how likely a cop searching right beside one is to look inside it.
+const HIDE_KINDS := {
+	"cacamba": {"name": "the dumpster", "find": 0.25},
+	"carro": {"name": "under the car", "find": 0.1},
+	"quiosque": {"name": "behind the counter", "find": 0.2},
+	"barraca": {"name": "the beach tent", "find": 0.2},
+	"barco": {"name": "under the boat", "find": 0.15},
+	"armario": {"name": "the cupboard", "find": 0.1},
+	"portal": {"name": "the doorway", "find": 0.35},
+}
 const RESPAWN_TIME := 4.0
 
 
