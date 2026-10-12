@@ -59,6 +59,8 @@ const HIDE_CHECK_R := 3.0
 const HIDE_HEAT := [0.0, 0.6, 1.0, 1.5]
 ## Head start between "found you" and the cuffs.
 const GRAB_DELAY := 1.5
+## How long a cop who has run into a hole in the sand takes to get out of it.
+const PIT_TIME := 2.5
 ## Each bystander within COVER_RADIUS of a suspect shortens the range they can be picked out at.
 const COVER_RADIUS := 3.5
 const COVER := 0.5
@@ -198,7 +200,7 @@ func _process(delta: float) -> void:
 			_prev[i] = _pose[i]
 			_pose[i] = pose
 			_pose_t[i] = now
-		var xf := Kit.xform(_vpos[i], _vyaw[i], HEIGHT, HEIGHT)
+		var xf := Kit.xform(_vpos[i] - Vector3(0, Places.depth_at(_vpos[i]), 0), _vyaw[i], HEIGHT, HEIGHT)
 		var data := Kit.custom(pose, speed, flags, _ev[i], _prev[i], _pose_t[i], held)
 		_mm.set_instance_transform(i, xf)
 		_mm.set_instance_custom_data(i, data)
@@ -309,6 +311,17 @@ func _srv_process(delta: float) -> void:
 		var look: bool = c.look <= 0.0
 		if look:
 			c.look = LOOK_TICK
+		# Running flat out after someone, nobody looks where they are putting their feet.
+		c.pit_cd = c.get("pit_cd", 0.0) - delta
+		if c.get("stuck", 0.0) > 0.0:
+			c.stuck -= delta
+			continue
+		if c.pit_cd <= 0.0 and (c.state == CHASE or c.state == SEARCH or c.state == INVESTIGATE) and Places.pit_at(c.pos) >= 0:
+			c.stuck = PIT_TIME
+			c.pit_cd = PIT_TIME + 6.0
+			c.sees = false
+			g.bcast("cl_sound", ["kick", c.pos])
+			continue
 		match c.state:
 			PATROL:
 				if c.get("hold", false):

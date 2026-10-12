@@ -3,6 +3,7 @@ extends "res://scenes/world/world_kit.gd"
 ## The avenida and everything inland of it is built by city.gd.
 
 const Places := preload("res://scenes/world/places.gd")
+const Kit := preload("res://scenes/characters/char_kit.gd")
 const City := preload("res://scenes/world/city.gd")
 
 const SAND := Color(0.86, 0.74, 0.5)
@@ -38,6 +39,7 @@ func _ready() -> void:
 	_pitches()
 	_parkour()
 	_cover()
+	_pracas()
 	_instances(_cyl(0.0, 1.5, 0.55, 10), _vertex_mat(), _cones, _cone_tints)
 	_instances(_cyl(0.04, 0.04, 2.2, 5), _mat(Color(0.9, 0.9, 0.9)), _poles)
 	_instances(_ball(1.0, 2.0, 8), _vertex_mat(), _balls, _ball_tints)
@@ -286,12 +288,41 @@ func _kiosk(p: Vector3, roof: Color, text: String) -> void:
 		var t := p + Vector3(side, 0, -4.2)
 		_box(t + Vector3(0, 0.72, 0), Vector3(0.9, 0.06, 0.9), Color(0.95, 0.95, 0.95))
 		_box(t + Vector3(0, 0.36, 0), Vector3(0.1, 0.72, 0.1), STEEL)
+		var table := Places.new_table()
 		for s in 4:
 			var off := Vector3(cos(s * PI * 0.5 + 0.6), 0, sin(s * PI * 0.5 + 0.6)) * 0.85
 			_box(t + off + Vector3(0, 0.23, 0), Vector3(0.36, 0.46, 0.36), roof.lightened(0.2))
+			Places.add_seat(t + off, Kit.face(-off), -1, table)
 		_parasol(t, roof.lightened(0.15))
 	_sign(text, p + Vector3(0, 3.7, 0), 96, Color.WHITE, 0.0, true)
 	Places.add_hide(p + Vector3(0, 0.2, 1.9), "quiosque", p + Vector3(0, 0.2, 2.3))
+
+
+## Concrete tables with four stools along the calçadão: for dominoes, a beer, an argument.
+func _pracas() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 5381
+	var grey := Color(0.74, 0.73, 0.7)
+	for i in 14:
+		var at := Vector3(-275.0 + i * 42.0 + rng.randf_range(-6.0, 6.0), 0, 44.6)
+		var busy := false
+		for v in DB.VENDORS:
+			busy = busy or (v.pos.z < Layout.ROAD_Z and absf(v.pos.x - at.x) < 7.0)
+		for roda in DB.RODAS:
+			busy = busy or absf(roda.x - at.x) < 9.0
+		if busy:
+			continue
+		_solid(at + Vector3(0, 0.36, 0), Vector3(0.9, 0.72, 0.9), grey)
+		_box(at + Vector3(0, 0.75, 0), Vector3(1.15, 0.07, 1.15), grey.lightened(0.15))
+		# A chequer board set into the top.
+		for k in 16:
+			if (k / 4 + k % 4) % 2 == 0:
+				_box(at + Vector3(-0.3 + (k % 4) * 0.2, 0.79, -0.3 + (k / 4) * 0.2), Vector3(0.2, 0.01, 0.2), Color(0.2, 0.2, 0.22))
+		var table := Places.new_table()
+		for s in 4:
+			var off := Vector3(cos(s * PI * 0.5), 0, sin(s * PI * 0.5)) * 0.95
+			_box(at + off + Vector3(0, 0.23, 0), Vector3(0.4, 0.46, 0.4), grey.darkened(0.1))
+			Places.add_seat(at + off, Kit.face(-off), -1, table)
 
 
 ## Things to duck behind on the open sand: striped windbreaks, upturned fishing boats to

@@ -379,6 +379,59 @@ func _debug_test(what: String) -> void:
 				await _debug_frames("fp_" + item, 1, 0.05)
 			srv_add_drop(Vector3(-17, 0.2, 45), 0, {"smg": 1})
 			debug_result("weapons", true)
+		"acts":
+			# Groups are planned from the seed alone, and everyone at a table is sitting down.
+			var a = crowd.acts
+			var kinds := {}
+			for g in a.groups:
+				kinds[g.kind] = kinds.get(g.kind, 0) + 1
+			var seated := 0
+			for i in crowd.count:
+				if crowd._sit[i] == 1 and crowd._idle[i] >= Kit.SIT:
+					seated += 1
+			var before: Array = []
+			for g in a.groups:
+				before.append([g.kind, g.pos, g.n])
+			crowd.setup(MatchState.seed_value)
+			var same: bool = before.size() == crowd.acts.groups.size()
+			for k in before.size():
+				var g: Dictionary = crowd.acts.groups[k]
+				same = same and before[k][0] == g.kind and before[k][1] == g.pos and before[k][2] == g.n
+			debug_result("acts", same and kinds.size() >= 9 and seated > 20 and Places.pits.size() >= 5, "groups %d kinds %s seated %d pits %d repeatable %s" % [before.size(), kinds, seated, Places.pits.size(), same])
+		"pit":
+			# Walk into a hole, stay in it, and jump out in two.
+			var pit: Dictionary = Places.pits[0]
+			local_player.global_position = pit.pos + Vector3(-3, 0.2, 0)
+			local_player.rotation.y = -PI / 2.0
+			Input.action_press("move_forward")
+			await get_tree().create_timer(1.6).timeout
+			var fell: bool = local_player._pit == 0
+			await get_tree().create_timer(1.0).timeout
+			var held: bool = local_player.global_position.distance_to(pit.pos) < pit.r and local_player._sink > 0.8
+			for k in 2:
+				Input.action_press("jump")
+				await get_tree().create_timer(0.1).timeout
+				Input.action_release("jump")
+				await get_tree().create_timer(0.15).timeout
+			await get_tree().create_timer(1.2).timeout
+			var out: bool = local_player._pit < 0 and local_player.global_position.distance_to(pit.pos) > pit.r
+			debug_result("pit", fell and held and out, "fell %s held %s out %s" % [fell, held, out])
+		"look":
+			# One frame of each kind of activity, from a camera stood a little way off it.
+			hud.visible = false
+			var cam := Camera3D.new()
+			cam.fov = 55.0
+			add_child(cam)
+			cam.current = true
+			var seen := {}
+			for g in crowd.acts.groups:
+				if seen.has(g.kind):
+					continue
+				seen[g.kind] = true
+				cam.look_at_from_position(g.pos + Vector3(4.5, 3.2, -5.5), g.pos + Vector3(0, 0.8, 0))
+				await get_tree().create_timer(1.3).timeout
+				await _debug_frames("act%d" % g.kind, 1, 0.05)
+			debug_result("look", true)
 		"crouch":
 			local_player.global_position = Vector3(-20, 0.2, 45)
 			Input.action_press("crouch")

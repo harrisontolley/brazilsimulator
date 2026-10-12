@@ -7,6 +7,7 @@ const Kit := preload("res://scenes/characters/char_kit.gd")
 const WeaponKit := preload("res://scenes/weapons/weapon_kit.gd")
 const CharRig := preload("res://scenes/characters/char_rig.gd")
 const Layout := preload("res://scenes/world/layout.gd")
+const Places := preload("res://scenes/world/places.gd")
 
 enum { MV_GROUND, MV_AIR, MV_SLIDE, MV_WALLRUN, MV_DIVE, MV_RIDE, MV_CROUCH }
 
@@ -119,6 +120,10 @@ var _ev := 0.0  # Kit one-shot event time
 var _pose := 0
 var _prev := 0
 var _pose_t := 0.0
+var _pit := -1       # the hole this player has fallen into
+var _pit_jumps := 0
+var _pit_cd := 0.0
+var _sink := 0.0
 var _reload_t := -10.0
 var _reload_len := 1.0
 var _anim: CharRig
@@ -384,8 +389,17 @@ func _physics_process(delta: float) -> void:
 			Net.game.to_server("srv_unhide_me")
 		return
 
+	_pit_cd -= delta
+	if _pit >= 0:
+		_in_pit(wish, jump_tap, delta)
+		return
+
 	if mv == MV_RIDE:
 		_ride(active, delta)
+		if _ride_spd > 4.0 and Places.pit_at(global_position) >= 0:
+			# Front wheel into somebody's sandcastle excavation.
+			knock(-global_basis.z * 3.0 + Vector3(0, 5.0, 0))
+			Net.game.to_server("srv_crash", [], Net.game.motos)
 		return
 
 	var grounded := is_on_floor()
@@ -491,9 +505,47 @@ func _physics_process(delta: float) -> void:
 		_ramp_vy = maxf(clampf(get_real_velocity().y, 0.0, hspeed()), _ramp_vy - 12.0 * delta) if grounded and not _jumped else 0.0
 		if not grounded:
 			rig.dip = clampf(-fall * 0.012, 0.0, 0.22)
+	if is_on_floor() and _pit_cd <= 0.0 and mv != MV_DIVE:
+		var pit := Places.pit_at(global_position)
+		if pit >= 0:
+			_pit = pit
+			_pit_jumps = 0
+			mv = MV_GROUND
+			_set_crouch(false)
+			velocity = Vector3.ZERO
+			rig.dip = 0.22
+			Net.game.hud.toast("You fell in a hole!  Jump, and jump again, to climb out")
+			Sfx.play("kick", global_position, 2.0, 0.6)
 	# Bodies only get in the way of someone on their feet, not sliding past or hopping over.
 	if global_position.y < 1.0 and mv != MV_SLIDE and mv != MV_DIVE and mv != MV_CROUCH:
 		global_position += Net.game.crowd.push_out(global_position) * delta
+
+
+## Down a hole: nowhere to go but round the bottom of it until two good jumps get you out.
+func _in_pit(wish: Vector3, jump_tap: bool, delta: float) -> void:
+	var pit: Dictionary = Places.pits[_pit] if _pit < Places.pits.size() else {}
+	if pit.is_empty():
+		_pit = -1
+		return
+	velocity = wish * 1.2
+	move_and_slide()
+	var off: Vector3 = global_position - pit.pos
+	off.y = 0.0
+	var room: float = pit.r * 0.55
+	if off.length() > room:
+		global_position = Vector3(pit.pos.x, global_position.y, pit.pos.z) + off.normalized() * room
+	if not jump_tap:
+		return
+	_pit_jumps += 1
+	_anim.jump(CharRig.HOP)
+	rig.dip = 0.12
+	if _pit_jumps >= 2:
+		_pit = -1
+		_pit_cd = 1.2
+		var out := wish if wish != Vector3.ZERO else -global_basis.z
+		velocity = out * 4.5 + Vector3(0, JUMP * 1.15, 0)
+		_hop(CharRig.HOP)
+		mv = MV_AIR
 
 
 # --- riding ---
@@ -819,6 +871,10 @@ func _animate(delta: float) -> void:
 	elif m == MV_GROUND:
 		roll = _bank * 0.5
 	_vis.rotation.z = lerp_angle(_vis.rotation.z, roll, minf(1.0, 10.0 * delta))
+	# Anyone standing in a hole is that much shorter.
+	var deep: float = Places.depth_at(global_position) if (_pit >= 0 or not is_local) and global_position.y < 0.6 else 0.0
+	_sink = lerpf(_sink, deep, minf(1.0, 9.0 * delta))
+	_vis.position.y = -_sink
 
 	# Everything another player needs to know about you is worn on the body.
 	var flags := clampi(st.heat, 0, 3) << Kit.HEAT_SHIFT
@@ -924,7 +980,7 @@ func _local_process(delta: float) -> void:
 
 	# Speed reads through the camera: wider view, a lean off the wall, a low head in a slide.
 	rig.fov_boost = 0.0 if aiming else clampf((hspeed() - SPRINT) * 1.6, 0.0, 22.0)
-	rig.height_target = (DUCK_HEAD if mv == MV_CROUCH else CROUCH_HEAD) if _crouched else HEAD.y
+	rig.height_target = ((DUCK_HEAD if mv == MV_CROUCH else CROUCH_HEAD) if _crouched else HEAD.y) - _sink
 	match mv:
 		MV_WALLRUN: rig.roll_target = _wall_side * 0.22
 		MV_SLIDE: rig.roll_target = 0.05

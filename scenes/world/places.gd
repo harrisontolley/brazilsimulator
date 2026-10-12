@@ -11,6 +11,11 @@ static var hides: Array = []
 static var covers: Array = []
 ## {pos, yaw, room, table}
 static var seats: Array = []
+## {pos, r, depth}: holes dug in the sand. These come and go with the match, so the crowd's
+## activity planner owns the list rather than the world.
+static var pits: Array = []
+
+static var _tables := 0
 
 
 static func clear() -> void:
@@ -18,6 +23,7 @@ static func clear() -> void:
 	hides.clear()
 	covers.clear()
 	seats.clear()
+	_tables = 0
 
 
 static func add_room(room: Dictionary) -> int:
@@ -37,6 +43,32 @@ static func add_cover(box: AABB, mult: float, crouch: bool) -> void:
 static func add_seat(pos: Vector3, yaw: float, room := -1, table := -1) -> int:
 	seats.append({"pos": pos, "yaw": yaw, "room": room, "table": table})
 	return seats.size() - 1
+
+
+## A fresh id to group the seats round one table.
+static func new_table() -> int:
+	_tables += 1
+	return _tables
+
+
+## Index of the pit whose mouth p is over, or -1.
+static func pit_at(p: Vector3) -> int:
+	if p.z > 40.0 or p.y > 0.6:
+		return -1
+	for i in pits.size():
+		var c: Vector3 = pits[i].pos
+		var dx := p.x - c.x
+		var dz := p.z - c.z
+		var r: float = pits[i].r * 0.8
+		if dx * dx + dz * dz < r * r:
+			return i
+	return -1
+
+
+## How far below the sand someone at p is standing.
+static func depth_at(p: Vector3) -> float:
+	var i := pit_at(p)
+	return pits[i].depth if i >= 0 else 0.0
 
 
 ## Index of the room p is inside, or -1 out of doors.

@@ -7,6 +7,8 @@ extends Node
 
 const RATE := 16000
 const VOICES := 20
+## How many different syllables people mumble in.
+const BABBLE := 7
 
 ## 0..1, set by whoever knows it is raining.
 var rain := 0.0
@@ -41,6 +43,11 @@ func _ready() -> void:
 func _exit_tree() -> void:
 	if _task >= 0:
 		WorkerThreadPool.wait_for_task_completion(_task)
+
+
+## One of the BABBLE syllables, or null until they have been made.
+func syllable(k: int) -> AudioStream:
+	return _streams.get("babble%d" % (k % BABBLE))
 
 
 ## Plays a one-shot at a place in the world.
@@ -141,6 +148,8 @@ func _build() -> void:
 	made["ko"] = _wav(_ko(), false)
 	made["dry"] = _wav(_dry(), false)
 	made["reload"] = _wav(_reload(), false)
+	for k in BABBLE:
+		made["babble%d" % k] = _wav(_syllable(k), false)
 	_adopt.call_deferred(made)
 
 
@@ -321,6 +330,33 @@ func _shot() -> PackedFloat32Array:
 	_hiss(f, rng, 0.0, 0.05, 1.0)
 	_hiss(f, rng, 0.0, 0.12, 0.5, 0.15)
 	_tone(f, 0.0, 150.0, 55.0, 0.05, 0.8)
+	return f
+
+
+## One syllable of nothing in particular: a voiced buzz shaped by two vowel resonances, some
+## with a consonant on the front. Strung together at random they pass for talk at a distance.
+func _syllable(k: int) -> PackedFloat32Array:
+	var f := _buf(0.2)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 900 + k
+	var f0 := 165.0 + k * 9.0
+	var vowels := [[700.0, 1150.0], [320.0, 2300.0], [480.0, 900.0], [600.0, 1700.0], [380.0, 760.0], [820.0, 1400.0], [450.0, 2000.0]]
+	var v: Array = vowels[k % vowels.size()]
+	var n := f.size()
+	var ph := 0.0
+	for i in n:
+		var t := float(i) / RATE
+		var u := float(i) / n
+		ph += TAU * f0 * (1.0 + 0.06 * sin(u * PI) - 0.04 * u) / RATE
+		# A buzz rich in harmonics, each weighted by how near it falls to a resonance.
+		var s := 0.0
+		for h in range(1, 14):
+			var hz := f0 * h
+			var w := 1.0 / (1.0 + pow((hz - v[0]) / 130.0, 2.0)) + 0.7 / (1.0 + pow((hz - v[1]) / 180.0, 2.0)) + 0.06
+			s += sin(ph * h) * w / h
+		f[i] = s * sin(u * PI) * exp(-t * 2.0)
+	if k % 3 != 0:
+		_hiss(f, rng, 0.0, 0.008, 0.25, 0.7)
 	return f
 
 

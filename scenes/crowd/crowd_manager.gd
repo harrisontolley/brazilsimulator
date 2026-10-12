@@ -10,6 +10,8 @@ extends Node3D
 
 const Kit := preload("res://scenes/characters/char_kit.gd")
 const Layout := preload("res://scenes/world/layout.gd")
+const Activities := preload("res://scenes/crowd/activities.gd")
+const Babble := preload("res://scenes/crowd/babble.gd")
 
 ## Everything before DEAD is somebody who is still there to be dealt with.
 enum { AMBIENT, COWER, FLEE, HOSTILE, PARADE, KO, DEAD, GONE }
@@ -51,6 +53,8 @@ var money := PackedInt32Array()
 var hp := PackedFloat32Array()
 ## NPC indices close to the local player, refreshed at 10 Hz.
 var near := PackedInt32Array()
+## What the ambient crowd is up to in groups: tables, ball games, gangs (see activities.gd).
+var acts: Node3D
 
 var _home := PackedVector3Array()
 var _scale := PackedFloat32Array()
@@ -72,6 +76,10 @@ var _tier := PackedByteArray()     # wealth tier still on show (drops to 0 once 
 var _ev := PackedFloat32Array()    # Kit one-shot event time
 var _idle := PackedByteArray()     # Kit pose when standing about (dancers, drummers)
 var _gun := PackedByteArray()      # 1: carries a pistol openly (the boca's soldiers)
+var _grp := PackedInt32Array()     # activity group they belong to, -1 once they have left it
+var _sit := PackedByteArray()      # 1: sitting down
+var _gest := PackedByteArray()     # 1: the one doing the talking
+var _babble: Node3D
 var _pose := PackedByteArray()     # Kit pose now showing, NO_POSE before the first
 var _prev := PackedByteArray()     # the pose it is blending out of
 var _pose_t := PackedFloat32Array()  # Kit.now() when the pose last changed
@@ -136,6 +144,10 @@ func setup(seed_value: int) -> void:
 	_ev.resize(count)
 	_idle.resize(count)
 	_gun.resize(count)
+	_grp.resize(count)
+	_sit.resize(count)
+	_gest.resize(count)
+	_gest.fill(0)
 	_pose.resize(count)
 	_prev.resize(count)
 	_pose_t.resize(count)
@@ -149,10 +161,16 @@ func setup(seed_value: int) -> void:
 	var tops := PackedColorArray()
 	var towels := PackedInt32Array()
 	var order: Array = []
+	# Whoever has somewhere to be is placed first; everyone else fills in round them.
+	acts = Activities.new()
+	add_child(acts)
+	var planned: Array = acts.plan(seed_value, self)
+	_babble = Babble.new()
+	add_child(_babble)
 
 	for i in count:
 		# Where they spend the day decides a lot about who they are.
-		var spot := _spot(rng)
+		var spot: Dictionary = planned[i] if i < planned.size() else _spot(rng)
 		var roll := rng.randf()
 		var ai := 0
 		for k in DB.ARCHETYPES.size():
@@ -173,6 +191,8 @@ func setup(seed_value: int) -> void:
 		_width[i] = _scale[i] * a.width / a.scale
 		_yaw[i] = spot.get("yaw", rng.randf() * TAU)
 		_idle[i] = spot.get("idle", Kit.STAND)
+		_grp[i] = spot.get("grp", -1)
+		_sit[i] = 1 if spot.get("sit", false) else 0
 
 		var p: Vector3 = spot.p
 		var on_sand := p.z < Layout.PROM_Z
@@ -190,9 +210,18 @@ func setup(seed_value: int) -> void:
 			_walkers.append(i)
 		if _lying[i] == 1:
 			towels.append(i)
+		# Left to themselves on a pavement, people get their phones out or hunker down.
+		if not walker and not on_sand and _lying[i] == 0 and not spot.has("idle"):
+			var habit := rng.randf()
+			if habit < 0.22:
+				_idle[i] = Kit.PHONE
+			elif habit < 0.3:
+				_idle[i] = Kit.SQUAT
+			elif habit < 0.36:
+				_idle[i] = Kit.CALL
 
 		# A few stragglers never leave; everyone else drains out over the match.
-		var stays := rng.randf() < (0.04 if p.z < Layout.WALK_Z else 0.6)
+		var stays := rng.randf() < (0.5 if _grp[i] >= 0 else (0.04 if p.z < Layout.WALK_Z else 0.6))
 		_leave_t[i] = INF if stays else MatchState.duration * lerpf(0.1, 0.82, pow(rng.randf(), 0.8))
 		order.append([_leave_t[i], i])
 
@@ -215,6 +244,13 @@ func setup(seed_value: int) -> void:
 			"vendor":
 				top = Color(0.98, 0.98, 0.95)
 				look = Kit.F_SHORTS | Kit.F_HAT | Kit.F_CARRY
+			"malandro":
+				top = [Color(0.55, 0.05, 0.08), Color(0.08, 0.08, 0.1), Color(0.95, 0.95, 0.95)][rng.randi() % 3]
+				look = Kit.F_SHORTS | Kit.F_TANK | Kit.F_CHAIN
+				if rng.randf() < 0.6:
+					look |= Kit.F_HAT
+				if rng.randf() < 0.5:
+					look |= Kit.F_SHADES
 			"traficante":
 				top = Color(0.1, 0.1, 0.1)
 				look = Kit.F_SHORTS | Kit.F_SHIRTLESS | Kit.F_SHADES | Kit.F_CHAIN
@@ -275,6 +311,9 @@ func _spot(rng: RandomNumberGenerator) -> Dictionary:
 		var c: Vector3 = rect[0]
 		var side := -1.0 if rng.randf() < 0.5 else 1.0
 		return {"p": c + Vector3(side * rng.randf_range(2.0, 6.5), 0.0, rng.randf_range(-3.0, 3.0)), "walk": 0.0, "dir": along, "far": 1.0, "arch": "local", "yaw": Kit.face(Vector3(-side, 0, 0)), "idle": Kit.STAND, "look": Kit.F_SHIRTLESS}
+	if roll < 0.61:
+		# Joggers pounding the ciclovia.
+		return {"p": Vector3(x, 0.0, rng.randf_range(50.9, 51.7)), "walk": 1.0, "dir": along, "far": 140.0, "speed": rng.randf_range(3.0, 3.9), "look": Kit.F_TANK | Kit.F_SHORTS}
 	if roll < 0.78:
 		return {"p": DB.clear_of_solids(Vector3(x, 0.0, rng.randf_range(41.5, 50.0)), 0.5), "walk": 0.8, "dir": along, "far": 70.0}
 	if roll < 0.795:
@@ -409,6 +448,7 @@ func _restyle(i: int) -> void:
 				speed = _w_spd[i]
 			else:
 				pose = _idle[i]
+				speed = float(_gest[i])
 		COWER:
 			pose = Kit.COWER
 		FLEE:
@@ -442,6 +482,27 @@ func _restyle(i: int) -> void:
 		_drop_held(i)
 
 
+## Is NPC i still at their activity, free to be told what to do?
+func act_free(i: int) -> bool:
+	return state[i] == AMBIENT and _grp[i] >= 0
+
+
+## Their activity wants NPC i in `pose` now; `gest` marks the one doing the talking.
+func act_pose(i: int, pose: int, gest: bool) -> void:
+	if not act_free(i) or (_idle[i] == pose and (_gest[i] == 1) == gest):
+		return
+	_idle[i] = pose
+	_gest[i] = 1 if gest else 0
+	_restyle(i)
+
+
+## A touch of the ball, a swing of the bat: the one-shot on NPC i.
+func act_event(i: int) -> void:
+	if act_free(i):
+		_ev[i] = Kit.now()
+		_restyle(i)
+
+
 ## Plays a punch / recoil (attack) or a flinch on NPC i.
 func fx_event(i: int, attack: bool) -> void:
 	if i < 0 or i >= count or state[i] >= DEAD:
@@ -470,6 +531,10 @@ func _process(delta: float) -> void:
 		if state[i] == AMBIENT:
 			state[i] = GONE
 			_hide(i)
+
+	if acts != null:
+		acts.tick(t)
+		_babble.tick(delta, acts)
 
 	for i in _walkers:
 		if state[i] != AMBIENT or _walker[i] == 0:
@@ -580,7 +645,7 @@ func pick_near(o: Vector3, d: Vector3, max_t: float) -> int:
 	for i in near:
 		if state[i] >= DEAD:
 			continue
-		var t := DB.ray_point(o, d, pos[i] + Vector3(0, 0.3 if _down(i) else 0.9, 0), BODY_RADIUS, best_t)
+		var t := DB.ray_point(o, d, pos[i] + Vector3(0, 0.3 if _down(i) else (0.65 if _sit[i] == 1 else 0.9), 0), BODY_RADIUS, best_t)
 		if t >= 0.0:
 			best = i
 			best_t = t
@@ -610,6 +675,8 @@ func stance(i: int) -> int:
 		return Kit.STANCE_TOWEL
 	if state[i] == COWER:
 		return Kit.STANCE_CROUCH
+	if _sit[i] == 1 and state[i] == AMBIENT:
+		return Kit.STANCE_SEAT
 	return Kit.STANCE_STAND
 
 
@@ -696,6 +763,13 @@ func cl_npc(i: int, s: int, p: Vector3, dir: Vector3, t0: float, flags: int) -> 
 		return
 	state[i] = s
 	_changed[i] = [i, s, p, dir, t0, flags]
+	if s != AMBIENT and s != COWER:
+		# Whatever they were in the middle of, they are not going back to it.
+		_grp[i] = -1
+		_sit[i] = 0
+		_gest[i] = 0
+		if _idle[i] != Kit.DANCE and _idle[i] != Kit.DRUM:
+			_idle[i] = Kit.STAND
 	_active.erase(i)
 	_hostile_target.erase(i)
 	_moving.erase(i)
@@ -746,6 +820,8 @@ func _parade_speed(i: int) -> float:
 
 func _begin_parade(i: int, p: Vector3, dir: Vector3, t0: float, mode: int) -> void:
 	state[i] = PARADE
+	_grp[i] = -1
+	_sit[i] = 0
 	_ov[i] = [p, dir.normalized(), t0, dir.length()]
 	_active[i] = true
 	_lying[i] = 0
