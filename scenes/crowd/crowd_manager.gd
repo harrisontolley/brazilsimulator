@@ -93,6 +93,8 @@ var hp := PackedFloat32Array()
 var near := PackedInt32Array()
 
 const PARTY_RANGE := 10.0
+## How far off people will stop to watch somebody dancing.
+const WATCH_RANGE := 9.0
 var _party := {}           # idx -> true while dancing along with someone on bala
 ## What the ambient crowd is up to in groups: tables, ball games, gangs (see activities.gd).
 var acts: Node3D
@@ -705,6 +707,25 @@ func srv_outrage(at: Vector3, pid: int) -> void:
 			Net.game.bcast("cl_gawk", [i, at, Kit.POINT if randf() < 0.6 else Kit.FILM, true], self)
 	if angry > 0:
 		Net.game.send(pid, "cl_toast", ["People saw what you did to that dog."])
+
+
+## Somebody at `at` is doing something worth a look and no threat to anyone. One more of the
+## people idling nearby stops to watch in one of `poses`, until there are `most` of them.
+func srv_watch(at: Vector3, poses: Array, most: int) -> void:
+	var free: Array = []
+	var watching := 0
+	for i in count:
+		if state[i] != AMBIENT or absf(pos[i].x - at.x) > WATCH_RANGE or absf(pos[i].z - at.z) > WATCH_RANGE or absf(pos[i].y - at.y) > 3.0:
+			continue
+		if _gawk.has(i):
+			watching += 1
+		elif _lying[i] == 0 and _grp[i] < 0 and pos[i].distance_to(at) > 1.5:
+			free.append(i)
+	if watching >= most or free.is_empty():
+		return
+	var i: int = free[randi() % free.size()]
+	_gawk[i] = MatchState.time + GAWK_TIME * randf_range(0.6, 1.1)
+	Net.game.bcast("cl_gawk", [i, at, poses[randi() % poses.size()], true], self)
 
 
 ## Is NPC i still at their activity, free to be told what to do?

@@ -24,6 +24,7 @@ const TEXT_W := 900.0
 const SettingsMenu := preload("res://scenes/ui/settings_menu.gd")
 const DrugKit := preload("res://scenes/items/drug_kit.gd")
 const UI := preload("res://scenes/ui/ui_kit.gd")
+const EmoteWheel := preload("res://scenes/ui/emote_wheel.gd")
 const Layout := preload("res://scenes/world/layout.gd")
 ## What being under water does to the picture.
 const UNDER_BLUR := 0.9
@@ -39,6 +40,7 @@ const HELP := [
 	["1  2  3  4", "fists and blades / guns / sniper and launcher / grenades"],
 	["E (hold)", "rob: shout at them, or keep quiet over a sunbather"], ["V", "fake a shout"],
 	["F", "use, pick up, shop, hide, take a moto or a jet ski"], ["Z  X  G", "pick a drug, take it"],
+	["B (hold)", "emotes: point at one and let go; tap to join in, stop, or go again"],
 	["Tab", "scores"], ["Esc", "menu and settings"], ["F11", "fullscreen"],
 ]
 
@@ -51,6 +53,10 @@ var _wheel_bets: Label
 var _wheel_buttons: Array = []
 ## The pause menu (Esc) is up: settings, leave, quit. The match carries on behind it.
 var menu_open := false
+## The emote wheel, for the player to open and steer.
+var wheel: EmoteWheel
+## What the emote key would do right now, shown when F has nothing to offer.
+var join_hint := ""
 
 var _root: Control
 var _tint: ColorRect
@@ -296,6 +302,8 @@ func _ready() -> void:
 		what.text = pair[1]
 		keys.add_child(what)
 
+	wheel = EmoteWheel.new()
+	_root.add_child(wheel)
 	_ignore_mouse(_root)
 
 	# Shop is the one interactive panel, so it is added after the mouse pass.
@@ -463,7 +471,7 @@ func hit_marker(head: bool, kill: bool) -> void:
 
 ## What F would do right now, and how far through a hold it is.
 func set_prompt(text: String, frac: float) -> void:
-	_prompt.text = text
+	_prompt.text = text if text != "" else join_hint
 	_hold_bar.visible = frac > 0.0
 	_hold_bar.value = frac
 
@@ -906,7 +914,7 @@ func _process(delta: float) -> void:
 		loose = w.hip if w.has("scope") and not p.is_aiming() else w.spread
 		loose *= 0.6 if p.is_crouched() else (1.5 if p.mv == p.MV_AIR else 1.0)
 	_reticle.spread = loose / deg_to_rad(maxf(p.rig.cam.fov, 1.0))
-	_reticle.show_cross = not p.scoped and not shop_open and not menu_open and not st.dead
+	_reticle.show_cross = not p.scoped and not shop_open and not menu_open and not st.dead and not wheel.open and p.emote() < 0
 	_scope.visible = p.scoped and p.rig.first_person()
 
 	_update_hotbar(p)

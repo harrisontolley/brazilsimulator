@@ -6,8 +6,9 @@ extends RefCounted
 ## joint chases a target pose and the stride keeps its own clock: a hop reads as take-off,
 ## rise, hang, fall and landing, and nothing snaps when one move interrupts another.
 ##
-## A pose is 20 floats laid out as the shader's rig0..rig4:
-## arm_l xyz, spread | arm_r xyz, lean | leg_l xy, leg_r xy | head xy, rise, pitch | brow, shift, squash, roll
+## A pose is 24 floats laid out as the shader's rig0..rig5:
+## arm_l xyz, spread | arm_r xyz, lean | leg_l xy, leg_r xy | head xy, rise, pitch | brow, shift, squash, roll |
+## twist, bend, tilt, sway
 ##
 ## Swimming is its own little repertoire, chosen by speed and by whether the head is under:
 ## treading water, breaststroke, a front crawl when sprinting, and below the surface a long
@@ -17,7 +18,7 @@ enum { GROUND, AIR, SLIDE, WALLRUN, DIVE, RIDE, CROUCH, SWIM }  # Player.MV_*
 enum { ALIVE, DEAD, OUT }
 enum { HOP, DOUBLE, WALL }
 
-const N := 20
+const N := 24
 const SPREAD := 3
 const ARM_R := 4
 const LEAN := 7
@@ -30,6 +31,14 @@ const BROW := 16
 const SHIFT := 17
 const SQUASH := 18
 const ROLL := 19
+## Chest turned about the spine, toward the body's own left.
+const TWIST := 20
+## Chest tipped sideways over the hips.
+const BEND := 21
+## Head on one side.
+const TILT := 22
+## Hips swung out sideways over feet that stay where they are.
+const SWAY := 23
 ## Vertical speed that reads as a full-strength jump.
 const JUMP_V := 5.6
 const LAND_TIME := 0.24
@@ -58,6 +67,9 @@ var lift := 0.0
 var stroke := 0.0
 ## Goes true for the frame a swimming arm enters the water, for whoever makes the splash.
 var catch := false
+## The whole pose for this frame from somewhere else (an emote), or empty to get on as usual.
+## Set before update().
+var given := PackedFloat32Array()
 
 var _under := false
 var _surf_t := 9.0
@@ -70,6 +82,7 @@ var _out := PackedFloat32Array()
 var _mode := GROUND
 var _mode_t := 1.0
 var _state := ALIVE
+var _given := false
 var _lead := false
 var _vy := 0.0
 var _t := 0.0
@@ -80,7 +93,7 @@ var _tuck_t := 9.0
 
 
 static func key(arm_l: Vector3, arm_r: Vector3, leg_l: Vector2, leg_r: Vector2, spread := 0.0, lean := 0.0, head := Vector2.ZERO, rise := 0.0, pitch := 0.0, shift := 0.0) -> PackedFloat32Array:
-	return PackedFloat32Array([arm_l.x, arm_l.y, arm_l.z, spread, arm_r.x, arm_r.y, arm_r.z, lean, leg_l.x, leg_l.y, leg_r.x, leg_r.y, head.x, head.y, rise, pitch, 0.0, shift, 0.0, 0.0])
+	return PackedFloat32Array([arm_l.x, arm_l.y, arm_l.z, spread, arm_r.x, arm_r.y, arm_r.z, lean, leg_l.x, leg_l.y, leg_r.x, leg_r.y, head.x, head.y, rise, pitch, 0.0, shift, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 
 
 func _init() -> void:
@@ -109,6 +122,11 @@ func land(impact: float) -> void:
 ## side while wall running, `held` the Kit.HELD_* in hand, `aiming` whether sights are up.
 func update(delta: float, mode: int, state: int, spd: float, vy: float, turn: float, aim: float, side: float, held: int, aiming: bool) -> void:
 	_t += delta
+	var told := not given.is_empty() and state == ALIVE and mode == GROUND
+	if told != _given:
+		# Into a dance or out of one flows like any other change of mind.
+		_given = told
+		_mode_t = 0.0
 	if mode != _mode or state != _state:
 		if _mode == AIR and mode != AIR and mode != DIVE and mode != RIDE and mode != SWIM and state == ALIVE:
 			land(-_vy)
@@ -143,6 +161,8 @@ func update(delta: float, mode: int, state: int, spd: float, vy: float, turn: fl
 		to = K_DEAD
 	elif state == OUT:
 		to = K_OUT
+	elif told:
+		to = given
 	else:
 		match mode:
 			AIR:
@@ -223,7 +243,7 @@ func update(delta: float, mode: int, state: int, spd: float, vy: float, turn: fl
 ## Writes the pose to a [body, outline] material pair from Kit.rig_materials().
 func apply(mats: Array) -> void:
 	for m in mats:
-		for r in 5:
+		for r in N / 4:
 			m.set_shader_parameter("rig%d" % r, Vector4(_out[r * 4], _out[r * 4 + 1], _out[r * 4 + 2], _out[r * 4 + 3]))
 
 

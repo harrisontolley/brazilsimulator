@@ -23,6 +23,7 @@ const KEYS := {
 	"dive": KEY_Q,
 	"reload": KEY_R,
 	"help": KEY_H,
+	"emote": KEY_B,
 }
 ## Second key for an action that already has one.
 const ALT_KEYS := {

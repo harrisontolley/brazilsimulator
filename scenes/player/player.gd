@@ -6,6 +6,7 @@ const CameraRig := preload("res://scenes/player/camera_rig.gd")
 const Kit := preload("res://scenes/characters/char_kit.gd")
 const WeaponKit := preload("res://scenes/weapons/weapon_kit.gd")
 const CharRig := preload("res://scenes/characters/char_rig.gd")
+const Emotes := preload("res://scenes/characters/emotes.gd")
 const Layout := preload("res://scenes/world/layout.gd")
 const Places := preload("res://scenes/world/places.gd")
 
@@ -13,6 +14,12 @@ enum { MV_GROUND, MV_AIR, MV_SLIDE, MV_WALLRUN, MV_DIVE, MV_RIDE, MV_CROUCH, MV_
 
 const WALK := 4.5
 const SPRINT := 7.0
+## How near a dance has to be to fall in with it.
+const JOIN_RANGE := 5.0
+## Radians a second a travelling dance can be steered.
+const EMOTE_TURN := 1.8
+## How long the emote key is down before it is the wheel that is wanted.
+const WHEEL_HOLD := 0.16
 const JUMP := 5.6
 const GRAVITY := 16.0
 # Quake-style movement: friction only bites on the ground, and air acceleration is strong
@@ -200,6 +207,15 @@ var _voice_rate := 0
 # Where the eyes have wandered off to while the body stays behind, in world axes from the head.
 var _fly := Vector3.ZERO
 var _forced_t := 0.0
+## The emote this player last chose, which a tap of the key does again.
+var last_emote := -1
+# The st.emote_n of an emote this machine has already walked out of, while the host catches up.
+var _emote_cut := -1
+var _emote_held := 0.0
+var _emote_was := false
+var _tune: AudioStreamPlayer3D
+var _tune_n := -1
+var _beat := 0
 
 
 static func fresh_state() -> Dictionary:
@@ -246,6 +262,12 @@ func _ready() -> void:
 		_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		_label.position.y = 1.75
 		_vis.add_child(_label)
+	_tune = AudioStreamPlayer3D.new()
+	_tune.unit_size = 5.0
+	_tune.max_distance = 45.0
+	_tune.volume_db = -3.0
+	_tune.position = HEAD
+	add_child(_tune)
 
 
 func _exit_tree() -> void:
@@ -428,14 +450,57 @@ func can_act() -> bool:
 	return not st.dead and not MatchState.ended and st.ko <= 0.0
 
 
+## The Emotes id this body is in the middle of, or -1. A one-shot is over when its time is up,
+## on every machine at once, with nobody having to say so.
+func emote() -> int:
+	var e: int = st.get("emote", -1)
+	if e < 0 or not can_act() or (is_local and st.get("emote_n", 0) == _emote_cut) or Emotes.over(e, emote_time()):
+		return -1
+	return e
+
+
+## Seconds since the emote began, by the clock every machine shares.
+func emote_time() -> float:
+	return MatchState.time - st.get("emote_t", 0.0)
+
+
+## Standing on something, in charge of its own legs and with nothing better to do.
+func can_emote() -> bool:
+	return can_fight() and (mv if is_local else net_mv & 7) == MV_GROUND and not is_spirit() and not is_raging()
+
+
+## Asks to start emote `eid`, in step with player `with` if they are already at it.
+func start_emote(eid: int, with := 0) -> void:
+	if not can_emote() or not Emotes.has(eid):
+		return
+	last_emote = eid
+	Net.game.to_server("srv_emote", [eid, with])
+
+
+## Walks out of whatever emote is going, now, without waiting to be told it is over.
+func stop_emote() -> void:
+	if emote() >= 0:
+		_emote_cut = st.get("emote_n", 0)
+		Net.game.to_server("srv_emote", [-1])
+
+
+## Somebody near enough to fall in with, doing something that takes more than one: their id, or 0.
+func emote_to_join() -> int:
+	for pid in Net.game.players:
+		var o = Net.game.players[pid]
+		if o != self and o.emote() >= 0 and Emotes.LIST[o.emote()].get("join", false) and o.global_position.distance_to(global_position) < JOIN_RANGE:
+			return pid
+	return 0
+
+
 ## Able to hit, be hit, pick things up. Inmates can; what they cannot do is leave.
 func can_fight() -> bool:
 	return can_act() and st.get("hide", -1) < 0
 
 
-## Able to use what is in hand: not something to try while keeping afloat.
+## Able to use what is in hand: not something to try while keeping afloat, or mid-dance.
 func can_attack() -> bool:
-	return can_fight() and not swimming()
+	return can_fight() and not swimming() and emote() < 0
 
 
 ## Out in the world where the police, the bikes and the shops are: alive and not inside.
@@ -492,10 +557,20 @@ func _unhandled_input(e: InputEvent) -> void:
 		# Scales with the aim zoom, not with the speed widening on top of it.
 		var s: float = Settings.sens * rig.fov_target / Settings.fov
 		var flip := -1.0 if is_inverted() else 1.0
-		rotate_y(-e.relative.x * s * flip)
+		var wheel = Net.game.hud.wheel
+		if wheel.open:
+			# The mouse is choosing, not looking.
+			wheel.push(e.relative)
+			return
+		if rig.watching:
+			rig.orbit(-e.relative.x * s * flip)
+		else:
+			rotate_y(-e.relative.x * s * flip)
 		rig.pitch(e.relative.y * s * (1.0 if Settings.invert_y else -1.0) * flip)
 	elif e is InputEventMouseButton and e.pressed:
-		if e.button_index == MOUSE_BUTTON_WHEEL_UP:
+		if Net.game.hud.wheel.open and (e.button_index == MOUSE_BUTTON_WHEEL_UP or e.button_index == MOUSE_BUTTON_WHEEL_DOWN):
+			Net.game.hud.wheel.turn_page(-1 if e.button_index == MOUSE_BUTTON_WHEEL_UP else 1)
+		elif e.button_index == MOUSE_BUTTON_WHEEL_UP:
 			rig.zoom(-1)
 		elif e.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			rig.zoom(1)
@@ -531,6 +606,13 @@ func _physics_process(delta: float) -> void:
 	var jump_tap := jump_held and not _jump_was
 	_jump_was = jump_held
 	var crouch := active and Input.is_action_pressed("crouch")
+	var em := emote()
+	var carried: float = Emotes.LIST[em].get("speed", 0.0) if em >= 0 else 0.0
+	if em >= 0 and (mv != MV_GROUND or jump_tap or crouch or forced != Vector3.ZERO or (active and Input.is_action_just_pressed("dive")) or (iv != Vector2.ZERO and carried <= 0.0) or iv.y > 0.5):
+		# Anything the legs are asked to do instead ends it. A dance that travels is steered
+		# with the same keys, and stopped by backing out of it.
+		stop_emote()
+		em = -1
 	var top := (SPRINT if Input.is_action_pressed("sprint") or drug_phase("guarana") == "od" else WALK) * speed_mult()
 	_buffer_t = JUMP_BUFFER if jump_tap else _buffer_t - delta
 	_slide_cd -= delta
@@ -538,6 +620,15 @@ func _physics_process(delta: float) -> void:
 	_recover_t -= delta
 	if _recover_t > 0.0:
 		wish = Vector3.ZERO
+	if em >= 0:
+		if carried > 0.0:
+			rotate_y(-iv.x * EMOTE_TURN * delta)
+			wish = -global_basis.z
+			wish.y = 0.0
+			wish = wish.normalized()
+			top = carried
+		else:
+			wish = Vector3.ZERO
 	_jumped = false
 
 	if st.get("hide", -1) >= 0:
@@ -1311,6 +1402,14 @@ func _animate(delta: float) -> void:
 	# Both hands are busy in the water: whatever was in them is tucked away.
 	var held: int = DB.ITEMS[st.equipped].get("held", Kit.HELD_NONE) if m != MV_SWIM else Kit.HELD_NONE
 	var aim: float = rig.rotation.x if is_local else net_pitch
+	var em := emote()
+	var em_t := emote_time()
+	_anim.given = Emotes.pose(em, em_t) if em >= 0 else PackedFloat32Array()
+	_vis.rotation.y = lerp_angle(_vis.rotation.y, Emotes.yaw(em, em_t) if em >= 0 else 0.0, minf(1.0, 24.0 * delta))
+	_emote_sound(em, em_t)
+	if em >= 0:
+		# Nobody dances with a rifle in their hand: it is put away for the duration.
+		held = Kit.HELD_NONE
 	_anim.update(delta, m, CharRig.DEAD if st.dead else (CharRig.OUT if out else CharRig.ALIVE), _spd, _vy, _turn, aim, side, held, net_byte() & 16 != 0)
 	_anim.apply(_mats)
 	_water_fx(m, under, delta)
@@ -1548,7 +1647,10 @@ func _local_process(delta: float) -> void:
 	_attack_t -= delta
 	_rob_t -= delta
 	robbing = false
-	if captured and can_attack():
+	_emote_keys(delta)
+	if captured and emote() >= 0 and (Input.is_action_just_pressed("attack") or Input.is_action_just_pressed("aim")):
+		stop_emote()
+	elif captured and can_attack():
 		var w: Dictionary = DB.ITEMS[st.equipped]
 		var kind := DB.kind_of(st.equipped)
 		# The point on the line of sight level with the head: where the blow starts from.
@@ -1604,6 +1706,89 @@ func _local_process(delta: float) -> void:
 	if _send_t <= 0.0 and not multiplayer.is_server():
 		_send_t = 0.05
 		g.srv_move.rpc_id(1, global_position, rotation.y, net_byte(), rig.rotation.x)
+
+
+# --- emotes ---
+
+## The emote key. Held, it brings up the wheel and letting go chooses; tapped, it falls in with
+## a dance going on nearby, or stops this one, or does the last one again.
+func _emote_keys(delta: float) -> void:
+	var hud = Net.game.hud
+	var wheel = hud.wheel
+	var down: bool = Controls.playing() and Input.is_action_pressed("emote") and can_act() and not hud.shop_open and not hud.menu_open
+	if down:
+		_emote_held += delta
+		if _emote_held >= WHEEL_HOLD and not wheel.open:
+			wheel.open_up()
+	elif _emote_was:
+		if wheel.open:
+			var pick: int = wheel.close()
+			if pick >= 0:
+				start_emote(pick)
+		elif emote() >= 0:
+			stop_emote()
+		else:
+			var with := emote_to_join()
+			if with != 0:
+				start_emote(Net.game.players[with].emote(), with)
+			elif last_emote >= 0:
+				start_emote(last_emote)
+		_emote_held = 0.0
+	elif wheel.open:
+		wheel.close()
+	_emote_was = down
+	var em := emote()
+	rig.watching = em >= 0
+	var with := emote_to_join() if em < 0 and can_emote() else 0
+	hud.join_hint = "B: join the %s" % Emotes.LIST[Net.game.players[with].emote()].name if with != 0 else ""
+
+
+## The tune an emote brings with it, started wherever in the bar the dance has got to so that
+## everyone who joins or wanders up hears it in step with the feet; and the noises a body makes.
+func _emote_sound(em: int, t: float) -> void:
+	var n: int = st.get("emote_n", 0) if em >= 0 else -1
+	if n != _tune_n:
+		_tune_n = n
+		_beat = -1
+		var tune: AudioStream = Sfx.stream(Emotes.LIST[em].get("sound", "")) if em >= 0 else null
+		_tune.stop()
+		if tune != null:
+			_tune.stream = tune
+			_tune.play(fposmod(t, tune.get_length()))
+	if em < 0:
+		return
+	var at := global_position + HEAD
+	var beat := -1
+	match em:
+		Emotes.PALMAS:
+			beat = int(t * 4.0 + 0.2) if t > 0.2 and t < 2.7 else -1
+		Emotes.GARGALHADA:
+			beat = int(fposmod(t, 4.8) / 0.7) if fposmod(t, 4.8) > 1.4 and fposmod(t, 4.8) < 3.6 else -1
+		Emotes.CHUPA:
+			beat = int((t - 0.3) / 0.44 + 0.6) if t > 0.3 and t < 2.5 else -1
+		Emotes.POU:
+			beat = 1 if t >= Emotes.LIST[em].kill.t else 0
+		Emotes.BICUDA:
+			beat = 1 if t >= Emotes.LIST[em].kill.t - 0.08 else 0
+	if beat == _beat:
+		return
+	var first := _beat < 0
+	_beat = beat
+	if beat < 0:
+		return
+	match em:
+		Emotes.PALMAS:
+			Sfx.play("clap", at, -2.0)
+		Emotes.GARGALHADA:
+			Sfx.play("giggle", at, 2.0, 0.8)
+		Emotes.CHUPA:
+			Sfx.play("grunt", at, -3.0)
+		Emotes.POU:
+			if beat == 1 and not first:
+				Sfx.play("pou", at, 2.0)
+		Emotes.BICUDA:
+			if beat == 1 and not first:
+				Sfx.play("whoosh", at)
 
 
 ## The next weapon of this kind the player owns after the one in hand, or the first.

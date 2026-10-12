@@ -6,6 +6,8 @@ const Nav := preload("res://scenes/world/nav.gd")
 const Layout := preload("res://scenes/world/layout.gd")
 const Places := preload("res://scenes/world/places.gd")
 const Kit := preload("res://scenes/characters/char_kit.gd")
+const CharRig := preload("res://scenes/characters/char_rig.gd")
+const Emotes := preload("res://scenes/characters/emotes.gd")
 
 ## What _cast_of(4242) came to before the wheel was built.
 const CAST := [281228236, 438102235, 2323301200]
@@ -49,6 +51,10 @@ static func run(g: Node, what: String) -> bool:
 			await _roleta(g)
 		"roletanet":
 			await _roleta_net(g)
+		"emotes":
+			await _emotes(g)
+		"emoteshots":
+			await _emote_shots(g)
 		"arsenal", "shotgun", "sniper", "rocket", "grenade", "molotov":
 			await _arsenal(g, what)
 		_:
@@ -1316,3 +1322,305 @@ static func _roleta_net(g: Node) -> void:
 	if spun < 0.0 or ball.distance_to(want) > 0.5 or absf(w._t - MatchState.time) > 0.3:
 		bad.append("spin: heard after %.1f, ball %.2f m from where it should be, clock out by %.2f" % [spun, ball.distance_to(want), w._t - MatchState.time])
 	g.debug_result("roletanet", bad.is_empty(), "told after %.1f s, answered in %.2f s, round %d came up %d  %s" % [told, answered, r, w.result_of(r), "; ".join(bad)])
+
+
+## What is wrong with the emotes as sums, before anybody dances one: a pose that is not a
+## number, a foot under the ground or nowhere near it, a joint bent the wrong way, a loop that
+## does not meet itself, a frame that jumps.
+static func _emote_sums() -> Array:
+	var bad: Array = []
+	for id in Emotes.COUNT:
+		var e: Dictionary = Emotes.LIST[id]
+		var was := Emotes.pose(id, 0.0)
+		var worst := 0.0
+		var worst_at := ""
+		var steps := int(e.len * 120.0)
+		for k in range(1, steps + 1):
+			var t: float = e.len * k / steps
+			var q := Emotes.pose(id, t)
+			var j := Emotes.joints(q)
+			var low := minf(j[Emotes.J_FOOT_L].y, j[Emotes.J_FOOT_R].y)
+			for i in CharRig.N:
+				if is_nan(q[i]) or is_inf(q[i]):
+					bad.append("%s is not a number at %.2f" % [e.name, t])
+				var d := absf(wrapf(q[i] - was[i], -PI, PI) if i == 0 or i == CharRig.ARM_R else q[i] - was[i])
+				if d > worst:
+					worst = d
+					worst_at = "%d at %.2f" % [i, t]
+			if low < Emotes.SOLE - 0.03 or low > Emotes.SOLE + 0.16:
+				bad.append("%s has its feet at %.2f at %.2f" % [e.name, low, t])
+			if q[2] < -0.1 or q[CharRig.ARM_R + 2] < -0.1 or q[CharRig.LEG_L + 1] < -0.1 or q[CharRig.LEG_R + 1] < -0.1:
+				bad.append("%s bends a joint backwards at %.2f" % [e.name, t])
+			if j[Emotes.J_HEAD].y < 0.5 or absf(j[Emotes.J_HEAD].x) > 0.7:
+				bad.append("%s loses its head at %.2f" % [e.name, t])
+			was = q
+			if bad.size() > 12:
+				return bad
+		if worst > 0.7:
+			bad.append("%s jumps %.2f in a frame (%s)" % [e.name, worst, worst_at])
+		var ends := Emotes.pose(id, 0.0)
+		var back := Emotes.pose(id, e.len if e.get("loop", false) else e.len + 1.0)
+		var first := Emotes.pose(id, 0.0) if e.get("loop", false) else Emotes.pose(Emotes.COUNT, 0.0)
+		# Sitting down happens once; it is the looking about that goes round.
+		if id != Emotes.SENTAR:
+			for i in CharRig.N:
+				if absf(back[i] - first[i]) > 0.06 or (not e.get("loop", false) and absf(ends[i] - first[i]) > 0.06):
+					bad.append("%s does not come back to where it began (%d: %.2f, %.2f)" % [e.name, i, back[i], first[i]])
+					break
+		if Emotes.stick(id, e.len * 0.4).size() != Emotes.J_COUNT:
+			bad.append("%s has no stick figure" % e.name)
+	# A hand asked to be somewhere is there.
+	for at in [Vector3(0.1, 1.6, -0.2), Vector3(-0.1, 1.2, -0.25), Vector3(0.4, 0.9, 0.1), Vector3(0.3, 1.7, -0.05)]:
+		var q := Emotes._p(Emotes.DOWN, Emotes.reach(1, at))
+		var got := Emotes.joints(q)[Emotes.J_HAND_R]
+		if got.distance_to(at) > 0.02:
+			bad.append("reach misses %s by %.2f" % [at, got.distance_to(at)])
+	return bad
+
+
+## Emotes: the sums, then one player doing them: the wheel, the camera standing back, what
+## stops a dance and what will not start one, a dance that travels, falling in with somebody
+## else's, the two that kill, and the people who stop to watch.
+static func _emotes(g: Node) -> void:
+	var bad := _emote_sums()
+	var p = g.local_player
+	var wheel = g.hud.wheel
+	var Wheel = wheel.get_script()
+	var spot := Vector3(-20, 0.2, 45)
+	_reset(g)
+	p.global_position = spot
+	p.rotation.y = 0.0
+	p.rig.zoom(-2)
+	await _wait(g, 0.5)
+
+	# The wheel as sums.
+	var slots := [Wheel.slot_of(Vector2(0, -100)), Wheel.slot_of(Vector2(100, 0)), Wheel.slot_of(Vector2(0, 100)), Wheel.slot_of(Vector2(-100, 0)), Wheel.slot_of(Vector2(70, -70)), Wheel.slot_of(Vector2(10, 10))]
+	if slots != [0, 2, 4, 6, 1, -1] or Wheel.pages() != 3:
+		bad.append("wheel slots %s pages %d" % [slots, Wheel.pages()])
+
+	# Hold the key, point, let go.
+	Input.action_press("emote")
+	await _wait(g, 0.4)
+	var opened: bool = wheel.open and wheel.visible
+	wheel.point(Vector2(0, -120))
+	var first: int = wheel.picked()
+	wheel.turn_page(1)
+	var second: int = wheel.picked()
+	wheel.turn_page(-1)
+	wheel.point(Vector2(5, 5))
+	var none: int = wheel.picked()
+	wheel.point(Vector2(0, -120))
+	var yaw_was: float = p.rotation.y
+	var look := InputEventMouseMotion.new()
+	look.relative = Vector2(80, 0)
+	p._unhandled_input(look)
+	if not opened or first != Emotes.PASSINHO or second != Emotes.TCHAU or none != -1 or p.rotation.y != yaw_was:
+		bad.append("wheel opened %s picked %d then %d then %d, body turned %s" % [opened, first, second, none, p.rotation.y != yaw_was])
+	wheel.point(Vector2(0, -120))
+	Input.action_release("emote")
+	await _wait(g, 0.9)
+	var off := 0.0
+	var want := Emotes.pose(Emotes.PASSINHO, p.emote_time())
+	for i in CharRig.N:
+		off += absf(p._anim._out[i] - want[i])
+	if p.emote() != Emotes.PASSINHO or wheel.open or p.rig.first_person() or p.can_attack() or off > 2.5 or off == 0.0:
+		bad.append("letting go did not start it: emote %d wheel %s first person %s can attack %s pose off by %.2f" % [p.emote(), wheel.open, p.rig.first_person(), p.can_attack(), off])
+	# The mouse walks the view round the dancer and leaves the dancer alone.
+	p._unhandled_input(look)
+	if p.rotation.y != yaw_was or absf(p.rig.rotation.y) < 0.01:
+		bad.append("the view does not orbit")
+	# Walking off ends it, there and then.
+	Input.action_press("move_forward")
+	await _wait(g, 0.5)
+	Input.action_release("move_forward")
+	if p.emote() >= 0 or p.global_position.distance_to(spot) < 0.5 or p.st.get("emote", -1) >= 0:
+		bad.append("walking does not stop it (emote %d, moved %.2f)" % [p.emote(), p.global_position.distance_to(spot)])
+	await _wait(g, 1.0)
+	if not p.rig.first_person() or absf(p.rig.rotation.y) > 0.05:
+		bad.append("the view does not come back")
+
+	# A tap does the last one again; another stops it.
+	for round in 2:
+		Input.action_press("emote")
+		await _wait(g, 0.06)
+		Input.action_release("emote")
+		await _wait(g, 0.3)
+		if (p.emote() == Emotes.PASSINHO) != (round == 0) or wheel.open:
+			bad.append("tap %d left emote %d" % [round, p.emote()])
+
+	# One that is over when it is over.
+	p.start_emote(Emotes.DAB)
+	await _wait(g, 0.5)
+	var dabbing: bool = p.emote() == Emotes.DAB
+	await _wait(g, 1.8)
+	if not dabbing or p.emote() >= 0 or p.st.emote >= 0:
+		bad.append("dab: began %s, still going %d" % [dabbing, p.st.emote])
+
+	# One that travels, and is steered.
+	p.global_position = spot
+	p.rotation.y = PI / 2.0
+	await _wait(g, 0.2)
+	var from: Vector3 = p.global_position
+	p.start_emote(Emotes.TRENZINHO)
+	await _wait(g, 1.6)
+	var gone: float = from.x - p.global_position.x
+	Input.action_press("move_left")
+	await _wait(g, 0.4)
+	Input.action_release("move_left")
+	var steered: bool = p.rotation.y > PI / 2.0 + 0.3 and p.emote() == Emotes.TRENZINHO
+	Input.action_press("move_back")
+	await _wait(g, 0.2)
+	Input.action_release("move_back")
+	if gone < 1.0 or gone > 3.5 or not steered or p.emote() >= 0:
+		bad.append("trenzinho went %.2f m, steered %s, backed out of %s" % [gone, steered, p.emote() < 0])
+
+	# Not out cold, and not in mid-air.
+	p.st.ko = 5.0
+	p.start_emote(Emotes.DAB)
+	await _wait(g, 0.2)
+	var cold: int = p.st.emote
+	p.st.ko = 0.0
+	p.global_position = spot + Vector3(0, 4, 0)
+	await _wait(g, 0.1)
+	p.start_emote(Emotes.DAB)
+	await _wait(g, 0.2)
+	if cold >= 0 or p.st.emote >= 0:
+		bad.append("emotes out cold (%d) or in the air (%d)" % [cold, p.st.emote])
+	await _wait(g, 1.5)
+
+	# Somebody else's dance, joined on the beat it has got to.
+	p.global_position = spot
+	p.rotation.y = PI / 2.0
+	var other = g._make_player(99, "Par", spot + Vector3(0, 0, 2.0))
+	other.st.emote = Emotes.TRENZINHO
+	other.st.emote_t = MatchState.time - 1.3
+	other.st.emote_n = 1
+	await _wait(g, 0.3)
+	var hint: String = g.hud.join_hint
+	Input.action_press("emote")
+	await _wait(g, 0.06)
+	Input.action_release("emote")
+	await _wait(g, 0.3)
+	if hint == "" or p.emote() != Emotes.TRENZINHO or p.st.emote_t != other.st.emote_t or g.hud.join_hint != "":
+		bad.append("joining: hint '%s', emote %d, %.2f s apart" % [hint, p.emote(), p.st.emote_t - other.st.emote_t])
+	p.stop_emote()
+	g.players.erase(99)
+	other.queue_free()
+	await _wait(g, 0.3)
+
+	# People stop to look at a dance.
+	_reset(g)
+	g.police.reset()
+	p.st.hp = 100.0
+	p.st.heat = 0
+	p.global_position = spot
+	for k in 8:
+		_dummy(g, k, spot + Vector3(cos(k * 0.8) * 4.0, -0.2, sin(k * 0.8) * 4.0))
+	g.crowd._gawk.clear()
+	await _wait(g, 0.3)
+	p.start_emote(Emotes.FIO)
+	await _wait(g, 3.5)
+	var watching := 0
+	for k in 8:
+		if g.crowd._gawk.has(k):
+			watching += 1
+	if p.emote() != Emotes.FIO or watching < 2:
+		bad.append("fio dental drew %d of 8 (emote %d, jail %.1f, states %s)" % [watching, p.emote(), p.st.jail, Array(g.crowd.state.slice(0, 8))])
+	p.stop_emote()
+	await _wait(g, 0.3)
+
+	# The finger gun: whoever it points at when it goes off, and nobody else.
+	_reset(g)
+	p.global_position = spot
+	p.rotation.y = PI / 2.0
+	p.st.hp = 100.0
+	_dummy(g, 0, spot + Vector3(-2.5, -0.2, 0))
+	_dummy(g, 1, spot + Vector3(2.5, -0.2, 0))
+	_dummy(g, 2, spot + Vector3(-9.0, -0.2, 0))
+	_dummy(g, 3, spot + Vector3(-2.0, -0.2, 2.5))
+	await _wait(g, 0.3)
+	p.start_emote(Emotes.POU)
+	await _wait(g, 1.2)
+	var early: bool = g.crowd.state[0] >= g.crowd.DEAD
+	var sight := [g._clear(p.eye(), g.crowd.pos[0] + Vector3(0, 1.3, 0)), g.crowd.pos[0], g.crowd.state[0], g._emote_hit]
+	var mid := "sight %s emote %d hp %.0f jail %.1f heat %d at %s yaw %.2f" % [sight, p.emote(), p.st.hp, p.st.jail, p.st.heat, p.global_position - spot, p.rotation.y]
+	await _wait(g, 1.0)
+	var fate := [g.crowd.state[0] >= g.crowd.DEAD, g.crowd.state[1] >= g.crowd.DEAD, g.crowd.state[2] >= g.crowd.DEAD, g.crowd.state[3] >= g.crowd.DEAD]
+	if early or fate != [true, false, false, false]:
+		bad.append("pou: dead early %s, then %s (%s)" % [early, fate, mid])
+	await _wait(g, 1.5)
+	# The law has no part in what comes next.
+	g.police.reset()
+	p.st.heat = 0
+	p.st.jail = 0.0
+	p.st.hp = 100.0
+	p.st.ko = 0.0
+	# Thinking better of it kills nobody; the boot does, from close up, and a player at that.
+	_reset(g)
+	p.global_position = spot
+	p.rotation.y = PI / 2.0
+	var mark = g._make_player(98, "Alvo", spot + Vector3(-1.3, 0, 0))
+	await _wait(g, 0.3)
+	p.start_emote(Emotes.BICUDA)
+	await _wait(g, 0.6)
+	p.stop_emote()
+	await _wait(g, 1.0)
+	var spared: bool = not mark.st.dead
+	p.start_emote(Emotes.BICUDA)
+	await _wait(g, 1.5)
+	if not spared or not mark.st.dead:
+		bad.append("bicuda: spared when called off %s, dead when not %s (jail %.1f, %.1f m off)" % [spared, mark.st.dead, p.st.jail, p.global_position.distance_to(spot)])
+	g.players.erase(98)
+	mark.queue_free()
+	await _wait(g, 0.6)
+	p.stop_emote()
+	_keys_up()
+	g.debug_result("emotes", bad.is_empty(), "%d emotes%s" % [Emotes.COUNT, "" if bad.is_empty() else ": " + "; ".join(bad)])
+
+
+## Every emote at once, one body each, six at a time, photographed at three moments of
+## itself (or with --emote=<id> just that one, close up, at eight); and the wheel on two of
+## its pages. For looking at: it always passes.
+static func _emote_shots(g: Node) -> void:
+	var p = g.local_player
+	var base := Vector3(-20, 0.2, 45)
+	g.crowd.visible = false
+	p.global_position = base + Vector3(0, 0, 30)
+	Input.action_press("emote")
+	await _wait(g, 0.4)
+	g.hud.wheel.point(Vector2(90, -90))
+	await _wait(g, 0.5)
+	await _snap(g, "wheel_0")
+	g.hud.wheel.turn_page(1)
+	g.hud.wheel.point(Vector2(-120, 20))
+	await _wait(g, 0.3)
+	await _snap(g, "wheel_1")
+	Input.action_release("emote")
+	g.hud.wheel.close()
+	var bodies: Array = []
+	for id in Emotes.COUNT:
+		var b = g._make_player(200 + id, "", base)
+		b.net_yaw = PI
+		b.st.emote = id
+		b.st.emote_n = 1
+		bodies.append(b)
+	var only := -1
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--emote="):
+			only = int(a.trim_prefix("--emote="))
+	g.police.visible = false
+	g.dogs.visible = false
+	for row in (3 if only < 0 else 1):
+		for id in Emotes.COUNT:
+			var here: bool = id / 6 == row if only < 0 else id == only
+			bodies[id].net_pos = base + (Vector3((id % 6 - 2.5) * 1.3 if only < 0 else 0.0, 0, 0) if here else Vector3(0, 0, -60))
+			bodies[id].global_position = bodies[id].net_pos
+		var cam := _camera(g, base + (Vector3(3.2, 1.5, 8.6) if only < 0 else Vector3(2.2, 1.3, 3.6)), base + Vector3(0, 0.85, 0), 27.0 if only < 0 else 40.0)
+		var shots := 3 if only < 0 else 8
+		for shot in shots:
+			for id in Emotes.COUNT:
+				bodies[id].st.emote_t = MatchState.time - Emotes.LIST[id].len * (shot + 0.5) / shots + 0.3
+			await _wait(g, 0.3)
+			await _snap(g, "emotes_%d_%d" % [row, shot])
+		cam.queue_free()
+	g.debug_result("emoteshots", true, "%d emotes" % Emotes.COUNT)
