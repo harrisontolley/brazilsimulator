@@ -27,8 +27,42 @@ const CHEER := 14
 const SIT := 15
 const RIDE := 16
 const DRUM := 17
+const KO := 18
+const TACKLED := 19
+const HANDS_UP := 20
+const CALL := 21
+const DRINK := 22
+const EAT := 23
+const TALK := 24
+const PHONE := 25
+const DIG := 26
+const KEEPUP := 27
+const LEAN := 28
+const SQUAT := 29
+const SIT_DRINK := 30
+const SIT_TALK := 31
+const SIT_PHONE := 32
+const SELFIE := 33
+const CROUCH := 34
+const GINGA := 35
+const CLAP := 36
+const LIFT := 37
+const WORK := 38
 
-# Flag bits. The first twelve switch props on; the rest restyle the body.
+# What is in the right hand (shader `held`). Two and up are guns.
+const HELD_NONE := 0
+const HELD_KNIFE := 1
+const HELD_PISTOL := 2
+const HELD_REVOLVER := 3
+const HELD_SMG := 4
+
+# Props that follow the hand or the pose rather than a flag bit (shader PROP_*).
+const _PROP_HELD := 32
+const _PROP_CUP := 41
+const _PROP_PHONE := 42
+const _PROP_SPADE := 43
+
+# Flag bits. The first twelve switch props on; the rest restyle the body. Bit 7 is free.
 const F_HAT := 1 << 0
 const F_SHADES := 1 << 1
 const F_CAMERA := 1 << 2
@@ -36,7 +70,6 @@ const F_BUMBAG := 1 << 3
 const F_WATCH := 1 << 4
 const F_CHAIN := 1 << 5
 const F_SHOPBAG := 1 << 6
-const F_GUN := 1 << 7
 const F_POLICE := 1 << 8
 const F_WAD := 1 << 9
 const F_SACK_S := 1 << 10
@@ -93,6 +126,7 @@ const _WATCH := 17
 static var _mesh: ArrayMesh
 static var _mat: ShaderMaterial
 static var _line: ShaderMaterial
+static var _mats: Array[ShaderMaterial] = []  # everything that needs the clock
 static var _cheer_until := 0.0
 
 static var _v := PackedVector3Array()
@@ -112,7 +146,7 @@ static func tick() -> void:
 	if _mat != null:
 		var t := now()
 		var k := clampf((_cheer_until - t) / 0.6, 0.0, 1.0)
-		for m in [_mat, _line]:
+		for m in _mats:
 			m.set_shader_parameter("now", t)
 			m.set_shader_parameter("cheer", k)
 
@@ -123,7 +157,8 @@ static func cheer(seconds: float) -> void:
 
 
 ## Adds `count` characters under `parent` and returns the MultiMesh that places them.
-static func add_to(parent: Node3D, count: int, aabb: AABB) -> MultiMesh:
+## `mats` is [body, outline] from rig_materials() for a character posed from script.
+static func add_to(parent: Node3D, count: int, aabb: AABB, mats: Array = []) -> MultiMesh:
 	if _mesh == null:
 		_build()
 	var mm := MultiMesh.new()
@@ -132,21 +167,43 @@ static func add_to(parent: Node3D, count: int, aabb: AABB) -> MultiMesh:
 	mm.use_custom_data = true
 	mm.mesh = _mesh
 	mm.instance_count = count
-	for mat in [_mat, _line]:
+	if mats.is_empty():
+		mats = [_mat, _line]
+	for k in 2:
 		var mmi := MultiMeshInstance3D.new()
 		mmi.multimesh = mm
-		mmi.material_override = mat
+		mmi.material_override = mats[k]
 		mmi.custom_aabb = aabb
-		if mat == _line:
+		if k == 1:
 			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		parent.add_child(mmi)
 	return mm
 
 
-## `event` is the now() of the last one-shot: positive for an attack, negative for a hit.
-## For DEAD and DOWN it is when the fall started.
-static func custom(pose: int, speed: float, flags: int, event: float) -> Color:
-	return Color(pose, speed, flags, event)
+## A private [body, outline] pair whose pose comes from script (see char_rig.gd).
+static func rig_materials() -> Array:
+	if _mesh == null:
+		_build()
+	var out: Array = []
+	for src in [_mat, _line]:
+		var m: ShaderMaterial = src.duplicate()
+		m.set_shader_parameter("rigged", true)
+		_mats.append(m)
+		out.append(m)
+	return out
+
+
+static func drop_materials(mats: Array) -> void:
+	for m in mats:
+		_mats.erase(m)
+
+
+## Packs the per-instance data. `event` is the now() of the last one-shot: positive for an
+## attack, negative for a hit. `prev` and `t0` are the pose being left and when: the shader
+## blends from one to the other. Leave them out for a character that has always stood so.
+static func custom(pose: int, speed: float, flags: int, event: float, prev := -1, t0 := 0.0, held := 0) -> Color:
+	var word := pose | ((pose if prev < 0 else prev) << 6) | (clampi(roundi(speed * 10.0), 0, 255) << 12) | (held << 20)
+	return Color(word, t0, flags, event)
 
 
 ## Yaw that turns a character (which faces -Z) toward `dir`.
@@ -165,6 +222,7 @@ static func _build() -> void:
 	_mat.shader = load("res://shaders/character.gdshader")
 	_line = ShaderMaterial.new()
 	_line.shader = load("res://shaders/character_outline.gdshader")
+	_mats = [_mat, _line]
 
 	# Body. Feet at the origin, facing -Z, about 1.8 tall.
 	_ell(Vector3(0, 0.82, 0), Vector3(0.17, 0.11, 0.12), _TORSO, _BOTTOM)
@@ -205,7 +263,7 @@ static func _build() -> void:
 	_ell(Vector3(0, 1.265, -0.15), Vector3(0.04, 0.045, 0.03), _TORSO, _GOLD, 6, 6, 3)
 	_box(Vector3(-0.245, 0.56, 0), Vector3(0.07, 0.26, 0.24), _FORE_L, _ACCENT, 7)
 	# The pistol points down the hanging arm so it points forward once the arm is raised.
-	_box(Vector3(0.245, 0.64, -0.03), Vector3(0.045, 0.22, 0.065), _FORE_R, _BLACK, 8)
+	_box(Vector3(0.245, 0.64, -0.03), Vector3(0.045, 0.22, 0.065), _FORE_R, _BLACK, _PROP_HELD + HELD_PISTOL)
 	# Police: white cap with a black band and brim, gold badges, beacon, hi-vis band, belt.
 	_ell(Vector3(0, 1.76, 0), Vector3(0.215, 0.085, 0.215), _HEAD, _WHITE, 9, 10, 4, 1.73)
 	_ell(Vector3(0, 1.725, 0), Vector3(0.208, 0.035, 0.208), _HEAD, _BLACK, 9, 10, 2)
@@ -226,6 +284,12 @@ static func _build() -> void:
 	_box(Vector3(0, 0.98, -0.3), Vector3(0.44, 0.3, 0.3), _TORSO, _WHITE, 23)
 	_box(Vector3(0, 1.14, -0.3), Vector3(0.46, 0.05, 0.32), _TORSO, _ACCENT, 23)
 	_box(Vector3(0, 1.22, -0.12), Vector3(0.36, 0.03, 0.3), _TORSO, _BLACK, 23)
+
+	# Things that come with a pose: a cup, a phone, a beach spade.
+	_box(Vector3(0.245, 0.7, -0.07), Vector3(0.065, 0.11, 0.065), _FORE_R, _WHITE, _PROP_CUP)
+	_box(Vector3(0.245, 0.71, -0.06), Vector3(0.075, 0.14, 0.018), _FORE_R, _BLACK, _PROP_PHONE)
+	_box(Vector3(0.245, 0.42, -0.06), Vector3(0.03, 0.72, 0.03), _FORE_R, _SACK, _PROP_SPADE)
+	_box(Vector3(0.245, 0.0, -0.06), Vector3(0.17, 0.22, 0.03), _FORE_R, _WHITE, _PROP_SPADE)
 
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)

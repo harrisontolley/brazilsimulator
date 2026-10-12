@@ -446,7 +446,7 @@ func _build_truck() -> void:
 		var p := at + Vector3(4.2 if j == 0 else -4.2, 0, -0.8)
 		_gang.set_instance_color(j, Color(0.12, 0.14, 0.2, 0.3 + j * 0.4))
 		_gang.set_instance_transform(j, Kit.xform(p, 0.0, 1.25, 1.1))
-		_gang.set_instance_custom_data(j, Kit.custom(Kit.AIM, 0.0, Kit.F_SUIT | Kit.F_SHADES | Kit.F_GUN, 0.0))
+		_gang.set_instance_custom_data(j, Kit.custom(Kit.AIM, 0.0, Kit.F_SUIT | Kit.F_SHADES, 0.0, -1, 0.0, Kit.HELD_PISTOL))
 
 
 ## Trio elétrico: the sound truck a bloco follows.

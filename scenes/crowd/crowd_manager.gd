@@ -33,6 +33,7 @@ const NPC_STROLL := 16
 const STROLL_SPEED := 1.5
 const DANCE_SPEED := 1.6
 const SHELTER_SPEED := 4.6
+const NO_POSE := 255
 const LOCAL_TOPS := [Color(1.0, 0.85, 0.1), Color(0.1, 0.65, 0.3), Color(0.95, 0.95, 0.95), Color(0.3, 0.7, 0.95), Color(0.9, 0.35, 0.2)]
 
 var count := 0
@@ -63,6 +64,10 @@ var _look := PackedInt32Array()    # Kit clothing flags from the archetype
 var _tier := PackedByteArray()     # wealth tier still on show (drops to 0 once robbed)
 var _ev := PackedFloat32Array()    # Kit one-shot event time
 var _idle := PackedByteArray()     # Kit pose when standing about (dancers, drummers)
+var _gun := PackedByteArray()      # 1: carries a pistol openly (the boca's soldiers)
+var _pose := PackedByteArray()     # Kit pose now showing, NO_POSE before the first
+var _prev := PackedByteArray()     # the pose it is blending out of
+var _pose_t := PackedFloat32Array()  # Kit.now() when the pose last changed
 var _mm: MultiMesh
 var _blood: MultiMesh
 var _blood_n := 0
@@ -118,6 +123,13 @@ func setup(seed_value: int) -> void:
 	_tier.resize(count)
 	_ev.resize(count)
 	_idle.resize(count)
+	_gun.resize(count)
+	_pose.resize(count)
+	_prev.resize(count)
+	_pose_t.resize(count)
+	_pose.fill(NO_POSE)
+	_prev.fill(NO_POSE)
+	_pose_t.fill(0.0)
 	_leave_order.resize(count)
 
 	var rng := RandomNumberGenerator.new()
@@ -193,7 +205,7 @@ func setup(seed_value: int) -> void:
 				look = Kit.F_SHORTS | Kit.F_HAT | Kit.F_CARRY
 			"traficante":
 				top = Color(0.1, 0.1, 0.1)
-				look = Kit.F_SHORTS | Kit.F_SHIRTLESS | Kit.F_SHADES | Kit.F_CHAIN | Kit.F_GUN
+				look = Kit.F_SHORTS | Kit.F_SHIRTLESS | Kit.F_SHADES | Kit.F_CHAIN
 			_:
 				top = Color(0.09, 0.09, 0.11) if rng.randf() < 0.7 else Color(0.95, 0.95, 0.95)
 				look = Kit.F_SUIT | Kit.F_SHADES
@@ -202,6 +214,7 @@ func setup(seed_value: int) -> void:
 		top.a = rng.randf()
 		tops.append(top)
 		_look[i] = look | spot.get("look", 0)
+		_gun[i] = 1 if a.id == "traficante" else 0
 
 	order.sort_custom(func(x, y): return x[0] < y[0])
 	for k in count:
@@ -345,6 +358,7 @@ func _restyle(i: int) -> void:
 	var pose := Kit.STAND
 	var speed := 0.0
 	var flags: int = _look[i] | Kit.TIER_PROPS[_tier[i]]
+	var held: int = Kit.HELD_PISTOL if _gun[i] == 1 else Kit.HELD_NONE
 	match state[i]:
 		AMBIENT:
 			if _lying[i] == 1:
@@ -367,11 +381,16 @@ func _restyle(i: int) -> void:
 			speed = HOSTILE_SPEED if _moving.get(i, false) else 0.0
 			flags |= Kit.F_ANGRY
 			if _shooter.has(i):
-				flags |= Kit.F_GUN
+				held = Kit.HELD_PISTOL
 		DEAD:
 			pose = Kit.DEAD
 			flags = _look[i]
-	_mm.set_instance_custom_data(i, Kit.custom(pose, speed, flags, _ev[i]))
+			held = Kit.HELD_NONE
+	if pose != _pose[i]:
+		_prev[i] = _pose[i]
+		_pose[i] = pose
+		_pose_t[i] = Kit.now()
+	_mm.set_instance_custom_data(i, Kit.custom(pose, speed, flags, _ev[i], -1 if _prev[i] == NO_POSE else _prev[i], _pose_t[i], held))
 
 
 ## Plays a punch / recoil (attack) or a flinch on NPC i.
@@ -676,7 +695,7 @@ func apply_snapshot(snap: Array) -> void:
 		cl_npc(e[0], e[1], e[2], e[3], e[4], e[5])
 		if e[1] == DEAD:
 			# Died before we joined: already on the ground, not falling over now.
-			_ev[e[0]] = Kit.now() - 5.0
+			_pose_t[e[0]] = Kit.now() - 5.0
 			_restyle(e[0])
 
 

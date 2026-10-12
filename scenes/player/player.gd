@@ -107,6 +107,9 @@ var _last_pos := Vector3.ZERO
 var _spd := 0.0
 var _vy := 0.0
 var _ev := 0.0  # Kit one-shot event time
+var _pose := 0
+var _prev := 0
+var _pose_t := 0.0
 var _was_dead := false
 # First-person hands.
 var _vm: Node3D
@@ -709,15 +712,17 @@ func _animate(delta: float) -> void:
 		flags |= Kit.F_JAIL
 	else:
 		flags |= Kit.F_SHORTS
-	if st.equipped == "pistol":
-		flags |= Kit.F_GUN
 	if st.money >= 1000:
 		flags |= Kit.F_SACK_L
 	elif st.money >= 200:
 		flags |= Kit.F_SACK_S
 	elif st.money > 0:
 		flags |= Kit.F_WAD
-	_body.set_instance_custom_data(0, Kit.custom(pose, speed, flags, _ev))
+	if pose != _pose:
+		_prev = _pose
+		_pose = pose
+		_pose_t = Kit.now()
+	_body.set_instance_custom_data(0, Kit.custom(pose, speed, flags, _ev, _prev, _pose_t, Kit.HELD_PISTOL if st.equipped == "pistol" else Kit.HELD_NONE))
 
 
 ## Plays a punch / recoil (attack) or a flinch on this player's body.

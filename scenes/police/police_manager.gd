@@ -56,6 +56,9 @@ var _vpos := PackedVector3Array()
 var _vyaw := PackedFloat32Array()
 var _ev := PackedFloat32Array()    # Kit one-shot event time
 var _gun_t := PackedFloat32Array() # pistol stays drawn until this Kit time
+var _pose := PackedByteArray()     # Kit pose now showing
+var _prev := PackedByteArray()     # the pose it is blending out of
+var _pose_t := PackedFloat32Array()  # Kit.now() when the pose last changed
 var _send_t := 0.0
 var _frozen := false
 var _sirens: Array[AudioStreamPlayer3D] = []
@@ -79,6 +82,9 @@ func _ready() -> void:
 	_vyaw.resize(N)
 	_ev.resize(N)
 	_gun_t.resize(N)
+	_pose.resize(N)
+	_prev.resize(N)
+	_pose_t.resize(N)
 	for k in 3:
 		var s := Sfx.emitter("siren", -3.0, 7.0, 110.0, false)
 		add_child(s)
@@ -132,6 +138,7 @@ func _process(delta: float) -> void:
 		var pose := Kit.STAND
 		var speed := 0.0
 		var flags := Kit.F_POLICE | Kit.F_SUIT
+		var held := Kit.HELD_NONE
 		match s:
 			PATROL:
 				pose = Kit.WALK
@@ -149,9 +156,13 @@ func _process(delta: float) -> void:
 			if not moving:
 				pose = Kit.STAND
 			if _gun_t[i] > now:
-				flags |= Kit.F_GUN
+				held = Kit.HELD_PISTOL
+		if pose != _pose[i]:
+			_prev[i] = _pose[i]
+			_pose[i] = pose
+			_pose_t[i] = now
 		_mm.set_instance_transform(i, Kit.xform(_vpos[i], _vyaw[i], HEIGHT, HEIGHT))
-		_mm.set_instance_custom_data(i, Kit.custom(pose, speed, flags, _ev[i]))
+		_mm.set_instance_custom_data(i, Kit.custom(pose, speed, flags, _ev[i], _prev[i], _pose_t[i], held))
 
 	# Sirens ride on the first few cops who are chasing someone.
 	var k := 0
