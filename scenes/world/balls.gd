@@ -28,6 +28,7 @@ func _ready() -> void:
 	for rect in Layout.PITCHES:
 		homes.append(rect[0] + Vector3(0, 0.3, 0))
 	homes.append(DB.CAMPINHO_POS + Vector3(0, 0.4, 0.5))
+	homes.append(Layout.YARD_PITCH[0] + Vector3(0, 0.3, 0))
 	homes.append(Vector3(-60, 0.3, 2))
 	homes.append(Vector3(118, 0.3, -4))
 	var black := Color(0.08, 0.08, 0.08)
@@ -134,10 +135,15 @@ func _physics_process(delta: float) -> void:
 		if scored:
 			_reset[i] = 2.5
 			var pl = g.players.get(_last[i])
-			if pl != null:
-				pl.st.money += GOAL_PAY
-				g.push_state(pl)
-			g.bcast("cl_goal", [p, pl.pname if pl != null else ""], self)
+			if pl != null and pl.st.jail > 0.0:
+				# Inside, a goal is worth time.
+				g.prison.srv_cut(pl, g.prison.GOAL_CUT, "GOOOOL")
+				g.bcast("cl_goal", [p, ""], self)
+			else:
+				if pl != null:
+					pl.st.money += GOAL_PAY
+					g.push_state(pl)
+				g.bcast("cl_goal", [p, pl.pname if pl != null else ""], self)
 		elif p.z < Layout.SHORE_Z - 6.0 or absf(p.x) > Layout.X_LIMIT + 4.0 or p.y < -2.0:
 			_reset[i] = 3.0
 
@@ -171,7 +177,7 @@ func _physics_process(delta: float) -> void:
 func _goal_at(p: Vector3) -> bool:
 	if p.y > Layout.GOAL_H:
 		return false
-	for rect in Layout.PITCHES:
+	for rect in Layout.PITCHES + [Layout.YARD_PITCH]:
 		var c: Vector3 = rect[0]
 		var h: Vector2 = rect[1]
 		var past := absf(p.x - c.x) - h.x

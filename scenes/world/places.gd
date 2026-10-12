@@ -13,7 +13,8 @@ static var covers: Array = []
 static var seats: Array = []
 ## {pos, yaw, poses, arch, room}: somewhere a person stands, and the things they do there.
 static var spots: Array = []
-## {kind, pos, prompt, arg, hold}: something to use with F that the world put there.
+## {kind, pos, prompt, arg, hold, jail}: something to use with F that the world put there.
+## jail: 0 for people at large, 1 for inmates, 2 for anyone.
 static var uses: Array = []
 ## {pos, r, depth}: holes dug in the sand. These come and go with the match, so the crowd's
 ## activity planner owns the list rather than the world.
@@ -59,8 +60,8 @@ static func add_spot(pos: Vector3, yaw: float, poses: Array, arch := "", room :=
 	spots.append({"pos": pos, "yaw": yaw, "poses": poses, "arch": arch, "room": room})
 
 
-static func add_use(kind: StringName, pos: Vector3, prompt: String, arg := 0, hold := 0.0) -> void:
-	uses.append({"kind": kind, "pos": pos, "prompt": prompt, "arg": arg, "hold": hold})
+static func add_use(kind: StringName, pos: Vector3, prompt: String, arg := 0, hold := 0.0, jail := 0) -> void:
+	uses.append({"kind": kind, "pos": pos, "prompt": prompt, "arg": arg, "hold": hold, "jail": jail})
 
 
 ## A fresh id to group the seats round one table.

@@ -45,6 +45,8 @@ const PITCHES := [
 ]
 const GOAL_HALF := 2.5
 const GOAL_H := 2.2
+## The pitch painted on the prison yard. A goal there buys time, not money.
+const YARD_PITCH := [Vector3(8, 0, 121), Vector2(10, 5)]
 ## Futevolei courts, same shape, with the net across the middle.
 const COURTS := [
 	[Vector3(-100, 0, 35), Vector2(8, 4)],
@@ -66,6 +68,8 @@ const LOTS := [
 			"tint": Color(0.95, 0.95, 0.95), "sign": Color(0.1, 0.6, 0.3), "light": Color(0.9, 0.95, 1.0)},
 	{"kind": "barbearia", "name": "BARBEARIA", "row": 0, "x0": 150.0, "x1": 162.0, "floors": 1,
 			"tint": Color(0.85, 0.82, 0.9), "sign": Color(0.15, 0.2, 0.5)},
+	{"kind": "presidio", "name": "PRESÍDIO", "row": 1, "x0": -41.0, "x1": 41.0, "floors": 0,
+			"tint": Color(0.55, 0.55, 0.57), "sign": Color(0.1, 0.2, 0.6)},
 	{"kind": "boteco", "name": "BAR DO PORTUGUÊS", "row": 1, "x0": 100.0, "x1": 114.0, "floors": 1, "back": 107.0,
 			"tint": Color(0.75, 0.86, 0.78), "sign": Color(0.1, 0.4, 0.2)},
 ]

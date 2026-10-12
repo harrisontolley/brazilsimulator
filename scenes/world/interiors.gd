@@ -11,6 +11,7 @@ extends "res://scenes/world/world_kit.gd"
 
 const Places := preload("res://scenes/world/places.gd")
 const Kit := preload("res://scenes/characters/char_kit.gd")
+const Interact := preload("res://scenes/player/interact.gd")
 
 const H := 3.5
 const T := 0.3
@@ -32,6 +33,7 @@ func _ready() -> void:
 	_init_kit()
 	for lot in Layout.LOTS:
 		if lot.kind == "presidio":
+			_presidio(lot)
 			continue
 		var room := _shell(lot)
 		match lot.kind:
@@ -346,3 +348,169 @@ func _cassino(lot: Dictionary, room: int) -> void:
 	_box(Vector3(0, 0.07, z0 + 9.0), Vector3(8.0, 0.02, 17.0), Color(0.5, 0.05, 0.1))
 	for k in 8:
 		_glow(Vector3(lot.x0 + 3.0 + k * 6.0, 3.3, z0 + 0.5), Vector3(0.3, 0.3, 0.3), Color.from_hsv(k * 0.13, 0.8, 1.0))
+
+
+# --- the presídio ---
+
+## A wall along z at x, `h` high, with doorways: each gap is [centre z, width].
+func _wall_z(x: float, z0: float, z1: float, gaps: Array, h: float, tint: Color) -> void:
+	gaps.sort_custom(func(a, b): return a[0] < b[0])
+	var z := z0
+	for gap in gaps:
+		var lo: float = gap[0] - gap[1] * 0.5
+		if lo > z:
+			_block(Vector3(x, h * 0.5, (z + lo) * 0.5), Vector3(0.4, h, lo - z), tint)
+		_block(Vector3(x, (DOOR_H + h) * 0.5, gap[0]), Vector3(0.4, h - DOOR_H, gap[1]), tint)
+		z = gap[0] + gap[1] * 0.5
+	if z1 > z:
+		_block(Vector3(x, h * 0.5, (z + z1) * 0.5), Vector3(0.4, h, z1 - z), tint)
+
+
+## The prison, with the police station's front desk in one corner of it. Cells down the west
+## side, showers, a yard open to the sky behind bars, a canteen and a workshop to the east.
+func _presidio(lot: Dictionary) -> void:
+	var grey: Color = lot.tint
+	var dark := grey.darkened(0.3)
+	var inside := Interact.INSIDE
+	var wh := 7.0
+	# The shell: nobody gets in or out over these.
+	_block(Vector3(-29.0, wh * 0.5, 111.3), Vector3(24.2, wh, 0.6), Color(0.9, 0.9, 0.92))
+	_block(Vector3(-16.0, (DOOR_H + wh) * 0.5, 111.3), Vector3(DOOR_W, wh - DOOR_H, 0.6), Color(0.9, 0.9, 0.92))
+	_block(Vector3(12.95, wh * 0.5, 111.3), Vector3(56.1, wh, 0.6), Color(0.9, 0.9, 0.92))
+	_block(Vector3(0, wh * 0.5, 130.7), Vector3(82, wh, 0.6), grey)
+	for x in [-40.7, 40.7]:
+		_block(Vector3(x, wh * 0.5, 121), Vector3(0.6, wh, 20), grey)
+	_collider(Vector3(0, wh + 0.3, 121), Vector3(82, 0.6, 20))
+	_box(Vector3(0, 0.03, 121), Vector3(81, 0.06, 19), Color(0.55, 0.55, 0.55))
+	# Roofs over the buildings, bars over the yard.
+	for slab in [[-25.0, 32.0], [33.0, 16.0]]:
+		_box(Vector3(slab[0], wh + 0.1, 121), Vector3(slab[1], 0.2, 20), dark)
+	for k in 35:
+		_box(Vector3(-9.0 + k, wh, 121), Vector3(0.12, 0.12, 19), DARK)
+	for k in 5:
+		_box(Vector3(8, wh + 0.05, 113.0 + k * 4.0), Vector3(34, 0.16, 0.16), DARK)
+	# Inside walls.
+	_wall_z(-23.0, 111.6, 130.4, [[126.0, DOOR_W]], wh, grey)
+	_wall_z(-9.0, 121.0, 130.4, [[126.0, DOOR_W]], wh, grey)
+	_wall_z(25.0, 111.6, 130.4, [[116.0, DOOR_W], [126.0, DOOR_W]], wh, grey)
+	_block(Vector3(-16.0, wh * 0.5, 121.0), Vector3(14.4, wh, 0.4), grey)
+	_block(Vector3(33.0, wh * 0.5, 121.0), Vector3(16.4, wh, 0.4), grey)
+	# The visiting window between the front desk and the yard: bars, and a gap to talk through.
+	_block(Vector3(-9.0, 0.55, 116.3), Vector3(0.4, 1.1, 9.4), grey)
+	_block(Vector3(-9.0, 4.8, 116.3), Vector3(0.4, 4.4, 9.4), grey)
+	_block(Vector3(-9.0, 1.85, 112.6), Vector3(0.4, 1.5, 2.0), grey)
+	_block(Vector3(-9.0, 1.85, 119.8), Vector3(0.4, 1.5, 2.4), grey)
+	for k in 13:
+		_block(Vector3(-9.0, 1.85, 113.8 + k * 0.4), Vector3(0.08, 1.5, 0.08), STEEL)
+
+	# The front desk (the only part the public, and the police, walk into).
+	var lobby := Places.add_room({"name": "DELEGACIA", "kind": "delegacia", "box": AABB(Vector3(-23, -0.5, 111), Vector3(14, wh + 0.5, 10)),
+			"public": AABB(Vector3(-22.6, -0.5, 111.6), Vector3(13.2, wh + 0.5, 9.0)),
+			"doors": [[Vector3(-16, 0, 109.7), Vector3(-16, 0, 112.9)]], "cops": true})
+	var room := Places.add_room({"name": lot.name, "kind": "presidio", "box": AABB(Vector3(-41, -0.5, 111), Vector3(82, wh + 0.5, 20)),
+			"public": AABB(Vector3(-41, -0.5, 111), Vector3.ZERO),
+			"doors": [[Vector3(8, 0, 109.7), Vector3(8, 0, 112.9)]], "cops": false})
+	_box(Vector3(0, 5.6, 110.95), Vector3(82, 1.0, 0.1), lot.sign)
+	_sign("DELEGACIA", Vector3(-16, 5.6, 110.88), 200, Color.WHITE, PI)
+	_sign("PRESÍDIO", Vector3(14, 5.6, 110.88), 200, Color.WHITE, PI)
+	for x in [-18.0, -14.0]:
+		_glow(Vector3(x, 3.2, 110.9), Vector3(0.4, 0.4, 0.3), Color(0.2, 0.4, 1.0))
+	_block(Vector3(-16.0, 0.55, 117.5), Vector3(5.0, 1.1, 0.8), WOOD.darkened(0.2))
+	Places.add_spot(Vector3(-16.0, 0, 118.6), Kit.face(Vector3.FORWARD), [Kit.STAND, Kit.WORK, Kit.PHONE], "guarda", lobby)
+	Places.add_use(&"bail", Vector3(-16.0, 0, 116.4), "pay a friend's bail")
+	for k in 3:
+		_block(Vector3(-21.6, 0.25, 113.5 + k * 1.2), Vector3(0.6, 0.5, 0.9), dark)
+	# The gate everyone leaves by in the end, one way or another.
+	_block(Vector3(8, 2.6, 111.75), Vector3(4.2, 5.2, 0.25), Color(0.25, 0.28, 0.32))
+	for k in 9:
+		_box(Vector3(6.2 + k * 0.45, 2.6, 111.9), Vector3(0.08, 5.0, 0.08), STEEL)
+	Places.add_spot(Vector3(6.0, 0, 113.2), Kit.face(Vector3.BACK), [Kit.STAND, Kit.STAND, Kit.LEAN], "guarda", room)
+	Places.add_use(&"bribe", Vector3(7.2, 0, 113.6), "slip the guard something", 0, 0.0, inside)
+
+	# Cell block: six cells down the wall, bars for fronts.
+	for k in 6:
+		var z := 113.1 + k * 3.1
+		_block(Vector3(-33.4, 1.6, z + 1.55), Vector3(14.4, 3.2, 0.25), grey.lightened(0.08))
+		_block(Vector3(-38.6, 0.35, z), Vector3(2.0, 0.7, 0.9), dark)
+		_box(Vector3(-38.6, 0.76, z), Vector3(1.9, 0.12, 0.8), Color(0.8, 0.78, 0.7))
+		_block(Vector3(-38.6, 1.75, z), Vector3(2.0, 0.12, 0.9), dark)
+		for j in 5:
+			_box(Vector3(-26.2, 1.6, z - 1.2 + j * 0.3), Vector3(0.07, 3.2, 0.07), STEEL)
+		_box(Vector3(-26.2, 3.2, z), Vector3(0.1, 0.1, 3.0), STEEL)
+		Places.add_spot(Vector3(-30.0 - (k % 3) * 2.0, 0, z + 0.2), _rng.randf() * TAU, [Kit.SQUAT, Kit.STAND, Kit.LEAN, Kit.TALK], "preso", room)
+	Places.add_use(&"dig", Vector3(-37.2, 0, 116.2), "the loose flagstone under the bunk", 0, 4.0, inside)
+	# Showers.
+	_box(Vector3(-16.0, 0.05, 125.7), Vector3(13.2, 0.04, 9.0), Color(0.75, 0.86, 0.9))
+	for k in 4:
+		_box(Vector3(-21.0 + k * 3.2, 2.3, 130.1), Vector3(0.1, 0.1, 0.7), STEEL)
+		_box(Vector3(-21.0 + k * 3.2, 2.2, 129.7), Vector3(0.3, 0.1, 0.3), STEEL)
+
+	# The yard.
+	var pitch: Vector3 = Layout.YARD_PITCH[0]
+	var half: Vector2 = Layout.YARD_PITCH[1]
+	_box(pitch + Vector3(0, 0.07, 0), Vector3(half.x * 2.0, 0.02, half.y * 2.0), Color(0.3, 0.5, 0.36))
+	_box(pitch + Vector3(0, 0.08, 0), Vector3(0.12, 0.02, half.y * 2.0), Color(0.95, 0.95, 0.95))
+	for side in [-1.0, 1.0]:
+		var gx: float = pitch.x + side * half.x
+		for post in [-Layout.GOAL_HALF, Layout.GOAL_HALF]:
+			_block(Vector3(gx, 1.1, pitch.z + post), Vector3(0.12, 2.2, 0.12), Color(0.95, 0.95, 0.95))
+		_block(Vector3(gx, 2.2, pitch.z), Vector3(0.12, 0.12, Layout.GOAL_HALF * 2.0 + 0.12), Color(0.95, 0.95, 0.95))
+	# Weights: a bench, a bar, a pile of plates cast in a bucket.
+	_block(Vector3(-5.5, 0.25, 113.6), Vector3(0.5, 0.5, 1.6), dark)
+	_box(Vector3(-5.5, 1.1, 113.2), Vector3(1.9, 0.07, 0.07), STEEL)
+	for side in [-0.9, 0.9]:
+		_box(Vector3(-5.5 + side, 1.1, 113.2), Vector3(0.12, 0.5, 0.5), DARK)
+		_box(Vector3(-5.5 + side * 0.5, 0.55, 113.2), Vector3(0.07, 1.1, 0.07), STEEL)
+	Places.add_use(&"weights", Vector3(-5.5, 0, 114.8), "lift", 0, 4.0, inside)
+	for x in [-7.4, -3.4]:
+		Places.add_spot(Vector3(x, 0, 114.0), Kit.face(Vector3.BACK), [Kit.LIFT, Kit.LIFT, Kit.STAND], "preso", room)
+	# Dice on an upturned crate.
+	_block(Vector3(21.5, 0.3, 113.8), Vector3(0.9, 0.6, 0.9), WOOD)
+	for k in 2:
+		_box(Vector3(21.3 + k * 0.3, 0.66, 113.8), Vector3(0.1, 0.1, 0.1), Color(0.97, 0.97, 0.95))
+	Places.add_spot(Vector3(21.5, 0, 112.8), Kit.face(Vector3.BACK), [Kit.SQUAT, Kit.SQUAT, Kit.TALK], "preso", room)
+	Places.add_spot(Vector3(22.7, 0, 114.2), Kit.face(Vector3.LEFT), [Kit.SQUAT, Kit.CLAP], "preso", room)
+	Places.add_use(&"dice", Vector3(20.6, 0, 114.8), "throw dice with the banker", 0, 0.0, inside)
+	# The rinha: a ring chalked on the concrete. What happens in it is nobody's business.
+	var ring := Vector3(21.0, 0, 127.0)
+	for k in 16:
+		var a := TAU * k / 16.0
+		_box(ring + Vector3(cos(a) * 3.2, 0.07, sin(a) * 3.2), Vector3(1.3, 0.02, 0.14), Color(0.95, 0.9, 0.6), Vector3(0, -a + PI / 2.0, 0))
+	for k in 4:
+		var a := 0.6 + k * 1.5
+		Places.add_spot(ring + Vector3(cos(a) * 4.2, 0, sin(a) * 4.2), Kit.face(Vector3(-cos(a), 0, -sin(a))), [Kit.CLAP, Kit.STAND, Kit.TALK], "preso", room)
+	# The hook somebody left in the back wall, and the man who can get you things.
+	_glow(Vector3(16.0, 5.2, 130.3), Vector3(0.3, 0.3, 0.3), Color(0.6, 0.4, 0.2))
+	Places.add_use(&"climb", Vector3(16.0, 0, 129.4), "the hook in the wall", 0, 3.0, inside)
+	Places.add_spot(Vector3(-6.0, 0, 128.6), Kit.face(Vector3.FORWARD), [Kit.LEAN, Kit.LEAN, Kit.SQUAT], "preso", room)
+	_sign("CONTRABANDO  [F]", Vector3(-6.0, 2.4, 129.9), 60, Color(0.9, 0.9, 0.9), PI)
+	for k in 9:
+		Places.add_spot(Vector3(-6.0 + _rng.randf_range(0.0, 28.0), 0, 113.0 + _rng.randf_range(0.0, 16.0)), _rng.randf() * TAU, [Kit.STAND, Kit.TALK, Kit.SQUAT, Kit.LEAN], "preso", room)
+	for at in [Vector3(-7.5, 0, 123.0), Vector3(23.5, 0, 121.0), Vector3(10.0, 0, 129.6)]:
+		Places.add_spot(at, _rng.randf() * TAU, [Kit.STAND, Kit.STAND, Kit.LEAN], "guarda", room)
+
+	# Canteen and workshop.
+	_block(Vector3(38.5, 0.55, 116.3), Vector3(0.8, 1.1, 5.0), STEEL.darkened(0.3))
+	Places.add_spot(Vector3(39.6, 0, 116.3), Kit.face(Vector3.LEFT), [Kit.STAND, Kit.WORK], "preso", room)
+	Places.add_use(&"meal", Vector3(37.4, 0, 116.3), "queue for a meal", 0, 0.0, inside)
+	for k in 3:
+		_table(Vector3(28.5 + k * 3.2, 0, 114.2 + (k % 2) * 3.6), room, 4, STEEL)
+	for k in 4:
+		var at := Vector3(28.0 + k * 3.4, 0, 129.2)
+		_block(at + Vector3(0, 0.45, 0), Vector3(2.2, 0.9, 0.9), WOOD)
+		_box(at + Vector3(0.3, 1.0, 0), Vector3(0.5, 0.2, 0.3), STEEL)
+		Places.add_use(&"work", at + Vector3(0, 0, -1.2), "do a shift at the bench", k, 5.0, inside)
+		if k % 2 == 1:
+			Places.add_spot(at + Vector3(0.9, 0, -1.1), Kit.face(Vector3.BACK), [Kit.WORK, Kit.WORK, Kit.STAND], "preso", room)
+
+	var lamps := Node3D.new()
+	add_child(lamps)
+	for at in [Vector3(-33, 5.5, 121), Vector3(-16, 5.5, 116), Vector3(-16, 5.5, 126), Vector3(33, 5.5, 116), Vector3(33, 5.5, 126)]:
+		var l := OmniLight3D.new()
+		l.position = at
+		l.omni_range = 14.0
+		l.light_energy = 1.5
+		l.light_color = Color(0.95, 0.95, 1.0)
+		l.shadow_enabled = false
+		lamps.add_child(l)
+	_lights.append([room, lamps])

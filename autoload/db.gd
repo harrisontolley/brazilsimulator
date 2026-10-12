@@ -6,6 +6,7 @@ const ITEMS := {
 	# someone out. Guns carry `mag` rounds, take `reload` seconds to refill, kick the view up by
 	# `recoil`, and a shot to the head kills outright `head_kill` of the time.
 	"fists": {"name": "Fists", "type": "weapon", "melee": true, "damage": 12.0, "range": 2.3, "cooldown": 0.45, "spread": 0.0, "intimidation": 1.0, "price": 0, "held": 0, "ko": true},
+	"estoque": {"name": "Estoque", "type": "weapon", "melee": true, "damage": 22.0, "range": 2.0, "cooldown": 0.5, "spread": 0.0, "intimidation": 1.6, "price": 80, "held": 1},
 	"knife": {"name": "Faca", "type": "weapon", "melee": true, "damage": 28.0, "range": 2.1, "cooldown": 0.5, "spread": 0.0, "intimidation": 1.8, "price": 150, "held": 1},
 	"pistol": {"name": "Pistol", "type": "weapon", "melee": false, "damage": 34.0, "range": 60.0, "cooldown": 0.35, "spread": 0.035, "intimidation": 2.5, "price": 400, "held": 2, "mag": 12, "reload": 1.4, "recoil": 0.03, "head_kill": 0.85},
 	"revolver": {"name": "Três-oitão", "type": "weapon", "melee": false, "damage": 55.0, "range": 70.0, "cooldown": 0.6, "spread": 0.02, "intimidation": 2.8, "price": 900, "held": 3, "mag": 6, "reload": 2.2, "recoil": 0.065, "head_kill": 1.0},
@@ -19,6 +20,11 @@ const ITEMS := {
 	"espetinho": {"name": "Espetinho", "type": "food", "heal": 40.0, "price": 25},
 	"acai": {"name": "Açaí", "type": "food", "heal": 70.0, "price": 40},
 	"caipirinha": {"name": "Caipirinha", "type": "food", "heal": 10.0, "buff": true, "duration": 45.0, "comedown": 0.0, "od": 0.0, "price": 25},
+	# Contraband: what a spoon and a rope are for is between you and the wall.
+	"colher": {"name": "Colher", "type": "tool", "price": 40},
+	"corda": {"name": "Corda", "type": "tool", "price": 90},
+	# Not for sale: an hour on the weights.
+	"ferro": {"name": "Ferro", "type": "buff", "comedown": 0.0},
 	"curativo": {"name": "Curativo", "type": "food", "heal": 60.0, "price": 35},
 	"cerveja": {"name": "Cerveja", "type": "food", "heal": 8.0, "buff": true, "duration": 30.0, "comedown": 0.0, "od": 0.0, "price": 12},
 	# Taken off the people you rob. Worth nothing until a fence buys it; lost if arrested.
@@ -29,7 +35,7 @@ const ITEMS := {
 }
 const DRUGS := ["cocaine", "weed", "meth"]
 ## What the two weapon keys cycle through.
-const MELEE := ["fists", "knife"]
+const MELEE := ["fists", "knife", "estoque"]
 const GUNS := ["pistol", "revolver", "smg"]
 ## A head shot that does not kill outright still does this much more.
 const HEAD_MULT := 2.5
@@ -48,6 +54,8 @@ const ARCHETYPES := [
 	{"id": "mafia", "weight": 0.12, "money": [400, 1500], "resistance": 0.65, "fight": 0.7, "shoot": 0.5, "gun": 0.35, "hp": 120.0, "melee": 16.0, "scale": 1.15, "width": 1.45},
 	# Never rolled: these are placed where they belong.
 	{"id": "vendor", "weight": 0.0, "money": [60, 220], "resistance": 0.25, "fight": 0.1, "shoot": 0.0, "gun": 0.0, "hp": 50.0, "melee": 8.0, "scale": 1.0, "width": 1.0},
+	{"id": "preso", "weight": 0.0, "money": [0, 40], "resistance": 0.5, "fight": 0.75, "shoot": 0.0, "gun": 0.0, "hp": 70.0, "melee": 10.0, "scale": 1.0, "width": 1.05},
+	{"id": "guarda", "weight": 0.0, "money": [40, 120], "resistance": 0.95, "fight": 1.0, "shoot": 0.0, "gun": 0.0, "hp": 140.0, "melee": 18.0, "scale": 1.1, "width": 1.2},
 	{"id": "seguranca", "weight": 0.0, "money": [100, 300], "resistance": 0.9, "fight": 1.0, "shoot": 0.7, "gun": 0.5, "hp": 130.0, "melee": 18.0, "scale": 1.12, "width": 1.3},
 	{"id": "malandro", "weight": 0.0, "money": [80, 300], "resistance": 0.55, "fight": 0.95, "shoot": 0.15, "gun": 0.3, "hp": 90.0, "melee": 13.0, "scale": 1.02, "width": 1.1},
 	{"id": "traficante", "weight": 0.0, "money": [250, 900], "resistance": 0.6, "fight": 0.9, "shoot": 0.85, "gun": 0.6, "hp": 100.0, "melee": 14.0, "scale": 1.05, "width": 1.15},
@@ -83,6 +91,7 @@ const VENDORS := [
 	{"name": "MERCADINHO", "kind": "shop", "indoor": true, "till": true, "pos": Vector3(52, 0, 75.1), "stock": ["coco", "acai", "ammo"], "color": Color(0.1, 0.45, 0.75)},
 	{"name": "FARMÁCIA", "kind": "shop", "indoor": true, "till": true, "pos": Vector3(107, 0, 80.9), "stock": ["curativo"], "color": Color(0.1, 0.6, 0.3)},
 	{"name": "BAR DO PORTUGUÊS", "kind": "shop", "indoor": true, "till": true, "pos": Vector3(103.8, 0, 117.5), "stock": ["cerveja", "caipirinha", "espetinho"], "color": Color(0.1, 0.4, 0.2)},
+	{"name": "CONTRABANDO", "kind": "shop", "indoor": true, "jail": true, "pos": Vector3(-6, 0, 127.4), "stock": ["estoque", "colher", "corda", "cocaine", "weed"], "color": Color(0.3, 0.3, 0.3)},
 	{"name": "BICHO DO BINGO", "kind": "bicho", "indoor": true, "pos": Vector3(-14, 0, 89.4), "stock": [], "color": Color(0.85, 0.6, 0.1)},
 ]
 
@@ -99,7 +108,6 @@ const BOCA_POS := Vector3(-120, 12.2, 162.5)
 ## Samba circles on the promenade.
 const RODAS := [Vector3(40, 0, 45.5), Vector3(-195, 0, 45.5), Vector3(215, 0, 45.5)]
 const CAMPINHO_POS := Vector3(-46, 15, 172.5)
-const JAIL_TIME := 30.0
 ## A clean shirt: nobody is looking for someone dressed like that.
 const CLOTHES_PRICE := 50
 ## Where a hit landed.

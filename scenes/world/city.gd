@@ -33,7 +33,6 @@ func _ready() -> void:
 	_cacambas()
 	_row_a()
 	_row_b()
-	_delegacia()
 	_favela()
 	_far_favela()
 	_instances(_cyl(0.8, 0.8, 1.3, 10), _mat(Color(0.15, 0.42, 0.8), 0.5), _tanks)
@@ -299,13 +298,6 @@ func _row_b() -> void:
 				else:
 					x = lot.x1
 					continue
-			# The delegacia takes the plot in the middle.
-			if x < 9.0 and x + w > -9.0:
-				if x < -9.0:
-					w = -9.0 - x
-				else:
-					x = 9.0
-					continue
 			var h := 3.5 * _rng.randi_range(1, 4)
 			var tint := _wall_tint()
 			var c := Vector3(x + w * 0.5, h * 0.5, 121.0)
@@ -389,37 +381,6 @@ func _graffiti(p: Vector3, yaw: float) -> void:
 	var l := _sign(GRAFFITI[_rng.randi() % GRAFFITI.size()], p, 190, c, yaw)
 	l.outline_modulate = Color.from_hsv(_rng.randf(), 0.6, 0.25)
 	l.rotation.z = _rng.randf_range(-0.12, 0.12)
-
-
-## Police station with the lock-up yard behind it. Nobody gets in or out over the walls.
-func _delegacia() -> void:
-	var c := DB.PRISON_POS
-	var grey := Color(0.4, 0.4, 0.42)
-	_plane(Vector3(c.x, 0.03, c.z), Vector2(16, 16), _mat(Color(0.55, 0.55, 0.55)))
-	_block(Vector3(c.x, 3.5, 112.0), Vector3(18, 7, 2), Color(0.9, 0.9, 0.92))
-	_block(Vector3(c.x, 3, 130.0), Vector3(18, 6, 2), grey)
-	_block(Vector3(c.x - 8.5, 3, c.z), Vector3(1, 6, 16), grey)
-	_block(Vector3(c.x + 8.5, 3, c.z), Vector3(1, 6, 16), grey)
-	_collider(Vector3(c.x, 6.4, c.z), Vector3(18, 0.6, 20))
-	for k in 17:
-		_box(Vector3(c.x - 8.0 + k, 6.05, c.z), Vector3(0.12, 0.12, 16), Color(0.2, 0.2, 0.22))
-	for k in 5:
-		_box(Vector3(c.x, 6.1, c.z - 8.0 + k * 4.0), Vector3(16, 0.16, 0.16), Color(0.2, 0.2, 0.22))
-	# Front: blue band, door, lamp and the patrol cars outside.
-	_box(Vector3(c.x, 5.0, 110.95), Vector3(18, 1.2, 0.1), Color(0.1, 0.2, 0.6))
-	_box(Vector3(c.x, 1.2, 110.95), Vector3(1.6, 2.4, 0.1), Color(0.15, 0.2, 0.3))
-	_glow(Vector3(c.x - 2.0, 3.2, 110.8), Vector3(0.4, 0.4, 0.3), Color(0.2, 0.4, 1.0))
-	_glow(Vector3(c.x + 2.0, 3.2, 110.8), Vector3(0.4, 0.4, 0.3), Color(0.2, 0.4, 1.0))
-	_sign("DELEGACIA", Vector3(c.x, 5.0, 110.88), 200, Color.WHITE, PI)
-	for cx in [-5.5, 5.5]:
-		_police_car(Vector3(c.x + cx, 0, 109.8))
-
-
-func _police_car(p: Vector3) -> void:
-	_car(p, 0.0, Color(0.95, 0.95, 0.95))
-	_box(p + Vector3(0, 0.62, 0), Vector3(1.4, 0.72, 1.82), Color(0.1, 0.2, 0.6))
-	_glow(p + Vector3(-0.2, 1.58, -0.35), Vector3(0.3, 0.14, 0.4), Color(0.9, 0.1, 0.1))
-	_glow(p + Vector3(-0.2, 1.58, 0.35), Vector3(0.3, 0.14, 0.4), Color(0.15, 0.3, 1.0))
 
 
 # --- favela ---

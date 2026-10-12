@@ -46,8 +46,9 @@ func _ready() -> void:
 			scripted = true
 		# A run that only exists to take pictures keeps out of the way of whoever is at the desk.
 		if a.begins_with("--shot=") or a.begins_with("--out="):
+			# (A minimized window draws nothing, so it is parked off the corner of the screen.)
 			DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_NO_FOCUS, true)
-			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_MINIMIZED)
+			DisplayServer.window_set_position(DisplayServer.screen_get_position() + DisplayServer.screen_get_size() - Vector2i(2, 2))
 	for action in KEYS:
 		var e := InputEventKey.new()
 		e.physical_keycode = KEYS[action]

@@ -260,10 +260,11 @@ func speed_mult() -> float:
 
 
 func melee_mult() -> float:
+	var iron := 1.3 if drug_phase("ferro") == "high" else 1.0
 	match drug_phase("cocaine"):
-		"high": return 2.0
-		"down": return 0.6
-	return 1.0
+		"high": return 2.0 * iron
+		"down": return 0.6 * iron
+	return iron
 
 
 func damage_taken_mult() -> float:
@@ -291,8 +292,9 @@ func can_act() -> bool:
 	return not st.dead and not MatchState.ended and st.ko <= 0.0
 
 
+## Able to hit, be hit, pick things up. Inmates can; what they cannot do is leave.
 func can_fight() -> bool:
-	return can_act() and st.jail <= 0.0 and st.get("hide", -1) < 0
+	return can_act() and st.get("hide", -1) < 0
 
 
 ## Out in the world where the police, the bikes and the shops are: alive and not inside.

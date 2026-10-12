@@ -241,7 +241,8 @@ func setup(seed_value: int) -> void:
 				_idle[i] = Kit.CALL
 
 		# A few stragglers never leave; everyone else drains out over the match.
-		var stays := rng.randf() < (0.5 if _grp[i] >= 0 else (0.04 if p.z < Layout.WALK_Z else 0.6))
+		# People with a job to do indoors, or nowhere else they are allowed to be, stay put.
+		var stays := rng.randf() < (0.5 if _grp[i] >= 0 else (0.04 if p.z < Layout.WALK_Z else 0.6)) or (_grp[i] >= 0 and Places.room_at(p) >= 0)
 		_leave_t[i] = INF if stays else MatchState.duration * lerpf(0.1, 0.82, pow(rng.randf(), 0.8))
 		order.append([_leave_t[i], i])
 
@@ -264,6 +265,12 @@ func setup(seed_value: int) -> void:
 			"vendor":
 				top = Color(0.98, 0.98, 0.95)
 				look = Kit.F_SHORTS | Kit.F_HAT | Kit.F_CARRY
+			"preso":
+				top = Color(1.0, 0.45, 0.05)
+				look = Kit.F_JAIL
+			"guarda":
+				top = Color(0.1, 0.17, 0.52)
+				look = Kit.F_POLICE | Kit.F_SUIT
 			"malandro":
 				top = [Color(0.55, 0.05, 0.08), Color(0.08, 0.08, 0.1), Color(0.95, 0.95, 0.95)][rng.randi() % 3]
 				look = Kit.F_SHORTS | Kit.F_TANK | Kit.F_CHAIN
@@ -1067,6 +1074,23 @@ func srv_alarm(kind: String, at: Vector3, r: float, pid: int) -> void:
 		if arch[i] == a and state[i] == AMBIENT and pos[i].distance_to(at) < r:
 			_hostile[i] = {"target": pid, "cd": 0.6, "until": 40.0, "shooter": randf() < DB.ARCHETYPES[a].shoot}
 			_srv_set(i, HOSTILE)
+
+
+## Did anyone of archetype `kind` within r of `at` see what `pid` just did? The nearest one
+## who did comes over to deal with it.
+func srv_witness(kind: String, at: Vector3, r: float, pid: int) -> bool:
+	var a := _arch_index(kind)
+	var best := -1
+	var best_d := r
+	for i in count:
+		if arch[i] == a and state[i] == AMBIENT and pos[i].distance_to(at) < best_d:
+			best = i
+			best_d = pos[i].distance_to(at)
+	if best < 0:
+		return false
+	_hostile[best] = {"target": pid, "cd": 0.6, "until": 8.0, "shooter": false}
+	_srv_set(best, HOSTILE)
+	return true
 
 
 ## Sends NPC i after a player to take their money off them rather than to hurt them.

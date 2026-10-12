@@ -381,6 +381,19 @@ func open_blackjack() -> void:
 	_close_button()
 
 
+func open_dice() -> void:
+	_game_panel("DADOS", "two dice each, high roll wins, the banker takes ties")
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_shop_list.add_child(row)
+	for amount in [5, 20, 50]:
+		var b := Button.new()
+		b.text = "ROLL FOR R$%d" % amount
+		b.pressed.connect(func(): Net.game.to_server("srv_dice", [amount], Net.game.prison))
+		row.add_child(b)
+	_close_button()
+
+
 ## The outcome of a bet, shown in whichever game panel is open.
 func game_result(text: String) -> void:
 	if shop_open and is_instance_valid(_result):
@@ -504,7 +517,7 @@ func _process(delta: float) -> void:
 	elif st.dead:
 		_big.text = "YOU DIED"
 	elif st.jail > 0.0:
-		_big.text = "IN PRISON  %ds" % ceili(st.jail)
+		_big.text = "IN PRISON  %ds\nwork a shift, score in the yard, win in the ring, pay the gate guard - or find another way out" % ceili(st.jail)
 	else:
 		_big.text = ""
 

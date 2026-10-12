@@ -125,6 +125,8 @@ func _plan_tables() -> void:
 			c += s.pos
 		var g := _group(DINE, c / taken.size(), _rng.randf_range(4.0, 7.0))
 		var arch := "tourist" if _rng.randf() < 0.55 else "local"
+		if taken[0].room >= 0 and Places.rooms[taken[0].room].kind == "presidio":
+			arch = "preso"
 		for s in taken:
 			_member(g, s.pos, s.yaw, Kit.SIT, arch, 0, true)
 

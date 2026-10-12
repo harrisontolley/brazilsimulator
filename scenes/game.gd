@@ -21,6 +21,7 @@ const CombatFx := preload("res://scenes/fx/combat_fx.gd")
 const Interact := preload("res://scenes/player/interact.gd")
 const Threats := preload("res://scenes/world/threats.gd")
 const Casino := preload("res://scenes/world/casino.gd")
+const Prison := preload("res://scenes/world/prison.gd")
 const Places := preload("res://scenes/world/places.gd")
 const WeaponKit := preload("res://scenes/weapons/weapon_kit.gd")
 
@@ -46,6 +47,7 @@ var fx: Node3D
 var interaction: Node
 var threats: Node3D
 var casino: Node
+var prison: Node
 var local_player: CharacterBody3D
 
 var _players_root: Node3D
@@ -97,6 +99,9 @@ func _ready() -> void:
 	casino = Casino.new()
 	casino.name = "Casino"
 	add_child(casino)
+	prison = Prison.new()
+	prison.name = "Prison"
+	add_child(prison)
 	_players_root = Node3D.new()
 	add_child(_players_root)
 	_drops_root = Node3D.new()
@@ -561,7 +566,10 @@ func _debug_test(what: String) -> void:
 			Input.action_release("move_forward")
 			var inside: bool = Places.room_at(local_player.global_position) == 1
 			var roofed: bool = police._roofed(local_player.global_position)
-			var vi := DB.VENDORS.size() - 5
+			var vi := 0
+			for k in DB.VENDORS.size():
+				if DB.VENDORS[k].name == "BOTECO DO ZÉ":
+					vi = k
 			local_player.st.money = 500
 			local_player.st.hp = 50.0
 			local_player.global_position = DB.VENDORS[vi].pos + Vector3(0.3, 0.2, 0)
@@ -608,6 +616,35 @@ func _debug_test(what: String) -> void:
 				if crowd.state[i] == Crowd.HOSTILE:
 					angry += 1
 			debug_result("casino", rtp > 0.8 and rtp < 1.0 and played and even and took > 1000 and angry >= 3 and Places.rooms[room].kind == "cassino", "rtp %.3f played %s books balance %s safe %d bouncers %d" % [rtp, played, even, took, angry])
+		"prison":
+			# Arrested at the top heat: a long sentence, a shift that shortens it, a fight a
+			# guard sees that lengthens it, a beating that does not end it, and a way out
+			# through the floor that leaves you a fugitive.
+			var pl := local_player
+			pl.st.heat = 3
+			pl.st.money = 500
+			srv_arrest(1)
+			await get_tree().create_timer(0.3).timeout
+			var long: bool = absf(pl.st.jail - Prison.SENTENCE[3]) < 2.0 and Places.rooms[Places.room_at(pl.global_position)].kind == "presidio"
+			var t0: float = pl.st.jail
+			prison.srv_work(pl, {}, 0)
+			var cut: bool = pl.st.jail < t0 - 10.0 and pl.st.money == 500 + Prison.WORK_PAY
+			var t1: float = pl.st.jail
+			prison.srv_fight(pl, pl.global_position, false)
+			var added: bool = pl.st.jail > t1 + 5.0
+			srv_damage(1, 500.0, -1)
+			var alive: bool = not pl.st.dead and pl.st.jail > 0.0 and pl.st.ko > 0.0
+			var inmates := 0
+			for i in crowd.count:
+				if crowd.arch[i] == crowd._arch_index("preso"):
+					inmates += 1
+			_give(pl.st, "colher", 1)
+			for k in Prison.DIG_SESSIONS:
+				prison._rest.clear()
+				prison.srv_dig(pl, {}, 0)
+			await get_tree().create_timer(0.3).timeout
+			var out: bool = pl.st.jail <= 0.0 and pl.st.fug and pl.st.heat == 2 and Places.room_at(pl.global_position) < 0
+			debug_result("prison", long and cut and added and alive and out and inmates > 20, "sentence ok %s work %s guard %s survives %s escaped %s inmates %d" % [long, cut, added, alive, out, inmates])
 		"crouch":
 			local_player.global_position = Vector3(-20, 0.2, 45)
 			Input.action_press("crouch")
@@ -799,6 +836,7 @@ func _srv_start_match() -> void:
 	police.reset()
 	threats.reset()
 	casino.reset()
+	prison.reset()
 	balls.reset()
 	events.srv_reset()
 	var pdata: Array = []
@@ -919,9 +957,8 @@ func _srv_tick_player(p: CharacterBody3D, delta: float, od_tick: bool) -> void:
 	if st.jail > 0.0:
 		st.jail -= delta
 		if st.jail <= 0.0:
-			st.jail = 0.0
-			dirty = true
-			srv_teleport(p.id, DB.RELEASE_POS + Vector3(randf_range(-6, 6), 0, 0))
+			prison.srv_release(p)
+			send(p.id, "cl_toast", ["Time served. Try not to come back."])
 	if _respawn.has(p.id):
 		_respawn[p.id] -= delta
 		if _respawn[p.id] <= 0.0:
@@ -1076,6 +1113,11 @@ func srv_rob_player(victim: int) -> void:
 
 func _srv_kill(p: CharacterBody3D, attacker: int) -> void:
 	var st: Dictionary = p.st
+	if st.jail > 0.0:
+		# Nobody dies their way out of a sentence: they wake up on the floor with it still to do.
+		st.hp = 40.0
+		srv_floor(p.id, 6.0)
+		return
 	var items: Dictionary = st.inv.duplicate()
 	items.erase("fists")
 	if st.ammo > 0:
@@ -1186,6 +1228,8 @@ func srv_attack(origin: Vector3, dir: Vector3) -> void:
 			if crowd.srv_damage_npc(hit.id, dmg, pid, hit.zone, ko):
 				res |= DB.FX_KO
 	bcast("cl_fx", [origin, origin + dir * hit.t, w.melee, DB.WHO_PLAYER, pid, hit.type, hit.id, res])
+	if p.st.jail > 0.0 and w.melee and hit.type != DB.WHO_NONE:
+		prison.srv_fight(p, origin + dir * hit.t, res & DB.FX_KO != 0)
 
 	if not w.melee:
 		Crime.report_noise(origin, 90.0, pid)
@@ -1323,8 +1367,9 @@ func srv_arrest(pid: int) -> void:
 	p.st.inv = {"fists": 1}
 	p.st.equipped = "fists"
 	p.st.ammo = 0
+	# The more they wanted you, the longer you get.
+	p.st.jail = Prison.sentence(p.st.heat)
 	p.st.heat = 0
-	p.st.jail = DB.JAIL_TIME
 	p.wanted_t = 0.0
 	police.release_chase(pid)
 	motos.srv_release(pid)
@@ -1426,12 +1471,21 @@ func interact() -> void:
 ## Registers the things F does that this scene owns: vendors, hiding places, bikes, drops.
 func _setup_interact() -> void:
 	for vi in DB.VENDORS.size():
-		interaction.add(&"vendor", DB.VENDORS[vi].pos, VENDOR_RANGE, DB.VENDORS[vi].name, vi)
+		var v: Dictionary = DB.VENDORS[vi]
+		interaction.add(&"vendor", v.pos, 2.4 if v.get("indoor", false) else VENDOR_RANGE, v.name, vi, {"jail": Interact.INSIDE if v.get("jail", false) else Interact.FREE})
 	for hi in Places.hides.size():
 		var h: Dictionary = Places.hides[hi]
 		interaction.add(&"hide", h.pos, 2.4, "hide " + DB.HIDE_KINDS[h.kind].name, hi)
 	for u in Places.uses:
-		interaction.add(u.kind, u.pos, 2.2, u.prompt, u.arg, {"hold": u.hold})
+		interaction.add(u.kind, u.pos, 2.2, u.prompt, u.arg, {"hold": u.hold, "jail": u.jail})
+	interaction.on(&"work", Callable(), prison.srv_work)
+	interaction.on(&"weights", Callable(), prison.srv_weights)
+	interaction.on(&"meal", Callable(), prison.srv_meal)
+	interaction.on(&"bribe", Callable(), prison.srv_bribe)
+	interaction.on(&"bail", Callable(), prison.srv_bail)
+	interaction.on(&"dig", Callable(), prison.srv_dig)
+	interaction.on(&"climb", Callable(), prison.srv_climb)
+	interaction.on(&"dice", func(_a: Dictionary) -> void: hud.open_dice())
 	interaction.on(&"slot", func(_a: Dictionary) -> void: hud.open_slot())
 	interaction.on(&"roulette", func(_a: Dictionary) -> void: hud.open_roulette())
 	interaction.on(&"blackjack", func(_a: Dictionary) -> void: hud.open_blackjack())
