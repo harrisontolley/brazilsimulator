@@ -50,13 +50,45 @@ const GINGA := 35
 const CLAP := 36
 const LIFT := 37
 const WORK := 38
+const WAVE := 39
+const POINT := 40
+const ARGUE := 41
+const SHRUG := 42
+const LAUGH := 43
+const STRETCH := 44
+const PUSHUP := 45
+const SMOKE := 46
+const YAWN := 47
+const LOOK := 48
+const TIE := 49
+const HUG := 50
+const BEG := 51
+const STAGGER := 52
+const TEXT_WALK := 53
+const LIMP := 54
+const CRAWL := 55
+const SCREAM := 56
+const PANIC := 57
+const SWEEP := 58
+const PHOTO := 59
+const FILM := 60
+const AIM_LONG := 61
+const AIM_SHOULDER := 62
+const PREACH := 63
 
-# What is in the right hand (shader `held`). Two and up are guns.
+# What is in the right hand (shader `held`). 2..8 are guns; from 5 they take two hands.
 const HELD_NONE := 0
 const HELD_KNIFE := 1
 const HELD_PISTOL := 2
 const HELD_REVOLVER := 3
 const HELD_SMG := 4
+const HELD_SHOTGUN := 5
+const HELD_RIFLE := 6
+const HELD_SNIPER := 7
+const HELD_LAUNCHER := 8
+const HELD_GRENADE := 9
+const HELD_MOLOTOV := 10
+const HELD_BAT := 11
 
 # Props that follow the hand or the pose rather than a flag bit (shader PROP_*).
 const _PROP_HELD := 32
@@ -245,7 +277,7 @@ static func drop_materials(mats: Array) -> void:
 ## attack, negative for a hit. `prev` and `t0` are the pose being left and when: the shader
 ## blends from one to the other. Leave them out for a character that has always stood so.
 static func custom(pose: int, speed: float, flags: int, event: float, prev := -1, t0 := 0.0, held := 0) -> Color:
-	var word := pose | ((pose if prev < 0 else prev) << 6) | (clampi(roundi(speed * 10.0), 0, 255) << 12) | (held << 20)
+	var word := pose | ((pose if prev < 0 else prev) << 6) | (clampi(roundi(speed * 5.0), 0, 63) << 12) | (held << 18)
 	return Color(word, t0, flags, event)
 
 

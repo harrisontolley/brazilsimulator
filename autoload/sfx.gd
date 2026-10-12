@@ -6,7 +6,7 @@ extends Node
 ## player is standing.
 
 const RATE := 16000
-const VOICES := 20
+const VOICES := 32
 ## How many different syllables people mumble in.
 const BABBLE := 7
 
@@ -55,7 +55,14 @@ func play(sound: String, at: Vector3, db := 0.0, pitch := 1.0) -> void:
 	var s = _streams.get(sound)
 	if s == null:
 		return
+	# The next voice with nothing to say; failing that, whoever has been at it longest.
 	var p := _pool[_next]
+	for k in VOICES:
+		var q := _pool[(_next + k) % VOICES]
+		if not q.playing:
+			p = q
+			_next = (_next + k) % VOICES
+			break
 	_next = (_next + 1) % VOICES
 	p.stream = s
 	p.position = at
@@ -152,6 +159,11 @@ func _build() -> void:
 	made["sniff"] = _wav(_sniff(), false)
 	made["retch"] = _wav(_retch(), false)
 	made["heartbeat"] = _wav(_heartbeat(), false)
+	for k in 4:
+		made["scream%d" % k] = _wav(_scream(k), false)
+	made["grunt"] = _wav(_voice(0.22, [150.0, 120.0, 95.0], [620.0, 1050.0], 0.35, 5), false)
+	made["die"] = _wav(_voice(0.7, [210.0, 170.0, 110.0, 80.0], [560.0, 980.0], 0.3, 6), false)
+	made["shout"] = _wav(_voice(0.4, [230.0, 300.0, 240.0], [640.0, 1900.0], 0.15, 7), false)
 	for k in BABBLE:
 		made["babble%d" % k] = _wav(_syllable(k), false)
 	_adopt.call_deferred(made)
@@ -335,6 +347,46 @@ func _shot() -> PackedFloat32Array:
 	_hiss(f, rng, 0.0, 0.12, 0.5, 0.15)
 	_tone(f, 0.0, 150.0, 55.0, 0.05, 0.8)
 	return f
+
+
+## A voice holding one open vowel while its pitch runs through `pitch` (Hz, evenly spaced over
+## the length). `rough` is how much the throat tears at it.
+func _voice(seconds: float, pitch: Array, vowel: Array, rough: float, seed_value: int) -> PackedFloat32Array:
+	var f := _buf(seconds)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 4400 + seed_value
+	var n := f.size()
+	var ph := 0.0
+	var wobble := 0.0
+	var breath := 0.0
+	for i in n:
+		var u := float(i) / n
+		var at := u * (pitch.size() - 1)
+		var k := mini(int(at), pitch.size() - 2)
+		var f0: float = lerpf(pitch[k], pitch[k + 1], at - k)
+		wobble += 0.02 * (rng.randf_range(-1.0, 1.0) - wobble)
+		ph += TAU * f0 * (1.0 + wobble * rough * 6.0 + 0.012 * sin(u * seconds * 38.0)) / RATE
+		var v := 0.0
+		for h in range(1, mini(12, int(7000.0 / f0)) + 1):
+			var hz := f0 * h
+			var w := 1.0 / (1.0 + pow((hz - vowel[0]) / 170.0, 2.0)) + 0.8 / (1.0 + pow((hz - vowel[1]) / 240.0, 2.0)) + 0.5 / (1.0 + pow((hz - 3000.0) / 400.0, 2.0)) + 0.04
+			v += sin(ph * h) * w
+		breath += 0.5 * (rng.randf_range(-1.0, 1.0) - breath)
+		var env := minf(1.0, u * 18.0) * minf(1.0, (1.0 - u) * 5.0)
+		f[i] = (v * (1.0 + rough * breath * 1.5) + breath * rough * 2.0) * env
+	return f
+
+
+## Four people's screams: high or low, short or long, one that breaks in the middle.
+func _scream(k: int) -> PackedFloat32Array:
+	match k:
+		0:
+			return _voice(0.95, [520.0, 760.0, 800.0, 740.0, 520.0], [950.0, 1650.0], 0.3, 0)
+		1:
+			return _voice(1.3, [430.0, 640.0, 610.0, 660.0, 600.0, 380.0], [880.0, 1500.0], 0.45, 1)
+		2:
+			return _voice(0.6, [300.0, 430.0, 400.0, 250.0], [780.0, 1300.0], 0.55, 2)
+	return _voice(1.1, [600.0, 900.0, 940.0, 620.0, 880.0, 560.0], [1000.0, 1900.0], 0.25, 3)
 
 
 ## One syllable of nothing in particular: a voiced buzz shaped by two vowel resonances, some

@@ -46,12 +46,26 @@ const NPC_STROLL := 16
 const NPC_VANISH := 32
 ## cl_run flag bit: walking back to where they started the day, to pick up where they left off.
 const NPC_HOME := 64
+## cl_run flag bits: hurt and limping, or too hurt to do more than crawl.
+const NPC_HURT := 128
+const NPC_CRAWL := 256
+## What is going on, as far as the people near it are concerned (srv_panic).
+const FRIGHT_FIGHT := 1
+const FRIGHT_SHOTS := 2
+const FRIGHT_BLAST := 3
+## How near a punch has to land for people to scatter, and how many can take fright at once.
+const FIGHT_RANGE := 15.0
+const BLAST_RANGE := 70.0
+const GAWK_TIME := 9.0
+## People with somewhere to be: how many rounds there are, and how many walk each.
+const ROUNDS := 44
+const ROUND_SHARE := 4
 const STROLL_SPEED := 1.5
 const DANCE_SPEED := 1.6
 const SHELTER_SPEED := 4.6
 ## Gunfire this close sends people running; a crime this close may get someone's phone out.
 const PANIC_RANGE := 45.0
-const PANIC_MAX := 40
+const PANIC_MAX := 110
 const CALL_RANGE := 14.0
 const CALL_CHANCE := 0.3
 const CALL_TIME := 4.0
@@ -61,8 +75,8 @@ const SNATCH_RANGE := 3.4
 const HELD_POOL := 64
 const NO_POSE := 255
 ## What a stroller might stop to do, and how people stand after a fright.
-const PAUSE_POSES := [Kit.PHONE, Kit.STAND, Kit.SELFIE, Kit.PHONE, Kit.STAND, Kit.SQUAT, Kit.TALK]
-const SHAKEN_POSES := [Kit.STAND, Kit.PHONE, Kit.SQUAT, Kit.STAND]
+const PAUSE_POSES := [Kit.PHONE, Kit.LOOK, Kit.PHOTO, Kit.PHONE, Kit.STAND, Kit.TIE, Kit.WAVE, Kit.STRETCH, Kit.YAWN, Kit.SMOKE, Kit.POINT, Kit.CALL, Kit.SELFIE, Kit.STAND, Kit.SHRUG]
+const SHAKEN_POSES := [Kit.LOOK, Kit.FILM, Kit.CALL, Kit.SQUAT, Kit.LOOK, Kit.PHONE, Kit.POINT]
 const LOCAL_TOPS := [Color(1.0, 0.85, 0.1), Color(0.1, 0.65, 0.3), Color(0.95, 0.95, 0.95), Color(0.3, 0.7, 0.95), Color(0.9, 0.35, 0.2)]
 
 var count := 0
@@ -94,6 +108,10 @@ var _w_phase := PackedFloat32Array()
 var _w_stop := PackedFloat32Array()   # seconds a walker stands still in each cycle (0: never)
 var _w_cycle := PackedFloat32Array()  # length of that cycle
 var _w_pause := PackedByteArray()     # Kit pose a walker has stopped to strike, 0 while walking
+var _errands := PackedInt32Array()    # walkers who go from place to place rather than up and down
+var _round := PackedInt32Array()      # which of _rounds each of them walks, -1 for everybody else
+var _rounds: Array = []               # {pts, stops: [[metres along, seconds, pose]], time}
+var _w_pose := PackedByteArray()      # how they walk: Kit.WALK, or head down in a phone, or the worse for drink
 var _origin := PackedVector3Array()   # where they started the day
 var _was := PackedByteArray()         # what they were doing there: 1 walking, 2 lying
 var _leave_t := PackedFloat32Array()
@@ -111,6 +129,7 @@ var _babble: Node3D
 var _pose := PackedByteArray()     # Kit pose now showing, NO_POSE before the first
 var _prev := PackedByteArray()     # the pose it is blending out of
 var _pose_t := PackedFloat32Array()  # Kit.now() when the pose last changed
+var _scream_ms := 0
 var _mm: MultiMesh
 var _held: MultiMesh
 var _held_slot := {}   # idx -> slot in _held
@@ -132,6 +151,12 @@ var _ko := {}       # idx -> [match time they come round, pid who did it]
 var _calls := {}    # idx -> [match time the call goes through, where, pid, severity]
 var _cower := {}    # idx -> match time someone cowering indoors gets up again
 var _calm := {}     # idx -> match time someone who ran goes back to where they were
+var _gawk := {}     # idx -> match time someone who stopped to stare gets on with their day
+var _waves: Array = []   # [match time, where, radius, level, pid]: fright still spreading
+var _bodies: Array = []  # where the dead are lying, for passers-by to come across
+var _body_k := 0
+var _body_t := 0.0
+var _fight_ok := 0.0
 var _panic_ok := 0.0
 var _call_ok := 0.0
 var _send_t := 0.0
@@ -153,6 +178,10 @@ func setup(seed_value: int) -> void:
 	_calls.clear()
 	_cower.clear()
 	_calm.clear()
+	_gawk.clear()
+	_waves.clear()
+	_bodies.clear()
+	_fight_ok = 0.0
 	_panic_ok = 0.0
 	_call_ok = 0.0
 	if multiplayer.is_server() and not Crime.noise.is_connected(_on_noise):
@@ -182,6 +211,10 @@ func setup(seed_value: int) -> void:
 	_w_cycle.resize(count)
 	_w_pause.resize(count)
 	_w_pause.fill(0)
+	_w_pose.resize(count)
+	_round.resize(count)
+	_round.fill(-1)
+	_errands.clear()
 	_origin.resize(count)
 	_was.resize(count)
 	_leave_t.resize(count)
@@ -255,6 +288,15 @@ func setup(seed_value: int) -> void:
 		# People out for a stroll stop now and then; people running or playing do not.
 		_w_cycle[i] = rng.randf_range(16.0, 55.0)
 		_w_stop[i] = rng.randf_range(2.5, 7.0) if _w_spd[i] < 2.5 and rng.randf() < 0.8 else 0.0
+		var style := rng.randf()
+		_w_pose[i] = Kit.WALK
+		if a.id != "vendor" and _w_spd[i] < 2.5:
+			if style < 0.1:
+				_w_pose[i] = Kit.TEXT_WALK
+			elif style < 0.125 and not on_sand:
+				# Somebody started early.
+				_w_pose[i] = Kit.STAGGER
+				_w_spd[i] = 0.7
 		if walker:
 			# The lane runs only as far each way as there is nothing to walk into.
 			p = Nav.nearest_free(p)
@@ -338,6 +380,7 @@ func setup(seed_value: int) -> void:
 		_look[i] = look | spot.get("look", 0)
 		_gun[i] = 1 if a.id == "traficante" else 0
 
+	_plan_rounds(rng)
 	order.sort_custom(func(x, y): return x[0] < y[0])
 	for k in count:
 		_leave_order[k] = order[k][1]
@@ -521,7 +564,7 @@ func _restyle(i: int) -> void:
 				if _w_pause[i] != 0:
 					pose = _w_pause[i]
 				else:
-					pose = Kit.RUN if _w_spd[i] > 2.5 else Kit.WALK
+					pose = Kit.RUN if _w_spd[i] > 2.5 else _w_pose[i]
 					speed = _w_spd[i]
 			elif _party.has(i):
 				pose = Kit.DANCE
@@ -531,8 +574,21 @@ func _restyle(i: int) -> void:
 		COWER:
 			pose = Kit.COWER
 		FLEE:
-			pose = Kit.FLEE
-			speed = FLEE_SPEED
+			var e: Array = _ov.get(i, [])
+			if e.is_empty():
+				pose = Kit.FLEE
+			elif not e[5]:
+				# Rooted to the spot for the moment it takes to believe it.
+				pose = Kit.SCREAM if i % 3 != 0 else Kit.COWER
+			elif e[4] & NPC_CRAWL:
+				pose = Kit.CRAWL
+				speed = 2.0
+			elif e[4] & NPC_HURT:
+				pose = Kit.LIMP
+				speed = 2.5
+			else:
+				pose = [Kit.FLEE, Kit.PANIC, Kit.RUN, Kit.PANIC][i % 4]
+				speed = e[2]
 		PARADE:
 			pose = [Kit.FLEE, Kit.DANCE, Kit.WALK][_dancing.get(i, 0)]
 			speed = _ov[i][2] if _ov.has(i) else STROLL_SPEED
@@ -638,10 +694,47 @@ func _process(delta: float) -> void:
 		_yaw[i] = lerp_angle(_yaw[i], _w_yaw[i] if out else _w_yaw[i] + PI, minf(1.0, 7.0 * delta))
 		_place(i, _home[i] + _w_dir[i] * ((u if out else 2.0 * length - u) - length * 0.5))
 
+	for i in _errands:
+		if state[i] != AMBIENT or _walker[i] == 0:
+			continue
+		var r: Dictionary = _rounds[_round[i]]
+		var left := fposmod(t + _w_phase[i], _w_cycle[i])
+		var spd := _w_spd[i]
+		var at := 0.0
+		var pause := 0
+		# Walk to the next stop, stand there a while, walk on.
+		for stop in r.stops:
+			var leg: float = (stop[0] - at) / spd
+			if left < leg:
+				at += left * spd
+				left = -1.0
+				break
+			left -= leg
+			at = stop[0]
+			if left < stop[1]:
+				pause = stop[2]
+				left = -1.0
+				break
+			left -= stop[1]
+		if left > 0.0:
+			at += left * spd
+		if pause != _w_pause[i]:
+			_w_pause[i] = pause
+			_restyle(i)
+		var where: Array = Nav.along(r.pts[0], r.pts, at)
+		if pause == 0 and where[1] != Vector3.ZERO:
+			_yaw[i] = lerp_angle(_yaw[i], Kit.face(where[1]), minf(1.0, 7.0 * delta))
+		_place(i, where[0])
+
 	var server := multiplayer.is_server()
 	for i in _active.keys():
 		if state[i] == FLEE or state[i] == PARADE:
 			var e: Array = _ov[i]
+			if t < e[1]:
+				continue
+			if not e[5]:
+				e[5] = true
+				_restyle(i)
 			var d: float = (t - e[1]) * e[2]
 			var far: float = e[3]
 			var at: Array = Nav.along(e[0][0], e[0], minf(d, far))
@@ -667,6 +760,21 @@ func _process(delta: float) -> void:
 				if not robbing:
 					_cower.erase(i)
 					_srv_set(i, AMBIENT)
+		for k in range(_waves.size() - 1, -1, -1):
+			if t >= _waves[k][0]:
+				var w: Array = _waves[k]
+				_waves.remove_at(k)
+				srv_panic(w[1], w[2], w[3], w[4], false)
+		for i in _gawk.keys():
+			if t >= _gawk[i]:
+				_gawk.erase(i)
+				if state[i] == AMBIENT:
+					Net.game.bcast("cl_gawk", [i, pos[i], Kit.STAND, false], self)
+		# Now and then somebody walks up on a body.
+		if not _bodies.is_empty() and t >= _body_t:
+			_body_t = t + 1.5
+			_body_k = (_body_k + 1) % _bodies.size()
+			srv_panic(_bodies[_body_k], 7.0, FRIGHT_FIGHT, -1, false)
 		for i in _calm.keys():
 			if t >= _calm[i]:
 				# One a frame: working out the way home is not free.
@@ -920,6 +1028,8 @@ func cl_npc(i: int, s: int, p: Vector3, dir: Vector3, t0: float, flags: int) -> 
 		DEAD:
 			_ev[i] = Kit.now()
 			_place(i, p)
+			if absf(MatchState.time - t0) < 1.0:
+				Sfx.play("die", p + Vector3(0, 1.0, 0), 0.0, 0.8 + (i * 7 % 50) * 0.01)
 			# The body tips forward, so the pool goes under where the chest lands.
 			var chest := p + Basis(Vector3.UP, _yaw[i]) * Vector3(0, 0.012, -1.0 * _scale[i])
 			_blood.set_instance_transform(_blood_n % count, Transform3D(Basis(), chest))
@@ -942,6 +1052,10 @@ func cl_run(i: int, s: int, pts: PackedVector3Array, t0: float, flags: int) -> v
 
 func _run_speed(i: int, s: int, flags: int) -> float:
 	if s == FLEE:
+		if flags & NPC_CRAWL:
+			return 0.7
+		if flags & NPC_HURT:
+			return 2.1
 		# Not everybody is as quick on their feet.
 		return FLEE_SPEED * (0.82 + (i * 37 % 100) * 0.0035)
 	if flags & NPC_DANCE:
@@ -960,17 +1074,38 @@ func _begin_run(i: int, s: int, pts: PackedVector3Array, t0: float, flags: int) 
 	_moving.erase(i)
 	_shooter.erase(i)
 	_tier[i] = flags & 3
-	_ov[i] = [pts, t0, _run_speed(i, s, flags), Nav.length(pts[0], pts), flags]
+	var waits := t0 > MatchState.time
+	_ov[i] = [pts, t0, _run_speed(i, s, flags), Nav.length(pts[0], pts), flags, not waits]
 	_active[i] = true
+	_walker[i] = 0
 	if flags & NPC_DANCE:
 		_dancing[i] = 1
 	elif flags & (NPC_STROLL | NPC_HOME):
 		_dancing[i] = 2
 	else:
 		_dancing.erase(i)
-	if MatchState.time - t0 < 0.5:
+	if waits:
+		# Turn to look at it first.
+		_home[i] = pos[i]
+		_yaw[i] = Kit.face(pts[0] - pts[1]) if pts[0].distance_to(pts[1]) > 0.1 else _yaw[i]
+		_place(i, pos[i])
+		if s == FLEE:
+			_scream(i)
+	elif MatchState.time - t0 < 0.5:
 		_place(i, pts[0])
 	_restyle(i)
+
+
+## Some people scream. Whether NPC i is one of them is theirs for the day, so every peer
+## hears the same people; how many at once is up to each listener's ears.
+func _scream(i: int) -> void:
+	if i % 100 >= 30 or pos[i].distance_to(Net.game.local_player.global_position if Net.game.local_player != null else pos[i]) > 70.0:
+		return
+	var now := Time.get_ticks_msec()
+	if now - _scream_ms < 160:
+		return
+	_scream_ms = now
+	Sfx.play("scream%d" % (i % 4), pos[i] + Vector3(0, 1.5, 0), 3.0, 0.85 + (i * 13 % 40) * 0.01)
 
 
 ## NPC i has got where they were running to.
@@ -987,14 +1122,7 @@ func _end_run(i: int, flags: int) -> void:
 	_walker[i] = 0
 	_lying[i] = 0
 	if flags & NPC_HOME:
-		# Back where the day started: the towel, or the same stretch of pavement.
-		_home[i] = _origin[i]
-		_lying[i] = 1 if _was[i] & 2 else 0
-		if _was[i] & 1:
-			_walker[i] = 1
-			# Pick the lane back up from the middle, which is where they have just walked to.
-			_w_phase[i] = fposmod(_w_len[i] * 0.5 - _walk_time(i, MatchState.time) * _w_spd[i], 2.0 * _w_len[i])
-		_idle[i] = Kit.STAND
+		_resume(i)
 	elif fled:
 		# Far enough. Turn round and see what is happening back there.
 		_yaw[i] += PI
@@ -1006,6 +1134,148 @@ func _end_run(i: int, flags: int) -> void:
 		_idle[i] = Kit.DANCE if _dancing.get(i, 0) == 1 else Kit.STAND
 	_dancing.erase(i)
 	_restyle(i)
+
+
+## Lays out the rounds some people walk instead of a beat: a few places on one side of the
+## avenida, the way between them, and what there is to do at each. Several people share a
+## round, strung out along it.
+func _plan_rounds(rng: RandomNumberGenerator) -> void:
+	_rounds.clear()
+	# Somewhere to stand in every shop and bar, and at every stall.
+	var indoors: Array = []
+	for room in Places.rooms:
+		var box: AABB = room.public
+		if room.get("kind", "") == "presidio" or box.size.x < 2.0 or box.size.z < 2.0:
+			continue
+		for k in 3:
+			var p := Vector3(rng.randf_range(box.position.x + 1.0, box.end.x - 1.0), 0.0, rng.randf_range(box.position.z + 1.0, box.end.z - 1.0))
+			if not Nav.blocked(p):
+				indoors.append(p)
+	var stalls: Array = []
+	for v in DB.VENDORS:
+		if not v.get("indoor", false) and v.pos.y < 1.0:
+			var p: Vector3 = Nav.nearest_free(v.pos + Vector3(1.4, 0, -1.2), 3.0)
+			if not Nav.blocked(p):
+				stalls.append(Vector3(p.x, 0.0, p.z))
+	var built := 0
+	var tries := 0
+	while built < ROUNDS and tries < ROUNDS * 3:
+		tries += 1
+		var beach := rng.randf() < 0.45
+		var x0 := rng.randf_range(-270.0, 270.0)
+		var stops: Array = []
+		for k in rng.randi_range(3, 4):
+			var roll := rng.randf()
+			var x := x0 + rng.randf_range(-45.0, 45.0)
+			var p: Vector3
+			var pose := 0
+			if beach:
+				if roll < 0.3:
+					# Down to the water for a look at it.
+					p = Vector3(x, 0, rng.randf_range(-35.0, -31.0))
+					pose = [Kit.LOOK, Kit.PHOTO, Kit.STRETCH, Kit.STAND][rng.randi() % 4]
+				elif roll < 0.55:
+					# Over the sea wall, where the view is.
+					p = Vector3(x, 0, rng.randf_range(41.2, 42.2))
+					pose = [Kit.SELFIE, Kit.PHOTO, Kit.LOOK, Kit.SMOKE, Kit.PHONE][rng.randi() % 5]
+				else:
+					p = Vector3(x, 0, rng.randf_range(43.0, 49.5))
+					pose = [Kit.PHONE, Kit.STAND, Kit.DRINK, Kit.YAWN, Kit.CALL, Kit.TIE][rng.randi() % 6]
+			elif roll < 0.5 and not indoors.is_empty():
+				p = indoors[rng.randi() % indoors.size()]
+				pose = [Kit.STAND, Kit.DRINK, Kit.LOOK, Kit.PHONE, Kit.TALK][rng.randi() % 5]
+			elif roll < 0.75:
+				p = Vector3(x, 0, rng.randf_range(70.8, 72.2))
+				pose = [Kit.PHONE, Kit.SMOKE, Kit.STAND, Kit.CALL, Kit.LOOK][rng.randi() % 5]
+			else:
+				p = Vector3(x, 0, rng.randf_range(101.5, 107.0))
+				pose = [Kit.SMOKE, Kit.PHONE, Kit.STAND, Kit.STRETCH][rng.randi() % 4]
+			if beach and roll > 0.8 and not stalls.is_empty():
+				# Something cold from whoever is selling it.
+				var best: Vector3 = stalls[0]
+				for q in stalls:
+					if q.z < Layout.ROAD_Z and absf(q.x - x) < absf(best.x - x):
+						best = q
+				if best.z < Layout.ROAD_Z:
+					p = best
+					pose = Kit.DRINK
+			# Not so far along the street that it is a day's walk.
+			if absf(p.x - x0) > 90.0:
+				continue
+			p = Nav.nearest_free(Vector3(clampf(p.x, -292.0, 292.0), 0, p.z))
+			if not Nav.blocked(p):
+				stops.append([p, rng.randf_range(4.0, 11.0), pose])
+		if stops.size() < 3:
+			continue
+		# String the legs together, there and round and back to the start.
+		var pts := PackedVector3Array([stops[0][0]])
+		var marks: Array = []
+		var far := 0.0
+		var ok := true
+		for k in stops.size():
+			var a: Vector3 = stops[k][0]
+			var b: Vector3 = stops[(k + 1) % stops.size()][0]
+			var leg := Nav.path(a, b)
+			if leg.is_empty() or leg[leg.size() - 1].distance_to(b) > 1.0:
+				ok = false
+				break
+			far += Nav.length(a, leg)
+			pts.append_array(leg)
+			var next: Array = stops[(k + 1) % stops.size()]
+			marks.append([far, next[1], next[2]])
+		if not ok or far < 30.0:
+			continue
+		_rounds.append({"pts": pts, "stops": marks, "far": far})
+		built += 1
+	if _rounds.is_empty():
+		return
+	# Hand them to the strollers of the promenade and the pavements, a few to each.
+	var taken := 0
+	var rest := PackedInt32Array()
+	for i in _walkers:
+		if taken < _rounds.size() * ROUND_SHARE and _home[i].z > Layout.PROM_Z and _home[i].y < 1.0 and _w_spd[i] < 2.5 and _w_pose[i] != Kit.STAGGER and DB.ARCHETYPES[arch[i]].id != "vendor":
+			var r: Dictionary = _rounds[taken % _rounds.size()]
+			# Each walks it at their own pace, so each has their own time round.
+			var time: float = r.far / _w_spd[i]
+			for stop in r.stops:
+				time += stop[1]
+			_round[i] = taken % _rounds.size()
+			_w_cycle[i] = time
+			_w_phase[i] = time * (float(taken / _rounds.size()) + rng.randf()) / ROUND_SHARE
+			_home[i] = r.pts[0]
+			_origin[i] = r.pts[0]
+			_errands.append(i)
+			taken += 1
+		else:
+			rest.append(i)
+	_walkers = rest
+
+
+## NPC i goes back to what they were doing when the day started, if they are where they
+## were doing it: lying on the towel, or walking the same stretch of pavement.
+func _resume(i: int) -> void:
+	_idle[i] = Kit.STAND
+	_gest[i] = 0
+	var off := pos[i] - _origin[i]
+	if _round[i] >= 0:
+		if off.length() < 1.5:
+			# Start the round again from the top.
+			_home[i] = _origin[i]
+			_walker[i] = 1
+			_w_pause[i] = 0
+			_w_phase[i] = fposmod(-MatchState.time, _w_cycle[i])
+	elif _was[i] & 1:
+		var along := off.dot(_w_dir[i])
+		if absf(along) <= _w_len[i] * 0.5 and (off - _w_dir[i] * along).length() < 1.5:
+			# Pick the lane up from where they are standing on it.
+			_home[i] = _origin[i]
+			_walker[i] = 1
+			_w_pause[i] = 0
+			_w_phase[i] = fposmod(along + _w_len[i] * 0.5 - _walk_time(i, MatchState.time) * _w_spd[i], 2.0 * _w_len[i])
+	elif off.length() < 1.5:
+		_home[i] = _origin[i]
+		_lying[i] = 1 if _was[i] & 2 else 0
+		_place(i, _home[i])
 
 
 ## The walking a stroller has done by match time t, with their stops taken out.
@@ -1138,9 +1408,10 @@ func srv_duel(a: int, b: int, seconds: float) -> void:
 
 ## NPC i runs from `threat`: out of the door if they are indoors and have the nerve, then
 ## as far as it takes. `vanish`: they are not seen again.
-func _srv_flee(i: int, threat: Vector3, vanish := false) -> void:
+func _srv_flee(i: int, threat: Vector3, vanish := false, delay := 0.0) -> void:
 	_hostile.erase(i)
 	_calm.erase(i)
+	_gawk.erase(i)
 	var from := pos[i]
 	var pts := PackedVector3Array([from])
 	var room := Places.room_at(from)
@@ -1172,7 +1443,84 @@ func _srv_flee(i: int, threat: Vector3, vanish := false) -> void:
 			_srv_set(i, COWER)
 		return
 	var flags: int = DB.wealth_tier(money[i]) | (NPC_VANISH if vanish else 0)
-	Net.game.bcast("cl_run", [i, FLEE, pts, MatchState.time, flags], self)
+	var full: float = DB.ARCHETYPES[arch[i]].hp
+	if hp[i] < full * 0.25:
+		flags |= NPC_CRAWL
+	elif hp[i] < full * 0.6:
+		flags |= NPC_HURT
+	Net.game.bcast("cl_run", [i, FLEE, pts, MatchState.time + delay, flags], self)
+
+
+## NPC i stops what they are doing to stare at `at` in `pose` (filming it, pointing at it),
+## or with on false gets on with their day.
+@rpc("authority", "call_remote", "reliable")
+func cl_gawk(i: int, at: Vector3, pose: int, on: bool) -> void:
+	if i < 0 or i >= count or state[i] != AMBIENT:
+		return
+	if not on:
+		_resume(i)
+		_restyle(i)
+		return
+	_grp[i] = -1
+	_sit[i] = 0
+	_gest[i] = 0
+	_walker[i] = 0
+	_lying[i] = 0
+	_w_pause[i] = 0
+	_home[i] = pos[i]
+	_idle[i] = pose
+	var to := at - pos[i]
+	if Vector2(to.x, to.z).length() > 0.1:
+		_yaw[i] = Kit.face(to)
+	_place(i, pos[i])
+	_restyle(i)
+
+
+## Something frightening has happened at `at`: a punch thrown, shots, a bomb. Everyone
+## minding their own business within `radius` deals with it in their own way: most run, some
+## freeze, some get a phone out to film it, and the hard cases come over. `pid` did it.
+func srv_panic(at: Vector3, radius: float, level: int, pid: int, spread := true) -> void:
+	var t := MatchState.time
+	var who = Net.game.players.get(pid)
+	var loved: bool = who != null and who.is_loved()
+	var n := 0
+	for i in count:
+		if state[i] != AMBIENT or absf(pos[i].x - at.x) > radius or absf(pos[i].z - at.z) > radius or absf(pos[i].y - at.y) > 4.0:
+			continue
+		var d := pos[i].distance_to(at)
+		if d > radius:
+			continue
+		var a = DB.ARCHETYPES[arch[i]]
+		var nerve: float = a.fight
+		var near := 1.0 - d / (radius * 1.3)
+		# Asleep on a towel, it takes more to notice.
+		if _lying[i] == 1 and level == FRIGHT_FIGHT and d > 6.0:
+			continue
+		if nerve > 0.5:
+			# The ones who live by it do not run from it. Now and then one takes it personally.
+			if level == FRIGHT_FIGHT and who != null and not loved and d < 9.0 and randf() < 0.12 and Places.room_at(pos[i]) < 0:
+				_hostile[i] = {"target": pid, "cd": 0.8, "until": 14.0, "shooter": false}
+				_srv_set(i, HOSTILE)
+			elif level == FRIGHT_FIGHT and _grp[i] < 0 and randf() < 0.3 and not _gawk.has(i):
+				_gawk[i] = t + GAWK_TIME
+				Net.game.bcast("cl_gawk", [i, at, Kit.POINT if randf() < 0.5 else Kit.LOOK, true], self)
+			continue
+		if randf() > (1.02 - nerve) * (0.25 + near):
+			continue
+		# A scuffle is something to film from a safe distance. Gunfire is not.
+		if level == FRIGHT_FIGHT and d > 7.0 and randf() < 0.3:
+			if not _gawk.has(i):
+				_gawk[i] = t + GAWK_TIME * randf_range(0.7, 1.4)
+				Net.game.bcast("cl_gawk", [i, at, Kit.FILM if randf() < 0.7 else Kit.POINT, true], self)
+			continue
+		# It reaches the ones further off a moment later, and nobody reacts on the instant.
+		_srv_flee(i, at, false, d / 28.0 + randf_range(0.08, 0.5))
+		n += 1
+		if n >= PANIC_MAX:
+			break
+	if spread and n > 3:
+		# People who did not see it see everybody else running.
+		_waves.append([t + 1.1, at, radius * 1.6, level, pid])
 
 
 ## Sends someone who ran back to where they started the day.
@@ -1312,22 +1660,19 @@ func srv_scatter(i: int, from: Vector3) -> void:
 
 
 ## Gunfire: anyone near who is the running kind, runs. The ones who live by it stay put.
-func _on_noise(p: Vector3, radius: float, _pid: int) -> void:
+func _on_noise(p: Vector3, radius: float, pid: int) -> void:
 	if radius < 80.0 or MatchState.time < _panic_ok:
 		return
 	_panic_ok = MatchState.time + 1.5
-	var n := 0
-	for i in count:
-		if state[i] != AMBIENT or absf(pos[i].x - p.x) > PANIC_RANGE or absf(pos[i].z - p.z) > PANIC_RANGE or absf(pos[i].y - p.y) > 4.0:
-			continue
-		var d := pos[i].distance_to(p)
-		var nerve: float = DB.ARCHETYPES[arch[i]].fight
-		if d > PANIC_RANGE or nerve > 0.5 or randf() > (0.95 - nerve) * (1.0 - d / (PANIC_RANGE * 1.4)):
-			continue
-		_srv_flee(i, p)
-		n += 1
-		if n >= PANIC_MAX:
-			break
+	srv_panic(p, PANIC_RANGE if radius < 140.0 else BLAST_RANGE, FRIGHT_SHOTS if radius < 140.0 else FRIGHT_BLAST, pid)
+
+
+## Somebody has been hit at `at` by `pid`, with a fist or a blade: the people round about see it.
+func srv_fight_seen(at: Vector3, pid: int) -> void:
+	if MatchState.time < _fight_ok:
+		return
+	_fight_ok = MatchState.time + 0.6
+	srv_panic(at, FIGHT_RANGE, FRIGHT_FIGHT, pid)
 
 
 ## A crime with people about: now and then one of them gets a phone out. Unless something
@@ -1446,6 +1791,11 @@ func srv_damage_npc(i: int, dmg: float, attacker: int, zone := 0, ko := false) -
 		_hostile.erase(i)
 		_ko.erase(i)
 		_srv_set(i, DEAD)
+		# A killing is seen from further off than a scuffle.
+		srv_panic(pos[i], 24.0, FRIGHT_SHOTS, attacker)
+		_bodies.append(pos[i])
+		if _bodies.size() > 24:
+			_bodies.pop_front()
 		if money[i] > 0:
 			g.srv_add_drop(pos[i], money[i], {})
 			money[i] = 0
@@ -1696,3 +2046,26 @@ func debug_showcase(at: Vector3) -> void:
 	cl_npc(corpse, DEAD, back + Vector3(-6.5, 0, 0), Vector3.ZERO, 0.0, 0)
 	# Timed to be crossing the back row when the screenshot fires at 4 s.
 	cl_run(runner, FLEE, PackedVector3Array([back + Vector3(6.5 - FLEE_SPEED * 3.9, 0, 0), back + Vector3(60, 0, 0)]), MatchState.time, 0)
+
+
+## Stands NPC i at `at` in `pose`, for looking at. `lively`: as the one doing the talking.
+func debug_pose(i: int, at: Vector3, yaw: float, pose: int, lively := false) -> void:
+	state[i] = AMBIENT
+	_walker[i] = 0
+	_lying[i] = 0
+	_grp[i] = -1
+	_sit[i] = 0
+	_gest[i] = 1 if lively else 0
+	_idle[i] = pose
+	_yaw[i] = yaw
+	_home[i] = at
+	_place(i, at)
+	_restyle(i)
+
+
+## Takes everybody off the beach except `keep`, for a picture of just them.
+func debug_only(keep: Array) -> void:
+	for i in count:
+		if not keep.has(i):
+			state[i] = GONE
+			_hide(i)

@@ -1594,6 +1594,9 @@ func srv_attack(origin: Vector3, dir: Vector3) -> void:
 		Crime.report_crime(origin, pid, 3)
 	elif hit.type != DB.WHO_NONE:
 		Crime.report_crime(origin, pid, 2)
+		# Inside, a fight is the afternoon's entertainment.
+		if p.st.jail <= 0.0:
+			crowd.srv_fight_seen(origin + dir * hit.t, pid)
 
 
 ## Nothing solid between a and b.
@@ -1670,6 +1673,8 @@ func cl_fx(from: Vector3, to: Vector3, melee: bool, src_type: int, src_id: int, 
 		Sfx.play("shot", from, 4.0)
 	elif hit_type != DB.WHO_NONE:
 		Sfx.play("punch", to)
+	if hit_type != DB.WHO_NONE and hit_type != DB.WHO_PLAYER and res & DB.FX_KILL == 0:
+		Sfx.play("grunt", to, -3.0, 0.8 + (hit_id * 7 % 50) * 0.01)
 	if res & DB.FX_HEAD:
 		fx.headshot(to, not melee)
 		Sfx.play("headshot", to, 2.0)

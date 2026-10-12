@@ -1,7 +1,9 @@
 extends Node3D
 ## What people get up to when nobody is bothering them: eating at a kiosk table, standing
 ## about talking, queueing, taking selfies, digging holes, keeping a ball up, a capoeira roda,
-## a barbecue on the back street, a gang holding up a corner.
+## a barbecue on the back street, a gang holding up a corner, a row in the street, a busker
+## and his crowd, couples, people working out on the sand, beggars, a preacher, smokers
+## outside the bars, street sweepers, people taking each other's picture.
 ##
 ## Like the rest of the ambient crowd this costs no bandwidth. plan() lays the groups out from
 ## the match seed, and what each member is doing at any moment is a function of the clock:
@@ -13,8 +15,10 @@ extends Node3D
 const Kit := preload("res://scenes/characters/char_kit.gd")
 const Layout := preload("res://scenes/world/layout.gd")
 const Places := preload("res://scenes/world/places.gd")
+const Nav := preload("res://scenes/world/nav.gd")
 
-enum { NONE, CHAT, DINE, QUEUE, SELFIE, DIG, ALTINHA, FRESCOBOL, CAPOEIRA, CHURRASCO, GANG, ROOM }
+enum { NONE, CHAT, DINE, QUEUE, SELFIE, DIG, ALTINHA, FRESCOBOL, CAPOEIRA, CHURRASCO, GANG, ROOM,
+		ARGUE, BUSKER, COUPLE, WORKOUT, BEGGAR, PREACHER, SMOKERS, SWEEPER, PHOTO }
 
 const BALL_R := 0.2
 ## Seconds one touch of the ball takes to reach the next player.
@@ -65,6 +69,7 @@ func plan(seed_value: int, crowd: Node3D) -> Array:
 	_plan_churrascos()
 	_plan_gangs()
 	_plan_spots()
+	_plan_street_life()
 	_build_props()
 	return _specs
 
@@ -242,6 +247,118 @@ func _plan_spots() -> void:
 		_member(g, s.pos, s.yaw, s.poses[0], s.arch)
 
 
+## A spot on the promenade, the avenida pavement or the back street, clear of everything.
+func _street_spot(margin: float) -> Vector3:
+	var p := Vector3.ZERO
+	for tries in 12:
+		var roll := _rng.randf()
+		var x := _rng.randf_range(-285.0, 285.0)
+		if roll < 0.5:
+			p = Vector3(x, 0, _rng.randf_range(42.5, 49.0))
+		elif roll < 0.7:
+			p = Vector3(x, 0, _rng.randf_range(71.0, 72.0))
+		else:
+			p = Vector3(x, 0, _rng.randf_range(102.0, 107.0))
+		var ok := not Nav.blocked(p)
+		for a in 8:
+			ok = ok and not Nav.blocked(p + Vector3(cos(a * TAU / 8.0), 0, sin(a * TAU / 8.0)) * margin)
+		if ok:
+			break
+	return Nav.nearest_free(p)
+
+
+## The rest of what goes on in a street.
+func _plan_street_life() -> void:
+	# Two people having it out, nose to nose.
+	for k in 8:
+		var c := _street_spot(1.2)
+		var g := _group(ARGUE, c, _rng.randf_range(1.6, 2.8))
+		var a := _rng.randf() * TAU
+		var d := Vector3(cos(a), 0, sin(a))
+		for side in [-1.0, 1.0]:
+			_member(g, c + d * side * 0.55, Kit.face(-d * side), Kit.ARGUE)
+	# A drummer with a hat on the ground, and whoever has stopped to listen.
+	for k in 5:
+		var c := Vector3(_rng.randf_range(-270.0, 270.0), 0, _rng.randf_range(44.0, 47.5))
+		c = _street_spot(3.2) if Nav.blocked(c) else c
+		var g := _group(BUSKER, c, _rng.randf_range(3.0, 5.0))
+		_member(g, c, Kit.face(Vector3.FORWARD), Kit.DRUM, "local", Kit.F_CARRY | Kit.F_HAT)
+		var n := _rng.randi_range(4, 8)
+		for j in n:
+			var a := PI + (j + 0.5 - n * 0.5) * 0.42 + _rng.randf_range(-0.1, 0.1)
+			var d := Vector3(sin(a), 0, cos(a))
+			var at := c + d * _rng.randf_range(2.6, 3.6)
+			if not Nav.blocked(at):
+				_member(g, at, Kit.face(-d), Kit.CLAP)
+	# Couples, wrapped up in each other.
+	for k in 16:
+		var c := _street_spot(0.8) if _rng.randf() < 0.6 else _sand_spot(-30.0, 34.0, 1.5)
+		var g := _group(COUPLE, c, _rng.randf_range(5.0, 9.0))
+		var a := _rng.randf() * TAU
+		var d := Vector3(cos(a), 0, sin(a))
+		for side in [-1.0, 1.0]:
+			_member(g, c + d * side * 0.3, Kit.face(-d * side), Kit.HUG)
+	# The ones who come to the beach to train.
+	for k in 7:
+		var c := _sand_spot(-26.0, 30.0, 3.5)
+		var g := _group(WORKOUT, c, _rng.randf_range(5.0, 8.0))
+		var n := _rng.randi_range(2, 5)
+		var yaw := _rng.randf() * TAU
+		for j in n:
+			_member(g, c + Basis(Vector3.UP, yaw) * Vector3((j - n * 0.5) * 1.5, 0, 0), yaw, Kit.PUSHUP, "local", Kit.F_SHIRTLESS if _rng.randf() < 0.6 else Kit.F_TANK)
+	# A hand held out by a shop door.
+	for k in 9:
+		var c := Vector3(_rng.randf_range(-285.0, 285.0), 0, 72.4) if _rng.randf() < 0.6 else _street_spot(0.8)
+		c = Nav.nearest_free(c)
+		var g := _group(BEGGAR, c, _rng.randf_range(6.0, 10.0))
+		_member(g, c, Kit.face(Vector3.FORWARD) + _rng.randf_range(-0.5, 0.5), Kit.BEG, "local")
+	# Repent.
+	for k in 2:
+		var c := _street_spot(3.0)
+		var g := _group(PREACHER, c, _rng.randf_range(3.0, 5.0))
+		var yaw := _rng.randf() * TAU
+		var fwd := Basis(Vector3.UP, yaw) * Vector3.FORWARD
+		_member(g, c, yaw, Kit.PREACH, "", Kit.F_SUIT)
+		for j in _rng.randi_range(2, 5):
+			var at := c + fwd * _rng.randf_range(2.2, 3.4) + fwd.cross(Vector3.UP) * (j - 2) * 0.9
+			if not Nav.blocked(at):
+				_member(g, at, Kit.face(c - at), Kit.STAND)
+	# Outside every bar, the ones who have stepped out for a cigarette.
+	for room in Places.rooms:
+		if room.get("kind", "") != "boteco" and room.get("kind", "") != "cassino":
+			continue
+		for door in room.doors:
+			if _rng.randf() < 0.25:
+				continue
+			var out: Vector3 = door[0]
+			var away: Vector3 = (door[0] - door[1]).normalized()
+			var side := away.cross(Vector3.UP)
+			var c := out + away * 0.6 + side * (2.2 if _rng.randf() < 0.5 else -2.2)
+			if Nav.blocked(c):
+				continue
+			var g := _group(SMOKERS, c, _rng.randf_range(5.0, 8.0))
+			for j in _rng.randi_range(2, 3):
+				var at := c + side * (j - 1) * 0.8 + away * _rng.randf_range(-0.2, 0.3)
+				if not Nav.blocked(at):
+					_member(g, at, Kit.face(away) + _rng.randf_range(-0.6, 0.6), Kit.SMOKE)
+	# Somebody has to sweep it all up.
+	for k in 9:
+		var c := _street_spot(1.0)
+		var g := _group(SWEEPER, c, _rng.randf_range(6.0, 10.0))
+		_member(g, c, _rng.randf() * TAU, Kit.SWEEP, "local", Kit.F_HAT)
+	# Stand there. No, there. Smile.
+	for k in 12:
+		var c := _street_spot(2.0) if _rng.randf() < 0.5 else _sand_spot(-30.0, 34.0, 2.5)
+		var g := _group(PHOTO, c, _rng.randf_range(3.5, 6.0))
+		var a := _rng.randf() * TAU
+		var d := Vector3(cos(a), 0, sin(a))
+		var at := c + d * 2.6
+		if Nav.blocked(at):
+			at = c + d * 1.4
+		_member(g, c, Kit.face(d), Kit.PHOTO, "tourist")
+		_member(g, at, Kit.face(-d), Kit.STAND, "tourist")
+
+
 ## The things groups need that are not people: balls in the air, holes in the sand, grills.
 func _build_props() -> void:
 	for c in get_children():
@@ -358,9 +475,17 @@ func _restage(g: Dictionary, seg: int) -> void:
 		CHAT:
 			var who: int = int(h01(g.seed, seg) * g.n) % g.n
 			var laugh := h01(g.seed + 7, seg) < 0.15
+			var how := h01(g.seed + 11, seg)
 			g.speaker = who
 			for s in g.n:
-				c.act_pose(g.first + s, Kit.TALK, s == who or laugh)
+				if laugh and s != who:
+					c.act_pose(g.first + s, Kit.LAUGH, false)
+				elif s == who and how < 0.12:
+					c.act_pose(g.first + s, Kit.POINT, false)
+				elif s == who and how < 0.22:
+					c.act_pose(g.first + s, Kit.SHRUG, false)
+				else:
+					c.act_pose(g.first + s, Kit.TALK, s == who)
 		DINE:
 			for s in g.n:
 				var h := h01(g.seed + s * 31, seg)
@@ -376,7 +501,7 @@ func _restage(g: Dictionary, seg: int) -> void:
 		QUEUE:
 			for s in g.n:
 				var h := h01(g.seed + s * 31, seg)
-				c.act_pose(g.first + s, Kit.PHONE if h < 0.4 else (Kit.TALK if h < 0.55 else Kit.STAND), h > 0.4 and h < 0.55)
+				c.act_pose(g.first + s, Kit.PHONE if h < 0.35 else (Kit.TALK if h < 0.5 else (Kit.YAWN if h < 0.6 else (Kit.LOOK if h < 0.68 else Kit.STAND))), h > 0.35 and h < 0.5)
 		SELFIE:
 			var posing := h01(g.seed, seg) < 0.7
 			c.act_pose(g.first, Kit.SELFIE if posing else Kit.PHONE, false)
@@ -394,7 +519,7 @@ func _restage(g: Dictionary, seg: int) -> void:
 		CHURRASCO:
 			for s in g.n:
 				var h := h01(g.seed + s * 31, seg)
-				c.act_pose(g.first + s, Kit.EAT if h < 0.3 else (Kit.DRINK if h < 0.6 else Kit.TALK), h > 0.8)
+				c.act_pose(g.first + s, Kit.EAT if h < 0.3 else (Kit.DRINK if h < 0.55 else (Kit.LAUGH if h < 0.65 else Kit.TALK)), h > 0.8)
 				if h > 0.8:
 					g.speaker = s
 		ROOM:
@@ -404,10 +529,56 @@ func _restage(g: Dictionary, seg: int) -> void:
 				c.act_pose(g.first + s, pose, pose == Kit.TALK)
 				if pose == Kit.TALK:
 					g.speaker = s
+		ARGUE:
+			# One has the floor and the other waits for a gap; now and then a shove.
+			var who := seg & 1
+			g.speaker = who
+			c.act_pose(g.first + who, Kit.ARGUE, true)
+			var h := h01(g.seed, seg)
+			c.act_pose(g.first + 1 - who, Kit.SHRUG if h < 0.3 else (Kit.POINT if h < 0.5 else Kit.ARGUE), false)
+			if h > 0.86:
+				c.act_event(g.first + who)
+		BUSKER:
+			for s in range(1, g.n):
+				var h := h01(g.seed + s * 31, seg)
+				c.act_pose(g.first + s, Kit.CLAP if h < 0.4 else (Kit.FILM if h < 0.55 else (Kit.DANCE if h < 0.7 else (Kit.LAUGH if h < 0.78 else Kit.STAND))), false)
+		COUPLE:
+			var h := h01(g.seed, seg)
+			for s in g.n:
+				c.act_pose(g.first + s, Kit.HUG if h < 0.5 else (Kit.TALK if h < 0.8 else Kit.LAUGH), h >= 0.5 and h < 0.8 and s == (seg & 1))
+			if h >= 0.5 and h < 0.8:
+				g.speaker = seg & 1
+		WORKOUT:
+			for s in g.n:
+				var h := h01(g.seed + s * 31, seg)
+				c.act_pose(g.first + s, Kit.PUSHUP if h < 0.4 else (Kit.STRETCH if h < 0.7 else (Kit.DRINK if h < 0.85 else Kit.SQUAT)), false)
+		BEGGAR:
+			var h := h01(g.seed, seg)
+			c.act_pose(g.first, Kit.BEG if h < 0.7 else (Kit.SQUAT if h < 0.85 else Kit.LOOK), false)
+		PREACHER:
+			g.speaker = 0
+			c.act_pose(g.first, Kit.PREACH if h01(g.seed, seg) < 0.75 else Kit.POINT, true)
+			for s in range(1, g.n):
+				var h := h01(g.seed + s * 31, seg)
+				c.act_pose(g.first + s, Kit.STAND if h < 0.4 else (Kit.SHRUG if h < 0.5 else (Kit.LAUGH if h < 0.6 else (Kit.FILM if h < 0.72 else (Kit.CLAP if h < 0.8 else Kit.PHONE)))), false)
+		SMOKERS:
+			for s in g.n:
+				var h := h01(g.seed + s * 31, seg)
+				c.act_pose(g.first + s, Kit.SMOKE if h < 0.5 else (Kit.TALK if h < 0.75 else (Kit.PHONE if h < 0.88 else Kit.LAUGH)), h >= 0.5 and h < 0.75)
+				if h >= 0.5 and h < 0.75:
+					g.speaker = s
+		SWEEPER:
+			var h := h01(g.seed, seg)
+			c.act_pose(g.first, Kit.SWEEP if h < 0.72 else (Kit.DRINK if h < 0.85 else Kit.STRETCH), false)
+		PHOTO:
+			var h := h01(g.seed, seg)
+			c.act_pose(g.first, Kit.PHOTO if h < 0.75 else Kit.POINT, false)
+			if g.n > 1:
+				c.act_pose(g.first + 1, Kit.WAVE if h < 0.3 else (Kit.CHEER if h < 0.45 else (Kit.STAND if h < 0.75 else Kit.SHRUG)), false)
 		GANG:
 			for s in g.n:
 				var h := h01(g.seed + s * 31, seg)
-				var pose := Kit.LEAN if h < 0.4 else (Kit.SQUAT if h < 0.55 else (Kit.PHONE if h < 0.7 else Kit.TALK))
+				var pose := Kit.LEAN if h < 0.35 else (Kit.SQUAT if h < 0.47 else (Kit.PHONE if h < 0.6 else (Kit.SMOKE if h < 0.72 else Kit.TALK)))
 				c.act_pose(g.first + s, pose, h > 0.85)
 				if h > 0.85:
 					g.speaker = s

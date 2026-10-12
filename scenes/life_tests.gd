@@ -20,6 +20,10 @@ static func run(g: Node, what: String) -> bool:
 	match what:
 		"nav":
 			await _nav(g)
+		"poses":
+			await _poses(g)
+		"panic":
+			await _panic(g)
 		_:
 			return false
 	return true
@@ -35,6 +39,11 @@ static func _through(a: Vector3, b: Vector3) -> float:
 		run = run + 1 if Nav.blocked(a.lerp(b, float(k) / n)) else 0
 		worst = maxi(worst, run)
 	return worst * 0.1
+
+
+## Properly inside something, not just brushing the corner of it.
+static func _inside(p: Vector3) -> bool:
+	return Nav.blocked(p) and Nav.blocked(p + Vector3(0.2, 0, 0)) and Nav.blocked(p - Vector3(0.2, 0, 0)) and Nav.blocked(p + Vector3(0, 0, 0.2)) and Nav.blocked(p - Vector3(0, 0, 0.2))
 
 
 static func _nav(g: Node) -> void:
@@ -76,6 +85,20 @@ static func _nav(g: Node) -> void:
 			lanes_bad += 1
 			if first == "":
 				first = "walker %d lane from %s" % [i, crowd._home[i] - half]
+	# Nor does anybody's round of the shops.
+	var rounds_bad := 0
+	for r in crowd._rounds:
+		for j in range(1, r.pts.size()):
+			if _through(r.pts[j - 1], r.pts[j]) > 0.3:
+				rounds_bad += 1
+				if first == "":
+					first = "round goes through something %s -> %s" % [r.pts[j - 1], r.pts[j]]
+	var indoors := 0
+	for r in crowd._rounds:
+		for p in r.pts:
+			if Places.room_at(p) >= 0:
+				indoors += 1
+				break
 	var stuck := 0
 	for i in crowd.count:
 		if crowd._walker[i] == 0 and crowd._grp[i] < 0 and Nav.blocked(crowd.pos[i]):
@@ -145,11 +168,125 @@ static func _nav(g: Node) -> void:
 		MatchState.time = 7.0 + k * 21.3
 		crowd._process(0.016)
 		for i in crowd._walkers:
-			if crowd.state[i] == crowd.AMBIENT and Nav.blocked(crowd.pos[i]):
+			if crowd.state[i] == crowd.AMBIENT and crowd._walker[i] == 1 and _inside(crowd.pos[i]):
+				walked_bad += 1
+		for i in crowd._errands:
+			if crowd.state[i] == crowd.AMBIENT and crowd._walker[i] == 1 and _inside(crowd.pos[i]):
 				walked_bad += 1
 	MatchState.time = keep
 	crowd._process(0.016)
 	if img != null:
 		img.save_png(out_dir() + "/nav.png")
-	var ok: bool = shut == 0 and route_ok and lanes_bad == 0 and stuck == 0 and walked_bad == 0 and flee_bad == 0 and fled > 100 and chase_bad == 0 and cop_bad == 0 and closed < 4.0
-	g.debug_result("nav", ok, "doors shut %d route %.0f m ok %s, 20 paths %d ms, walkers %d lanes bad %d walked bad %d, standing in things %d, fled %d cowered %d bad legs %d in %d ms, chase %.0f -> %.1f m in %d frames (%d ms) inside things %d, cops inside things %d %s" % [shut, Nav.length(a, route), route_ok, path_ms, crowd._walkers.size(), lanes_bad, walked_bad, stuck, fled, cowered, flee_bad, flee_ms, start, closed, frames, chase_ms, chase_bad, cop_bad, first])
+	var ok: bool = shut == 0 and route_ok and rounds_bad == 0 and crowd._errands.size() > 100 and indoors > 5 and lanes_bad == 0 and stuck == 0 and walked_bad == 0 and flee_bad == 0 and fled > 100 and chase_bad == 0 and cop_bad == 0 and closed < 4.0
+	g.debug_result("nav", ok, "doors shut %d route %.0f m ok %s, 20 paths %d ms, rounds %d (%d go indoors, %d legs bad) walked by %d, walkers %d lanes bad %d walked bad %d, standing in things %d, fled %d cowered %d bad legs %d in %d ms, chase %.0f -> %.1f m in %d frames (%d ms) inside things %d, cops inside things %d %s" % [shut, Nav.length(a, route), route_ok, path_ms, crowd._rounds.size(), indoors, rounds_bad, crowd._errands.size(), crowd._walkers.size(), lanes_bad, walked_bad, stuck, fled, cowered, flee_bad, flee_ms, start, closed, frames, chase_ms, chase_bad, cop_bad, first])
+
+
+static func _camera(g: Node, at: Vector3, look: Vector3, fov := 40.0) -> Camera3D:
+	var cam := Camera3D.new()
+	cam.fov = fov
+	cam.far = 3000.0
+	g.add_child(cam)
+	cam.look_at_from_position(at, look)
+	cam.current = true
+	g.hud.visible = false
+	return cam
+
+
+static func _snap(g: Node, name: String) -> void:
+	await RenderingServer.frame_post_draw
+	if out_dir() != "":
+		g.get_viewport().get_texture().get_image().save_png("%s/%s.png" % [out_dir(), name])
+
+
+## Every new pose in a row, photographed twice a moment apart.
+static func _poses(g: Node) -> void:
+	var crowd = g.crowd
+	var poses := [Kit.WAVE, Kit.POINT, Kit.ARGUE, Kit.SHRUG, Kit.LAUGH, Kit.STRETCH, Kit.PUSHUP, Kit.SMOKE, Kit.YAWN,
+			Kit.LOOK, Kit.TIE, Kit.HUG, Kit.BEG, Kit.STAGGER, Kit.TEXT_WALK, Kit.LIMP, Kit.CRAWL, Kit.SCREAM,
+			Kit.PANIC, Kit.SWEEP, Kit.PHOTO, Kit.FILM, Kit.AIM_LONG, Kit.AIM_SHOULDER, Kit.PREACH, Kit.STAND, Kit.WALK]
+	var keep: Array = []
+	for k in poses.size():
+		keep.append(k)
+	crowd.debug_only(keep)
+	g.local_player.global_position = Vector3(0, 0.2, 30)
+	var base := Vector3(150, 0, -10)
+	for k in poses.size():
+		crowd.debug_pose(k, base + Vector3((k % 9 - 4) * 1.5, 0, -(k / 9) * 30.0), PI * 0.82, poses[k], true)
+	for row in 3:
+		var mid := base + Vector3(0, 0, -row * 30.0)
+		var cam := _camera(g, mid + Vector3(3.5, 2.0, 11.5), mid + Vector3(0, 0.9, 0), 38.0)
+		for shot in 2:
+			await g.get_tree().create_timer(0.55).timeout
+			await _snap(g, "poses_%d_%d" % [row, shot])
+		cam.queue_free()
+	g.debug_result("poses", true, "%d poses" % poses.size())
+
+
+## Punch somebody in a busy street: the people round about should see it and deal with it,
+## nobody should run through a wall doing so, and nobody should be spirited away.
+static func _panic(g: Node) -> void:
+	var crowd = g.crowd
+	var pl = g.local_player
+	# The busiest stretch of promenade there is.
+	var victim := -1
+	var most := 0
+	for i in range(0, crowd.count, 3):
+		if crowd.state[i] != crowd.AMBIENT or crowd.pos[i].z < 41.0 or crowd.pos[i].z > 50.0 or crowd._lying[i] == 1 or crowd._walker[i] == 1:
+			continue
+		var n: int = crowd.count_near(crowd.pos[i], 12.0)
+		if n > most:
+			most = n
+			victim = i
+	var at: Vector3 = crowd.pos[victim]
+	var near: Array = []
+	var alive_before: int = 0
+	for i in crowd.count:
+		if crowd.state[i] < crowd.DEAD:
+			alive_before += 1
+		if i != victim and crowd.state[i] == crowd.AMBIENT and crowd.pos[i].distance_to(at) < 12.0:
+			near.append(i)
+	var where := {}
+	for i in near:
+		where[i] = crowd.pos[i]
+	pl.global_position = at + Vector3(0, 0.2, -1.2)
+	pl.rotation.y = PI
+	crowd.hp[victim] = 500.0
+	var cam: Camera3D = null
+	if out_dir() != "":
+		cam = _camera(g, at + Vector3(7, 9, -13), at + Vector3(0, 0.5, 2), 55.0)
+		await g.get_tree().create_timer(0.4).timeout
+		await _snap(g, "panic_0")
+	g._last_attack.clear()
+	g.srv_attack(at + Vector3(0, 1.5 * crowd._scale[victim], -1.2), Vector3(0, 0, 1))
+	var shots := [0.9, 2.2, 4.5]
+	var reacted := 0
+	var t := 0.0
+	var inside := 0
+	var stuck := {}
+	for k in shots.size():
+		while t < shots[k]:
+			await g.get_tree().process_frame
+			t += g.get_process_delta_time()
+			for i in near:
+				# Whoever was sitting at a table has to get up from it first.
+				if crowd.state[i] == crowd.FLEE and crowd._ov[i][5] and Nav.blocked(crowd.pos[i]) and not Nav.blocked(where[i]) and not stuck.has(i):
+					stuck[i] = crowd.pos[i]
+					inside += 1
+		if cam != null:
+			await _snap(g, "panic_%d" % (k + 1))
+	var ran := 0
+	var stared := 0
+	var far := 0
+	for i in near:
+		if crowd.state[i] == crowd.FLEE or crowd.state[i] == crowd.COWER or crowd.pos[i].distance_to(where[i]) > 3.0:
+			ran += 1
+			if crowd.pos[i].distance_to(at) > 14.0:
+				far += 1
+		elif crowd.state[i] == crowd.HOSTILE or [Kit.FILM, Kit.POINT, Kit.LOOK].has(int(crowd._idle[i])):
+			stared += 1
+	var alive_after := 0
+	for i in crowd.count:
+		if crowd.state[i] < crowd.DEAD:
+			alive_after += 1
+	var ok: bool = near.size() >= 8 and ran + stared >= near.size() * 0.6 and ran >= near.size() * 0.4 and far >= ran * 0.5 and inside == 0 and alive_after == alive_before and crowd._scream_ms > 0
+	g.debug_result("panic", ok, "bystanders %d ran %d (got clear %d) stared %d, inside things %d, vanished %d, screamed %s " % [near.size(), ran, far, stared, inside, alive_before - alive_after, crowd._scream_ms > 0] + str(stuck))
