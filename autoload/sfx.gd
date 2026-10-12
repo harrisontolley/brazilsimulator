@@ -172,6 +172,21 @@ func _build() -> void:
 	made["yelp"] = _wav(_voice(0.24, [700.0, 1250.0, 1100.0, 600.0], [1100.0, 2300.0], 0.12, 13), false)
 	made["whine"] = _wav(_voice(0.65, [820.0, 980.0, 900.0, 700.0], [900.0, 2500.0], 0.05, 14), false)
 	made["bite"] = _wav(_bite(), false)
+	# Each gun its own voice.
+	made["revolver"] = _wav(_gun(0.55, 110.0, 40.0, 0.07, 0.16, 0.9), false)
+	made["smg"] = _wav(_gun(0.25, 210.0, 90.0, 0.03, 0.07, 1.0), false)
+	made["rifle"] = _wav(_gun(0.5, 170.0, 55.0, 0.045, 0.14, 0.85), false)
+	made["shotgun"] = _wav(_gun(0.8, 95.0, 32.0, 0.1, 0.22, 0.45), false)
+	made["sniper"] = _wav(_sniper(), false)
+	made["launch"] = _wav(_launch(), false)
+	made["rocket"] = _wav(_rocket(), true)
+	made["boom"] = _wav(_boom(), false)
+	made["clink"] = _wav(_clink(), false)
+	made["smash"] = _wav(_smash(), false)
+	made["fire"] = _wav(_fire(), true)
+	made["throw"] = _wav(_throw(), false)
+	made["tick"] = _wav(_tick(1500.0), false)
+	made["tick_kill"] = _wav(_tick(900.0), false)
 	for k in BABBLE:
 		made["babble%d" % k] = _wav(_syllable(k), false)
 	_adopt.call_deferred(made)
@@ -382,6 +397,131 @@ func _voice(seconds: float, pitch: Array, vowel: Array, rough: float, seed_value
 		breath += 0.5 * (rng.randf_range(-1.0, 1.0) - breath)
 		var env := minf(1.0, u * 18.0) * minf(1.0, (1.0 - u) * 5.0)
 		f[i] = (v * (1.0 + rough * breath * 1.5) + breath * rough * 2.0) * env
+	return f
+
+
+## A gunshot: the crack, the thump under it that slides from `hz` to `hz_end`, and a tail of
+## `tail` seconds. `soft` below 1 takes the top off the crack.
+func _gun(seconds: float, hz: float, hz_end: float, thump: float, tail: float, soft: float) -> PackedFloat32Array:
+	var f := _buf(seconds)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = int(hz * 7.0)
+	_hiss(f, rng, 0.0, 0.012, 1.0, soft)
+	_hiss(f, rng, 0.0, tail, 0.45, 0.2)
+	_tone(f, 0.0, hz, hz_end, thump, 0.9)
+	return f
+
+
+## A crack that takes the air apart, and then the valley answering.
+func _sniper() -> PackedFloat32Array:
+	var f := _buf(1.6)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 31
+	_hiss(f, rng, 0.0, 0.006, 1.2, 1.0)
+	_hiss(f, rng, 0.0, 0.3, 0.5, 0.25)
+	_tone(f, 0.0, 240.0, 45.0, 0.06, 1.0)
+	_hiss(f, rng, 0.28, 0.25, 0.16, 0.08)
+	_hiss(f, rng, 0.6, 0.3, 0.09, 0.05)
+	return f
+
+
+## A cough and a rising roar as the motor lights.
+func _launch() -> PackedFloat32Array:
+	var f := _buf(0.9)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 32
+	_hiss(f, rng, 0.0, 0.04, 1.0, 0.5)
+	_tone(f, 0.0, 90.0, 40.0, 0.09, 0.9)
+	var y := 0.0
+	for i in f.size():
+		var t := float(i) / RATE
+		y += 0.25 * (rng.randf_range(-1.0, 1.0) - y)
+		f[i] += y * minf(1.0, t * 14.0) * exp(-t * 3.0) * 0.8
+	return f
+
+
+## The motor of a rocket going past, to loop while it flies.
+func _rocket() -> PackedFloat32Array:
+	var f := _buf(0.5)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 33
+	var y := 0.0
+	for i in f.size():
+		var t := float(i) / RATE
+		y += 0.3 * (rng.randf_range(-1.0, 1.0) - y)
+		f[i] = y * (0.75 + 0.25 * sin(TAU * 46.0 * t)) + sin(TAU * 92.0 * t) * 0.12
+	return f
+
+
+## The big one: a crack, a slam you feel in the chest, and rubble coming down after it.
+func _boom() -> PackedFloat32Array:
+	var f := _buf(2.4)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 34
+	_hiss(f, rng, 0.0, 0.02, 1.0, 0.9)
+	_tone(f, 0.0, 85.0, 24.0, 0.22, 1.3)
+	_tone(f, 0.02, 48.0, 20.0, 0.35, 0.9)
+	_hiss(f, rng, 0.0, 0.45, 0.7, 0.12)
+	_hiss(f, rng, 0.35, 0.5, 0.25, 0.05)
+	for k in 9:
+		_hiss(f, rng, 0.5 + rng.randf() * 1.2, 0.03, 0.12, 0.4)
+	return f
+
+
+## Metal off concrete.
+func _clink() -> PackedFloat32Array:
+	var f := _buf(0.2)
+	_tone(f, 0.0, 2600.0, 2400.0, 0.03, 0.6)
+	_tone(f, 0.0, 3900.0, 3700.0, 0.02, 0.4)
+	_tone(f, 0.0, 700.0, 500.0, 0.012, 0.5)
+	return f
+
+
+## A bottle going, and what was in it catching.
+func _smash() -> PackedFloat32Array:
+	var f := _buf(0.9)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 35
+	_hiss(f, rng, 0.0, 0.03, 1.0, 1.0)
+	for k in 8:
+		_tone(f, rng.randf() * 0.12, rng.randf_range(2500.0, 6000.0), rng.randf_range(2200.0, 5000.0), 0.03, 0.3)
+	_hiss(f, rng, 0.06, 0.25, 0.6, 0.1)
+	_tone(f, 0.06, 70.0, 40.0, 0.12, 0.6)
+	return f
+
+
+## Flames, to loop: a low rush with the crackle on top.
+func _fire() -> PackedFloat32Array:
+	var f := _buf(1.5)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 36
+	var y := 0.0
+	for i in f.size():
+		y += 0.06 * (rng.randf_range(-1.0, 1.0) - y)
+		f[i] = y * 3.0
+	for k in 40:
+		_hiss(f, rng, rng.randf() * 1.4, 0.004, rng.randf_range(0.1, 0.5), 1.0)
+	return f
+
+
+## An arm coming over.
+func _throw() -> PackedFloat32Array:
+	var f := _buf(0.25)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 37
+	var y := 0.0
+	for i in f.size():
+		var u := float(i) / f.size()
+		y += (0.05 + u * 0.3) * (rng.randf_range(-1.0, 1.0) - y)
+		f[i] = y * sin(u * PI)
+	return f
+
+
+## The small sound of having hit something: for the shooter's ears only.
+func _tick(hz: float) -> PackedFloat32Array:
+	var f := _buf(0.09)
+	_tone(f, 0.0, hz, hz * 0.8, 0.012, 0.8)
+	_tone(f, 0.0, hz * 2.0, hz * 1.9, 0.006, 0.4)
 	return f
 
 

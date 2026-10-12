@@ -65,6 +65,8 @@ const HEAD := Vector3(0, 1.3, 0)
 const BODY_SCALE := 0.78
 const VM_RIGHT := Vector3(0.3, -0.3, -0.75)
 const VM_LEFT := Vector3(-0.3, -0.32, -0.7)
+## How long an arm takes to draw all the way back.
+const THROW_WIND := 0.9
 ## Ayahuasca: how fast the wandering eye flies, and how far from the body it may go.
 const SPIRIT_SPEED := 14.0
 const SPIRIT_REACH := 70.0
@@ -150,6 +152,9 @@ var _vm_l: Node3D
 var _vm_guns := {}  # Kit.HELD_* -> the model shown in the right hand
 var _vm_t := -10.0
 var _vm_side := 1.0
+var _wind := -1.0   # seconds an arm has been drawn back to throw, -1 when it is not
+## Eye to the scope of whatever is in hand, for the HUD to draw it.
+var scoped := false
 var _send_t := 0.0
 var _near_t := 0.0
 var _rob_t := 0.0
@@ -235,6 +240,10 @@ func _build_viewmodel() -> void:
 		# Big and close, the way a gun fills the corner of the eye.
 		gun.position = Vector3(0.0, 0.04, -0.06)
 		gun.scale = Vector3.ONE * 1.3
+		if held == Kit.HELD_LAUNCHER:
+			# The tube sits on the shoulder, off to the side of the picture, not across it.
+			gun.position = Vector3(0.12, 0.0, 0.2)
+			gun.scale = Vector3.ONE * 0.95
 		gun.visible = false
 		_vm_r.add_child(gun)
 		_vm_guns[held] = gun
@@ -1073,10 +1082,15 @@ func fx_event(attack: bool) -> void:
 		rig.kick = 0.05
 
 
+## How far back the arm is drawn to throw: 0 not at all, 1 as hard as it goes.
+func wind_up() -> float:
+	return clampf(_wind / THROW_WIND, 0.0, 1.0) if _wind >= 0.0 else 0.0
+
+
 ## Where this player's shots visibly leave from: the gun in first person, the hand otherwise.
 func muzzle() -> Vector3:
 	if is_local and rig.first_person():
-		return rig.cam.global_transform * Vector3(0.24, -0.16, -0.95)
+		return rig.cam.global_transform * DB.ITEMS[st.equipped].get("muzzle", Vector3(0.24, -0.16, -0.95))
 	var pitch: float = rig.rotation.x if is_local else net_pitch
 	return global_position + Vector3(0, 1.0, 0) + global_basis * (Basis(Vector3.RIGHT, pitch) * Vector3(0.2, 0.0, -0.75))
 
@@ -1097,8 +1111,9 @@ func play(what: String, seconds: float) -> void:
 
 
 func _animate_viewmodel() -> void:
-	_vm.visible = rig.first_person() and not st.dead
+	_vm.visible = rig.first_person() and not st.dead and not scoped
 	var gun: bool = DB.is_gun(st.equipped)
+	var long_gun: bool = DB.ITEMS[st.equipped].get("held", 0) >= Kit.HELD_SHOTGUN and gun
 	for held in _vm_guns:
 		_vm_guns[held].visible = held == DB.ITEMS[st.equipped].held
 	var dt := Kit.now() - _vm_t
@@ -1112,12 +1127,24 @@ func _animate_viewmodel() -> void:
 		_vm_r.position = Vector3(0.24, -0.24, -0.7) + sway + Vector3(0.0, 0.03, 0.1) * e
 		_vm_r.rotation.x = 0.35 * e
 		_vm_l.position = VM_LEFT + Vector3(0.0, -0.12, 0.1)
+		if long_gun:
+			# Both hands on it: the left out along the barrel.
+			_vm_r.position = Vector3(0.2, -0.26, -0.55) + sway + Vector3(0.0, 0.02, 0.14) * e
+			_vm_r.rotation.x = 0.16 * e
+			_vm_l.position = Vector3(0.1, -0.2, -0.95) + sway + Vector3(0.0, 0.02, 0.14) * e
 		# Reloading: the gun drops out of view and comes back up.
 		var r := clampf((Kit.now() - _reload_t) / _reload_len, 0.0, 1.0)
 		var dip := sin(r * PI)
 		_vm_r.position += Vector3(0.0, -0.22, 0.05) * dip
 		_vm_r.rotation.x += 0.7 * dip
 		_vm_l.position += Vector3(0.12, 0.06, -0.1) * dip
+	elif DB.kind_of(st.equipped) == "thrown":
+		# Drawn back over the shoulder as it winds up, then over the top.
+		var k := wind_up()
+		_vm_r.position += Vector3(0.05, 0.22, 0.3) * k + Vector3(-0.15, 0.2, -0.5) * e
+	elif DB.ITEMS[st.equipped].get("held", 0) == Kit.HELD_BAT:
+		_vm_r.position += Vector3(-0.35, 0.05, -0.3) * e
+		_vm_r.rotation.x = -0.9 * e
 	elif _vm_side > 0.0:
 		_vm_r.position += Vector3(-0.2, 0.14, -0.45) * e
 	else:
@@ -1140,7 +1167,10 @@ func _local_process(delta: float) -> void:
 
 	# Meth: sniper zoom while high. Whatever else is in the blood shakes or sways the view.
 	var aiming := captured and Input.is_action_pressed("aim")
-	rig.fov_target = (20.0 if is_sniper() else Settings.fov * 0.73) if aiming else Settings.fov
+	var glass: float = DB.ITEMS[st.equipped].get("scope", 0.0)
+	scoped = aiming and glass > 0.0 and can_fight() and mv != MV_RIDE
+	rig.scoped = scoped
+	rig.fov_target = (Settings.fov / glass if scoped else (20.0 if is_sniper() else Settings.fov * 0.73)) if aiming else Settings.fov
 	rig.shake = _fx_sum("shake")
 	# Ketamine past the limit: the view lifts out of the body lying on the floor.
 	if drug_phase("ketamine") == "od":
@@ -1156,19 +1186,41 @@ func _local_process(delta: float) -> void:
 		MV_RIDE: rig.roll_target = _ride_steer * 0.5
 		_: rig.roll_target = clampf(-velocity.dot(global_basis.x) * 0.004, -0.05, 0.05)
 	rig.roll_target += sin(Kit.now() * 1.3) * _fx_sum("sway")
+	if scoped:
+		# Nobody holds a rifle perfectly still: the picture drifts, less so crouched.
+		var drift := 0.0016 * (0.35 if _crouched else 1.0) * (1.0 + hspeed() * 0.6)
+		rig.rotation.x = clampf(rig.rotation.x + sin(Kit.now() * 1.1) * drift * delta * 4.0, -1.45, 1.45)
+		rotate_y(cos(Kit.now() * 0.8) * drift * delta * 4.0)
 
 	_attack_t -= delta
 	_rob_t -= delta
 	robbing = false
 	if captured and can_fight():
-		if (Input.is_action_pressed("attack") or is_raging()) and _attack_t <= 0.0:
-			_attack_t = DB.ITEMS[st.equipped].cooldown
-			# The point on the line of sight level with the head: where the blow starts from.
-			var cam: Vector3 = rig.cam.global_position
-			g.to_server("srv_attack", [cam + dir * maxf(0.0, (head - cam).dot(dir)), dir])
-			if DB.ITEMS[st.equipped].melee:
+		var w: Dictionary = DB.ITEMS[st.equipped]
+		var kind := DB.kind_of(st.equipped)
+		# The point on the line of sight level with the head: where the blow starts from.
+		var cam: Vector3 = rig.cam.global_position
+		var from := cam + dir * maxf(0.0, (head - cam).dot(dir))
+		if kind == "thrown":
+			# Hold to draw the arm back, let go to throw: the longer, the further.
+			if Input.is_action_pressed("attack") and _attack_t <= 0.0:
+				_wind = maxf(_wind, 0.0) + delta
+			elif _wind >= 0.0:
+				g.to_server("srv_attack", [from, dir, wind_up()])
+				_attack_t = w.cooldown
 				_vm_t = Kit.now()
-				_vm_side = -_vm_side
+				_wind = -1.0
+		else:
+			_wind = -1.0
+			# A fist or a machine gun goes on for as long as it is asked to; anything else
+			# wants the trigger let go between shots.
+			var pulled: bool = Input.is_action_pressed("attack") if (w.melee or w.get("auto", false)) else Input.is_action_just_pressed("attack")
+			if (pulled or is_raging()) and _attack_t <= 0.0:
+				_attack_t = w.cooldown
+				g.to_server("srv_attack", [from, dir])
+				if w.melee:
+					_vm_t = Kit.now()
+					_vm_side = -_vm_side
 		if Input.is_action_just_pressed("reload"):
 			g.to_server("srv_reload")
 		if Input.is_action_just_pressed("rob") and snatch_npc >= 0:
@@ -1182,6 +1234,10 @@ func _local_process(delta: float) -> void:
 			g.to_server("srv_equip", [_next_weapon(DB.MELEE)])
 		if Input.is_action_just_pressed("weapon_2"):
 			g.to_server("srv_equip", [_next_weapon(DB.GUNS)])
+		if Input.is_action_just_pressed("weapon_3"):
+			g.to_server("srv_equip", [_next_weapon(DB.HEAVY)])
+		if Input.is_action_just_pressed("weapon_4"):
+			g.to_server("srv_equip", [_next_weapon(DB.THROWN)])
 		var held := drugs_held()
 		if not held.has(drug_sel):
 			drug_sel = held[0] if not held.is_empty() else ""

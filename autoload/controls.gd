@@ -12,6 +12,8 @@ const KEYS := {
 	"interact": KEY_F,
 	"weapon_1": KEY_1,
 	"weapon_2": KEY_2,
+	"weapon_3": KEY_3,
+	"weapon_4": KEY_4,
 	"drug_prev": KEY_Z,
 	"drug_next": KEY_X,
 	"drug_use": KEY_G,

@@ -103,10 +103,11 @@ const int PART_BROW_R = 11;
 const int HELD_GUN = 2;
 const int HELD_LONG = 5;
 const int HELD_LAUNCHER = 8;
-const int PROP_HELD = 32;
 const int PROP_CUP = 41;
 const int PROP_PHONE = 42;
 const int PROP_SPADE = 43;
+// Whatever is in the right hand: PROP_HELD + its held id.
+const int PROP_HELD = 64;
 
 struct Pose {
 	vec3 arm_l;   // x: swing forward, y: raise sideways, z: elbow bend
@@ -700,11 +701,11 @@ bool prop_shown(int prop, int flags, int held, int pose) {
 	if (prop == 0) {
 		return true;
 	}
-	if (prop < PROP_HELD) {
-		return (flags & (1 << (prop - 1))) != 0;
+	if (prop >= PROP_HELD) {
+		return held == prop - PROP_HELD;
 	}
 	if (prop < PROP_CUP) {
-		return held == prop - PROP_HELD;
+		return (flags & (1 << (prop - 1))) != 0;
 	}
 	if (prop == PROP_CUP) {
 		return pose == P_DRINK || pose == P_SIT_DRINK;

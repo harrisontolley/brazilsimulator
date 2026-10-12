@@ -186,6 +186,15 @@ func _goal_at(p: Vector3) -> bool:
 	return false
 
 
+## A blast at `at` sends every ball within `radius` of it flying.
+func srv_blast(at: Vector3, radius: float) -> void:
+	for i in _bodies.size():
+		var b := _bodies[i]
+		var to := b.global_position - at
+		if to.length() < radius and _reset[i] <= 0.0:
+			b.linear_velocity = (to.normalized() + Vector3(0, 0.7, 0)).normalized() * SHOT_SPEED * 1.6 * (1.0 - to.length() / radius * 0.6)
+
+
 ## An attack along a ray: sends the first ball it meets flying. Returns the distance, or -1.
 func srv_strike(o: Vector3, d: Vector3, reach: float, pid: int, power: float) -> float:
 	for i in _bodies.size():

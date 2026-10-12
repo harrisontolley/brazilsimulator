@@ -91,7 +91,7 @@ const HELD_MOLOTOV := 10
 const HELD_BAT := 11
 
 # Props that follow the hand or the pose rather than a flag bit (shader PROP_*).
-const _PROP_HELD := 32
+const _PROP_HELD := 64
 const _PROP_CUP := 41
 const _PROP_PHONE := 42
 const _PROP_SPADE := 43

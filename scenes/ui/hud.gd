@@ -508,9 +508,14 @@ func _process(delta: float) -> void:
 	_hp.value = st.hp
 	_money.text = "R$ %d" % st.money
 	var w = DB.ITEMS[st.equipped]
-	_weapon.text = w.name if w.melee else "%s  [%d / %d]" % [w.name, st.mag.get(st.equipped, 0), st.ammo]
-	if not w.melee and st.mag.get(st.equipped, 0) == 0:
-		_weapon.text += "   R: reload" if st.ammo > 0 else "   EMPTY"
+	if DB.is_gun(st.equipped):
+		_weapon.text = "%s  [%d / %d]" % [w.name, st.mag.get(st.equipped, 0), DB.spare(st, st.equipped)]
+	elif DB.kind_of(st.equipped) == "thrown":
+		_weapon.text = "%s  x%d" % [w.name, st.inv.get(st.equipped, 0)]
+	else:
+		_weapon.text = w.name
+	if DB.is_gun(st.equipped) and st.mag.get(st.equipped, 0) == 0:
+		_weapon.text += "   R: reload" if DB.spare(st, st.equipped) > 0 else "   EMPTY"
 	_mark_t -= delta
 	_mark.visible = _mark_t > 0.0
 

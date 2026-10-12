@@ -130,6 +130,7 @@ var _pose := PackedByteArray()     # Kit pose now showing, NO_POSE before the fi
 var _prev := PackedByteArray()     # the pose it is blending out of
 var _pose_t := PackedFloat32Array()  # Kit.now() when the pose last changed
 var _scream_ms := 0
+var _gibbed := {}          # idx -> true: nothing left of them to show
 var _mm: MultiMesh
 var _held: MultiMesh
 var _held_slot := {}   # idx -> slot in _held
@@ -178,6 +179,7 @@ func setup(seed_value: int) -> void:
 	_calls.clear()
 	_cower.clear()
 	_calm.clear()
+	_gibbed.clear()
 	_gawk.clear()
 	_waves.clear()
 	_bodies.clear()
@@ -378,7 +380,8 @@ func setup(seed_value: int) -> void:
 		top.a = rng.randf()
 		tops.append(top)
 		_look[i] = look | spot.get("look", 0)
-		_gun[i] = 1 if a.id == "traficante" else 0
+		# The boca's soldiers carry rifles, and carry them where everyone can see.
+		_gun[i] = Kit.HELD_RIFLE if a.id == "traficante" else 0
 
 	_plan_rounds(rng)
 	order.sort_custom(func(x, y): return x[0] < y[0])
@@ -555,7 +558,7 @@ func _restyle(i: int) -> void:
 	var pose := Kit.STAND
 	var speed := 0.0
 	var flags: int = _look[i] | Kit.TIER_PROPS[_tier[i]]
-	var held: int = Kit.HELD_PISTOL if _gun[i] == 1 else Kit.HELD_NONE
+	var held: int = _gun[i]
 	match state[i]:
 		AMBIENT:
 			if _lying[i] == 1:
@@ -597,7 +600,9 @@ func _restyle(i: int) -> void:
 			speed = HOSTILE_SPEED if _moving.get(i, false) else 0.0
 			flags |= Kit.F_ANGRY
 			if _shooter.has(i):
-				held = Kit.HELD_PISTOL
+				held = _gun[i] if _gun[i] > 0 else Kit.HELD_PISTOL
+				if held >= Kit.HELD_SHOTGUN:
+					pose = Kit.AIM_LONG
 		KO:
 			pose = Kit.KO
 			held = Kit.HELD_NONE
@@ -1073,6 +1078,9 @@ func cl_npc(i: int, s: int, p: Vector3, dir: Vector3, t0: float, flags: int) -> 
 		DEAD:
 			_ev[i] = Kit.now()
 			_place(i, p)
+			if _gibbed.has(i):
+				_hide(i)
+				return
 			if absf(MatchState.time - t0) < 1.0:
 				Sfx.play("die", p + Vector3(0, 1.0, 0), 0.0, 0.8 + (i * 7 % 50) * 0.01)
 			# The body tips forward, so the pool goes under where the chest lands.
@@ -1568,6 +1576,48 @@ func srv_panic(at: Vector3, radius: float, level: int, pid: int, spread := true)
 		_waves.append([t + 1.1, at, radius * 1.6, level, pid])
 
 
+## A blast at `at`: everybody within `radius` who is not behind something takes their share.
+## The dead are thrown clear of it, and the ones at the middle of it are not found at all.
+func srv_blast(at: Vector3, radius: float, dmg: float, pid: int) -> void:
+	var g = Net.game
+	var from := at + Vector3(0, 0.35, 0)
+	for i in count:
+		if state[i] >= DEAD or absf(pos[i].x - at.x) > radius or absf(pos[i].z - at.z) > radius or absf(pos[i].y - at.y) > radius:
+			continue
+		var c := pos[i] + Vector3(0, 0.9, 0)
+		var d := c.distance_to(at)
+		if d > radius or (d > 1.5 and not g._clear(from, c)):
+			continue
+		var f: float = g.blast_share(d, radius)
+		if hp[i] - dmg * f <= 0.0:
+			var away := Vector3(pos[i].x - at.x, 0, pos[i].z - at.z)
+			away = away.normalized() if away.length() > 0.05 else Vector3(cos(i), 0, sin(i))
+			if f > 0.85:
+				g.bcast("cl_gib", [i, pos[i]], self)
+			pos[i] = pos[i] + away * Nav.free_run(pos[i], away, 1.0 + 3.0 * f)
+			_yaw[i] = Kit.face(away)
+		srv_damage_npc(i, dmg * f, pid)
+
+
+## NPC i was at the middle of it.
+@rpc("authority", "call_remote", "reliable")
+func cl_gib(i: int, at: Vector3) -> void:
+	if i >= 0 and i < count:
+		_gibbed[i] = true
+		Net.game.fx.gibs(at)
+
+
+## Fire at `at`: everybody standing in it is burnt and wants to be somewhere else.
+func srv_burn(at: Vector3, radius: float, dmg: float, pid: int) -> void:
+	for i in count:
+		if state[i] >= DEAD or absf(pos[i].x - at.x) > radius or absf(pos[i].z - at.z) > radius or absf(pos[i].y - at.y) > 2.0:
+			continue
+		if pos[i].distance_to(at) < radius:
+			srv_damage_npc(i, dmg, pid)
+			if state[i] == AMBIENT or state[i] == COWER or state[i] == KO:
+				_srv_flee(i, at)
+
+
 ## Sends someone who ran back to where they started the day.
 func _srv_go_home(i: int) -> void:
 	if state[i] != AMBIENT or _grp[i] >= 0 or pos[i].distance_to(_origin[i]) < 2.0 or absf(pos[i].y - _origin[i].y) > 1.0:
@@ -1626,10 +1676,10 @@ func _srv_hostile(i: int, delta: float) -> void:
 		var hit := randf() < 0.55
 		var from := pos[i] + Vector3(0, 1.3, 0)
 		var to_pt: Vector3 = p.global_position + Vector3(0, 1.0, 0) + (Vector3.ZERO if hit else Vector3(randf_range(-1, 1), randf_range(0.5, 1.5), randf_range(-1, 1)))
-		g.bcast("cl_fx", [from, to_pt, false, DB.WHO_NPC, i, DB.WHO_PLAYER if hit else DB.WHO_NONE, h.target])
+		g.bcast("cl_fx", [from, to_pt, false, DB.WHO_NPC, i, DB.WHO_PLAYER if hit else DB.WHO_NONE, h.target, 0, "fuzil" if _gun[i] == Kit.HELD_RIFLE else "pistol"])
 		Crime.report_noise(pos[i], 80.0, -1)
 		if hit:
-			g.srv_damage(h.target, 14.0, -1)
+			g.srv_damage(h.target, 20.0 if _gun[i] == Kit.HELD_RIFLE else 14.0, -1)
 	elif h.get("mug", false) and d < 1.8 and dy < 2.0:
 		# Not here to fight: one shove, a hand in the pocket, and away.
 		_hostile.erase(i)

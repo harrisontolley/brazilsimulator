@@ -26,6 +26,8 @@ static func run(g: Node, what: String) -> bool:
 			await _panic(g)
 		"dogs":
 			await _dogs(g)
+		"arsenal", "shotgun", "sniper", "rocket", "grenade", "molotov":
+			await _arsenal(g, what)
 		_:
 			return false
 	return true
@@ -394,3 +396,196 @@ static func _dogs(g: Node) -> void:
 		followed = dogs.dogs[pal].state == D.FOLLOW
 	var ok: bool = breeds.size() == 8 and warned and bitten and pick[0] == mean and dead and fled > 10.0 and followed and inside == 0 and pl.st.hp >= 100.0
 	g.debug_result("dogs", ok, "breeds %d dogs %d, warned %s bitten %s after %.1f s, ray found it %s, died %s, shy one %.1f m off, friend follows %s, inside things %d" % [breeds.size(), dogs.dogs.size(), warned, bitten, bite_t, pick[0] == mean, dead, fled, followed, inside])
+
+
+## Puts `item` in the local player's hands, loaded, with plenty to spare.
+static func _arm(g: Node, item: String) -> void:
+	var st: Dictionary = g.local_player.st
+	g._give(st, item, 3 if DB.kind_of(item) == "thrown" else 1)
+	if DB.is_gun(item):
+		st.mag[item] = DB.ITEMS[item].mag
+		g._give(st, DB.feed_of(item), 20)
+	st.equipped = item
+	g._last_attack.clear()
+	g._reload.clear()
+
+
+## Stands crowd member i at `at` with `hp` to lose.
+static func _dummy(g: Node, i: int, at: Vector3, hp := 100.0) -> void:
+	g.crowd.debug_pose(i, at, 0.0, Kit.STAND)
+	g.crowd.hp[i] = hp
+
+
+## Everybody back to the far end of the beach with no hard feelings, and the player mended.
+static func _reset(g: Node) -> void:
+	g.crowd._hostile.clear()
+	g.crowd._active.clear()
+	g.crowd._ov.clear()
+	g.crowd._calm.clear()
+	g.crowd._waves.clear()
+	for k in 40:
+		_dummy(g, k, Vector3(-280 + k * 2, 0, -34))
+	g.local_player.st.hp = 100.0
+	g.local_player.st.ko = 0.0
+
+
+## The heavier end of the armoury, one piece at a time. `only` runs just that part.
+static func _arsenal(g: Node, only: String) -> void:
+	var crowd = g.crowd
+	var pl = g.local_player
+	var keep: Array = []
+	for k in 40:
+		keep.append(k)
+	crowd.debug_only(keep)
+	for i in g.dogs.dogs.size():
+		g.dogs.debug_pose(i, Vector3(-250 + i * 3, 0, -30), 0.0, g.dogs.SIT)
+	for k in 40:
+		_dummy(g, k, Vector3(-280 + k * 2, 0, -34))
+	var base := _clearing(11.0)
+	var eye := Vector3(0, 1.25, 0)
+	var out: Array = []
+	var ok := true
+	pl.global_position = base + Vector3(0, 0.05, 0)
+	pl.st.hp = 100.0
+	await g.get_tree().create_timer(0.3).timeout
+
+	if only == "arsenal" or only == "shotgun":
+		# Close up it takes a man apart; down the beach it stings.
+		_dummy(g, 0, base + Vector3(0, 0, -4), 1000.0)
+		_dummy(g, 1, base + Vector3(8, 0, -30), 1000.0)
+		_arm(g, "shotgun")
+		g.srv_attack(base + eye, (crowd.pos[0] + Vector3(0, 1.0, 0) - base - eye).normalized())
+		var near: float = 1000.0 - crowd.hp[0]
+		g._last_attack.clear()
+		g.srv_attack(base + eye, (crowd.pos[1] + Vector3(0, 1.0, 0) - base - eye).normalized())
+		var far: float = 1000.0 - crowd.hp[1]
+		var good: bool = near > 60.0 and far < near * 0.5 and pl.st.mag.shotgun == 3
+		ok = ok and good
+		out.append("shotgun %s: %.0f at 4 m, %.0f at 31 m" % [good, near, far])
+
+	if only == "arsenal" or only == "sniper":
+		_reset(g)
+		# Through the first man and into the one behind him, from the far end of the beach.
+		# Along the sand, wherever there is that much of it with nothing standing on it.
+		var from := base
+		var along := Vector3(1, 0, 0)
+		for dz in [0.0, 6.0, -6.0, 12.0, -12.0, 18.0, -18.0, 24.0]:
+			for dir in [Vector3(1, 0, 0), Vector3(-1, 0, 0)]:
+				var a: Vector3 = base + Vector3(0, 1.0, dz)
+				if g._clear(a, a + dir * 156.0) and g._clear(a + Vector3(0, -0.6, 0), a + dir * 156.0 + Vector3(0, -0.6, 0)) and from == base:
+					from = base + Vector3(0, 0, dz) + Vector3(0.001, 0, 0)
+					along = dir
+		pl.global_position = from + Vector3(0, 0.05, 0)
+		_dummy(g, 2, from + along * 150.0)
+		_dummy(g, 3, from + along * 153.0)
+		_arm(g, "sniper")
+		Input.action_press("aim")
+		await g.get_tree().create_timer(0.4).timeout
+		var scoped: bool = pl.scoped and pl.is_aiming() and pl.rig.fov_target < 15.0
+		g.srv_attack(from + eye, (crowd.pos[2] + Vector3(0, 1.0, 0) - from - eye).normalized())
+		Input.action_release("aim")
+		pl.global_position = base + Vector3(0, 0.05, 0)
+		var good: bool = scoped and crowd.state[2] == crowd.DEAD and crowd.state[3] == crowd.DEAD
+		ok = ok and good
+		out.append("sniper %s: scoped %s, first %s, one behind %s" % [good, scoped, crowd.state[2] == crowd.DEAD, crowd.state[3] == crowd.DEAD])
+		await g.get_tree().create_timer(0.2).timeout
+
+	if only == "arsenal" or only == "rocket":
+		_reset(g)
+		# It takes its time getting there, kills what it lands among, and a wall is cover.
+		_dummy(g, 4, base + Vector3(0, 0, -30))
+		_dummy(g, 5, base + Vector3(2.5, 0, -31))
+		_dummy(g, 6, base + Vector3(-22, 0, -30))
+		_arm(g, "rpg")
+		pl.st.hp = 100.0
+		g.srv_attack(base + eye, (crowd.pos[4] + Vector3(0, 0.3, 0) - base - eye).normalized())
+		var flew: bool = g.shots.flying.size() == 1 and crowd.state[4] != crowd.DEAD
+		var t := 0.0
+		while t < 3.0 and not g.shots.flying.is_empty():
+			await g.get_tree().process_frame
+			t += g.get_process_delta_time()
+		var wall := AABB()
+		for box in DB.solids:
+			if box.size.y > 3.0 and minf(box.size.x, box.size.z) < 1.0 and maxf(box.size.x, box.size.z) > 6.0:
+				wall = box
+				break
+		var n := Vector3(1, 0, 0) if wall.size.x < wall.size.z else Vector3(0, 0, 1)
+		var mid := wall.get_center()
+		mid.y = 0.0
+		_dummy(g, 7, mid + n * 3.5)
+		_dummy(g, 8, mid - n * 1.6)
+		g.srv_explode(mid + n * 2.2 + Vector3(0, 0.3, 0), 7.5, 230.0, 1)
+		var good: bool = flew and t > 0.3 and t < 2.0 and crowd.state[4] == crowd.DEAD and crowd.state[5] == crowd.DEAD and crowd.state[6] != crowd.DEAD and pl.st.hp >= 100.0 and wall.size.y > 0.0 and crowd.state[7] == crowd.DEAD and crowd.state[8] != crowd.DEAD
+		ok = ok and good
+		out.append("rocket %s: flew %.2f s, target %s, beside it %s, 22 m off spared %s, shooter spared %s, open side of wall %s, behind wall spared %s" % [good, t, crowd.state[4] == crowd.DEAD, crowd.state[5] == crowd.DEAD, crowd.state[6] != crowd.DEAD, pl.st.hp >= 100.0, crowd.state[7] == crowd.DEAD, crowd.state[8] != crowd.DEAD])
+
+	if only == "arsenal" or only == "grenade":
+		_reset(g)
+		# Thrown, it lands, bounces, rolls and then goes off, among whoever is standing there.
+		for k in 8:
+			_dummy(g, 10 + k, base + Vector3(-4.0 + (k % 2) * 8.0, 0, -9.0 - (k / 2) * 4.0))
+		for k in 5:
+			_dummy(g, 20 + k, base + Vector3(0, 0, -10.0 - k * 3.0))
+		_arm(g, "grenade")
+		pl.st.hp = 100.0
+		var had: int = pl.st.inv.grenade
+		g.srv_attack(base + eye, Vector3(0, 0.25, -1).normalized(), 0.45)
+		var id: int = g.shots.flying.keys()[0] if not g.shots.flying.is_empty() else -1
+		var bounces := 0
+		var was_vy := 0.0
+		var t := 0.0
+		var last := base
+		while t < 5.0 and g.shots.flying.has(id):
+			var s: Dictionary = g.shots.flying[id]
+			if was_vy < -1.0 and s.vel.y > 0.3:
+				bounces += 1
+			was_vy = s.vel.y
+			last = s.pos
+			await g.get_tree().process_frame
+			t += g.get_process_delta_time()
+		var dead := 0
+		for k in range(10, 25):
+			if crowd.state[k] == crowd.DEAD:
+				dead += 1
+		var good: bool = id >= 0 and bounces >= 1 and absf(t - 2.6) < 0.4 and last.distance_to(base) > 6.0 and dead >= 1 and pl.st.inv.get("grenade", 0) == had - 1
+		ok = ok and good
+		out.append("grenade %s: %d bounces, went off at %.2f s %.0f m away, killed %d, %d left in the pocket" % [good, bounces, t, last.distance_to(base), dead, pl.st.inv.get("grenade", 0)])
+
+	if only == "arsenal" or only == "molotov":
+		_reset(g)
+		# It breaks where it lands and whoever is standing there burns and runs.
+		var side := base + Vector3(9, 0, 0)
+		_dummy(g, 30, side + Vector3(0, 0, -8), 400.0)
+		_arm(g, "molotov")
+		pl.global_position = side + Vector3(0, 0.05, 0)
+		await g.get_tree().create_timer(0.2).timeout
+		g.srv_attack(side + eye, Vector3(0, 0.33, -1).normalized(), 0.0)
+		var t := 0.0
+		while t < 3.0 and g.shots.fires.is_empty():
+			await g.get_tree().process_frame
+			t += g.get_process_delta_time()
+		var lit: bool = not g.shots.fires.is_empty()
+		var where: Vector3 = g.shots.fires[0][0] if lit else Vector3.ZERO
+		await g.get_tree().create_timer(1.6).timeout
+		var burnt: float = 400.0 - crowd.hp[30]
+		var good: bool = lit and where.distance_to(crowd.pos[30]) < 9.0 and burnt > 10.0 and crowd.state[30] != crowd.AMBIENT
+		ok = ok and good
+		out.append("molotov %s: lit %s %.1f m from him, burnt %.0f, he is %s" % [good, lit, where.distance_to(crowd.pos[30]) if lit else -1.0, burnt, "running" if crowd.state[30] == crowd.FLEE else str(crowd.state[30])])
+		if out_dir() != "":
+			var cam := _camera(g, side + Vector3(6, 3.0, 2), where + Vector3(0, 0.5, 0), 55.0)
+			await _snap(g, "molotov")
+			cam.queue_free()
+
+	if out_dir() != "":
+		# One for the album: a rocket into a crowd, seen from the side.
+		var spot := base + Vector3(-12, 0, 0)
+		for k in 8:
+			_dummy(g, 32 + k, spot + Vector3(cos(k * 0.8) * 2.2, 0, -14 + sin(k * 0.8) * 2.2), 60.0)
+		var cam := _camera(g, spot + Vector3(11, 3.5, -8), spot + Vector3(0, 1.0, -14), 55.0)
+		g.hud.visible = false
+		g.srv_explode(spot + Vector3(0, 0.3, -14), 7.5, 230.0, 1)
+		for k in 3:
+			await g.get_tree().create_timer([0.06, 0.3, 1.2][k]).timeout
+			await _snap(g, "boom_%d" % k)
+		cam.queue_free()
+	g.debug_result(only, ok, "; ".join(out))

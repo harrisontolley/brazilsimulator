@@ -4,14 +4,30 @@ extends Node
 const ITEMS := {
 	# Weapons. `held` is the Kit.HELD_* shown in the hand. `ko`: a blow to the head can knock
 	# someone out. Guns carry `mag` rounds, take `reload` seconds to refill, kick the view up by
-	# `recoil`, and a shot to the head kills outright `head_kill` of the time.
+	# `recoil`, and a shot to the head kills outright `head_kill` of the time. `auto` ones keep
+	# firing while the trigger is held. `pellets` leave the barrel together; `pierce` is how
+	# many bodies a round goes on through; a `scope` steadies it when aimed and `hip` is how
+	# wild it is when not. `feed` is the item its rounds come from, where that is not "ammo".
+	# `kind` "rocket" flies and bursts over `blast` metres; "thrown" leaves the hand, and the
+	# thing itself is the ammunition: `fuse` seconds, or flames for `burn` seconds where it lands.
+	# `sound` is what it sounds like, `muzzle` where the barrel ends in the first-person view.
 	"fists": {"name": "Fists", "type": "weapon", "melee": true, "damage": 12.0, "range": 2.3, "cooldown": 0.45, "spread": 0.0, "intimidation": 1.0, "price": 0, "held": 0, "ko": true},
 	"estoque": {"name": "Estoque", "type": "weapon", "melee": true, "damage": 22.0, "range": 2.0, "cooldown": 0.5, "spread": 0.0, "intimidation": 1.6, "price": 80, "held": 1},
 	"knife": {"name": "Faca", "type": "weapon", "melee": true, "damage": 28.0, "range": 2.1, "cooldown": 0.5, "spread": 0.0, "intimidation": 1.8, "price": 150, "held": 1},
-	"pistol": {"name": "Pistol", "type": "weapon", "melee": false, "damage": 34.0, "range": 60.0, "cooldown": 0.35, "spread": 0.035, "intimidation": 2.5, "price": 400, "held": 2, "mag": 12, "reload": 1.4, "recoil": 0.03, "head_kill": 0.85},
-	"revolver": {"name": "Três-oitão", "type": "weapon", "melee": false, "damage": 55.0, "range": 70.0, "cooldown": 0.6, "spread": 0.02, "intimidation": 2.8, "price": 900, "held": 3, "mag": 6, "reload": 2.2, "recoil": 0.065, "head_kill": 1.0},
-	"smg": {"name": "Submetralhadora", "type": "weapon", "melee": false, "damage": 16.0, "range": 45.0, "cooldown": 0.09, "spread": 0.06, "intimidation": 3.0, "price": 1500, "held": 4, "mag": 30, "reload": 2.0, "recoil": 0.016, "head_kill": 0.45},
+	"pistol": {"name": "Pistol", "type": "weapon", "melee": false, "damage": 34.0, "range": 60.0, "cooldown": 0.22, "spread": 0.035, "intimidation": 2.5, "price": 400, "held": 2, "mag": 12, "reload": 1.4, "recoil": 0.03, "head_kill": 0.85},
+	"revolver": {"name": "Três-oitão", "type": "weapon", "melee": false, "damage": 55.0, "range": 70.0, "cooldown": 0.5, "spread": 0.02, "intimidation": 2.8, "price": 900, "held": 3, "mag": 6, "reload": 2.2, "recoil": 0.065, "head_kill": 1.0, "sound": "revolver"},
+	"smg": {"name": "Submetralhadora", "type": "weapon", "melee": false, "damage": 16.0, "range": 45.0, "cooldown": 0.09, "spread": 0.06, "intimidation": 3.0, "price": 1500, "held": 4, "mag": 30, "reload": 2.0, "recoil": 0.016, "head_kill": 0.45, "auto": true, "sound": "smg"},
+	"taco": {"name": "Taco", "type": "weapon", "melee": true, "damage": 32.0, "range": 2.8, "cooldown": 0.7, "spread": 0.0, "intimidation": 2.0, "price": 120, "held": 11, "shove": 7.0},
+	"shotgun": {"name": "Escopeta", "type": "weapon", "melee": false, "damage": 14.0, "pellets": 9, "range": 34.0, "cooldown": 0.95, "spread": 0.085, "intimidation": 3.2, "price": 1800, "held": 5, "mag": 5, "reload": 2.6, "recoil": 0.11, "head_kill": 0.2, "feed": "shells", "sound": "shotgun", "muzzle": Vector3(0.2, -0.13, -1.25)},
+	"fuzil": {"name": "Fuzil", "type": "weapon", "melee": false, "damage": 30.0, "range": 120.0, "cooldown": 0.105, "spread": 0.026, "intimidation": 3.5, "price": 3200, "held": 6, "mag": 30, "reload": 2.4, "recoil": 0.024, "head_kill": 0.7, "auto": true, "sound": "rifle", "muzzle": Vector3(0.2, -0.13, -1.3)},
+	"sniper": {"name": "Sniper", "type": "weapon", "melee": false, "damage": 160.0, "range": 420.0, "cooldown": 1.5, "spread": 0.0015, "hip": 0.09, "intimidation": 3.5, "price": 4500, "held": 7, "mag": 5, "reload": 3.0, "recoil": 0.13, "head_kill": 1.0, "feed": "rounds", "scope": 9.0, "pierce": 1, "sound": "sniper", "muzzle": Vector3(0.2, -0.13, -1.5)},
+	"rpg": {"name": "Lança-rojão", "type": "weapon", "melee": false, "kind": "rocket", "damage": 230.0, "blast": 7.5, "range": 300.0, "cooldown": 1.2, "spread": 0.006, "intimidation": 4.0, "price": 6000, "held": 8, "mag": 1, "reload": 2.8, "recoil": 0.16, "head_kill": 0.0, "feed": "rocket", "sound": "launch", "muzzle": Vector3(0.24, -0.02, -1.1)},
+	"grenade": {"name": "Granada", "type": "weapon", "melee": false, "kind": "thrown", "damage": 190.0, "blast": 7.0, "fuse": 2.6, "range": 40.0, "cooldown": 0.9, "spread": 0.0, "intimidation": 3.0, "price": 350, "held": 9, "stack": true},
+	"molotov": {"name": "Molotov", "type": "weapon", "melee": false, "kind": "thrown", "damage": 13.0, "blast": 3.6, "burn": 7.0, "range": 40.0, "cooldown": 0.9, "spread": 0.0, "intimidation": 3.0, "price": 200, "held": 10, "stack": true},
 	"ammo": {"name": "Ammo x12", "type": "ammo", "amount": 12, "price": 60},
+	"shells": {"name": "Cartuchos x8", "type": "ammo", "amount": 8, "price": 90},
+	"rounds": {"name": "Sniper rounds x5", "type": "ammo", "amount": 5, "price": 220},
+	"rocket": {"name": "Rojão", "type": "ammo", "amount": 1, "price": 700},
 	# Drugs. `fx` is what each phase does to the body: multipliers on speed, melee damage dealt,
 	# damage `taken`, mic loudness, jump height, gravity (`grav`), gun `recoil`, how fast heat
 	# cools (`cool`) and how far off a cop picks you out (`seen`); `shake` and `sway` are added
@@ -97,8 +113,10 @@ const OD_ROBBED := 0.3
 ## Where a bad trip may leave you: a rooftop on the avenue, or up to the waist in the sea.
 const WAKE_SPOTS := [Vector3(60.0, 0.2, 86.0), Vector3(-40.0, 0.2, -44.0)]
 ## What the two weapon keys cycle through.
-const MELEE := ["fists", "knife", "estoque"]
-const GUNS := ["pistol", "revolver", "smg"]
+const MELEE := ["fists", "knife", "estoque", "taco"]
+const GUNS := ["pistol", "revolver", "smg", "shotgun", "fuzil"]
+const HEAVY := ["sniper", "rpg"]
+const THROWN := ["grenade", "molotov"]
 ## A head shot that does not kill outright still does this much more.
 const HEAD_MULT := 2.5
 # What came of a hit, as sent in Game.cl_fx.
@@ -139,7 +157,7 @@ const LOOT := ["phone", "watch", "camera", "chain"]
 ## `till` shops keep cash that can be taken at gunpoint.
 const VENDORS := [
 	{"name": "DEALER", "kind": "shop", "pos": Vector3(-60, 0, 47), "stock": ["cocaine", "weed", "meth", "lanca", "bala", "doce", "ketamine"], "color": Color(0.2, 0.7, 0.3)},
-	{"name": "ARMS", "kind": "shop", "pos": Vector3(80, 0, 47), "stock": ["knife", "pistol", "revolver", "smg", "ammo"], "color": Color(0.25, 0.25, 0.3)},
+	{"name": "ARMS", "kind": "shop", "pos": Vector3(80, 0, 47), "stock": ["knife", "taco", "pistol", "revolver", "smg", "shotgun", "fuzil", "sniper", "rpg", "grenade", "molotov", "ammo", "shells", "rounds", "rocket"], "color": Color(0.25, 0.25, 0.3)},
 	{"name": "QUIOSQUE 1", "kind": "shop", "till": true, "pos": Vector3(-240, 0, 47), "stock": FOOD, "color": Color(0.9, 0.3, 0.2)},
 	{"name": "QUIOSQUE 2", "kind": "shop", "till": true, "pos": Vector3(-150, 0, 47), "stock": FOOD, "color": Color(0.95, 0.6, 0.1)},
 	{"name": "QUIOSQUE 3", "kind": "shop", "till": true, "pos": Vector3(10, 0, 47), "stock": FOOD, "color": Color(0.9, 0.3, 0.2)},
@@ -229,8 +247,38 @@ static func wealth_tier(cash: int) -> int:
 	return 2 if cash >= WEALTH_TIERS[1] else (1 if cash >= WEALTH_TIERS[0] else 0)
 
 
+## Something with a magazine to empty and refill.
 static func is_gun(item: String) -> bool:
-	return GUNS.has(item)
+	return ITEMS.has(item) and ITEMS[item].has("mag")
+
+
+## What kind of weapon `item` is: "melee", "shot" (a bullet that is there the instant it is
+## fired), "rocket" or "thrown".
+static func kind_of(item: String) -> String:
+	var w: Dictionary = ITEMS[item]
+	return "melee" if w.melee else w.get("kind", "shot")
+
+
+## The item a gun's rounds are bought as.
+static func feed_of(item: String) -> String:
+	return ITEMS[item].get("feed", "ammo")
+
+
+## How many rounds for `item` the player with state `st` has that are not in the gun.
+static func spare(st: Dictionary, item: String) -> int:
+	var feed := feed_of(item)
+	return st.ammo if feed == "ammo" else st.inv.get(feed, 0)
+
+
+## Takes n of them.
+static func take_spare(st: Dictionary, item: String, n: int) -> void:
+	var feed := feed_of(item)
+	if feed == "ammo":
+		st.ammo -= n
+	else:
+		st.inv[feed] = st.inv.get(feed, 0) - n
+		if st.inv[feed] <= 0:
+			st.inv.erase(feed)
 
 
 ## Distance along ray (o, d) at which it passes nearest the segment a-b, or -1 if it never

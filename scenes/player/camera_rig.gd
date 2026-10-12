@@ -18,6 +18,8 @@ var height_target := 1.3
 var dip := 0.0
 ## Where the view sits away from the head, in the body's own axes: out of it, mostly.
 var offset := Vector3.ZERO
+## Eye to a scope: the view goes to the head whatever distance it was following at.
+var scoped := false
 
 var _arm: SpringArm3D
 var _step := 0
@@ -62,7 +64,7 @@ func first_person() -> bool:
 
 
 func _process(delta: float) -> void:
-	_arm.spring_length = lerpf(_arm.spring_length, STEPS[_step], minf(1.0, 12.0 * delta))
+	_arm.spring_length = lerpf(_arm.spring_length, 0.0 if scoped else STEPS[_step], minf(1.0, (30.0 if scoped else 12.0) * delta))
 	cam.fov = lerpf(cam.fov, fov_target + fov_boost, minf(1.0, 10.0 * delta))
 	_height = lerpf(_height, height_target, minf(1.0, 14.0 * delta))
 	position = Vector3(offset.x, _height + offset.y, offset.z)

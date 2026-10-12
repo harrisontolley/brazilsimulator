@@ -151,7 +151,16 @@ func update(delta: float, mode: int, state: int, spd: float, vy: float, turn: fl
 		_out[HEAD] -= aim * 0.55
 		_out[HEAD + 1] += clampf(turn * 0.07, -0.4, 0.4)
 		_out[LEAN] -= aim * 0.14
-		if held >= 2:
+		if held >= 5 and held <= 8:
+			# Something that takes both hands: one on the grip, one out under the barrel.
+			_out[ARM_R] = 1.45 + aim * 0.9
+			_out[ARM_R + 1] = 0.0
+			_out[ARM_R + 2] = 0.05
+			_out[0] = 1.4 + aim * 0.9
+			_out[1] = -0.5
+			_out[2] = 0.3
+			_out[LEAN] += 0.08 if aiming else 0.0
+		elif held >= 2 and held <= 4:
 			_out[ARM_R] = 1.45 + aim * 0.9
 			_out[ARM_R + 1] = 0.0
 			_out[ARM_R + 2] = 0.05
@@ -159,7 +168,7 @@ func update(delta: float, mode: int, state: int, spd: float, vy: float, turn: fl
 				_out[0] = 1.25 + aim * 0.9
 				_out[1] = -0.35
 				_out[2] = 0.5
-		elif held == 1:
+		elif held == 1 or held >= 9:
 			_out[ARM_R] = 0.55
 			_out[ARM_R + 1] = 0.15
 			_out[ARM_R + 2] = 1.0

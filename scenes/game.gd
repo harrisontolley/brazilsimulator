@@ -15,6 +15,7 @@ const Motos := preload("res://scenes/world/motos.gd")
 const Crowd := preload("res://scenes/crowd/crowd_manager.gd")
 const Police := preload("res://scenes/police/police_manager.gd")
 const Dogs := preload("res://scenes/crowd/dog_manager.gd")
+const Shots := preload("res://scenes/weapons/projectiles.gd")
 const Hud := preload("res://scenes/ui/hud.gd")
 const Kit := preload("res://scenes/characters/char_kit.gd")
 const Layout := preload("res://scenes/world/layout.gd")
@@ -28,6 +29,13 @@ const WeaponKit := preload("res://scenes/weapons/weapon_kit.gd")
 const DrugKit := preload("res://scenes/items/drug_kit.gd")
 const Nav := preload("res://scenes/world/nav.gd")
 const LifeTests := preload("res://scenes/life_tests.gd")
+
+## cl_fx `mode` bits: a further pellet of the same shot (no second bang), the same round
+## after it has gone through somebody, a throw, a rocket leaving the tube.
+const FX_PELLET := 1
+const FX_THROUGH := 2
+const FX_THROW := 4
+const FX_LAUNCH := 8
 
 const END_SCREEN_TIME := 15.0
 const PICKUP_RANGE := 2.6
@@ -47,6 +55,7 @@ var events: Node3D
 var crowd: Node3D
 var police: Node3D
 var dogs: Node3D
+var shots: Node3D
 var hud: CanvasLayer
 var fx: Node3D
 var interaction: Node
@@ -105,6 +114,9 @@ func _ready() -> void:
 	dogs = Dogs.new()
 	dogs.name = "Dogs"
 	add_child(dogs)
+	shots = Shots.new()
+	shots.name = "Shots"
+	add_child(shots)
 	threats = Threats.new()
 	threats.name = "Threats"
 	add_child(threats)
@@ -449,7 +461,8 @@ func _debug_test(what: String) -> void:
 			local_player.global_position = Vector3(-20, 0.2, 45)
 			local_player.rotation.y = -PI / 2.0
 			_debug_side_cam()
-			for item in ["knife", "pistol", "revolver", "smg"]:
+			var kit := ["knife", "taco", "pistol", "revolver", "smg", "shotgun", "fuzil", "sniper", "rpg", "grenade", "molotov"]
+			for item in kit:
 				_give(local_player.st, item, 1)
 				local_player.st.equipped = item
 				await get_tree().create_timer(0.5).timeout
@@ -457,7 +470,7 @@ func _debug_test(what: String) -> void:
 			local_player.get_child(local_player.get_child_count() - 1).current = false
 			local_player.rig.cam.current = true
 			local_player.rig.zoom(-2)
-			for item in ["knife", "pistol", "revolver", "smg"]:
+			for item in kit:
 				local_player.st.equipped = item
 				await get_tree().create_timer(0.5).timeout
 				await _debug_frames("fp_" + item, 1, 0.05)
@@ -1135,9 +1148,9 @@ func _srv_tick_player(p: CharacterBody3D, delta: float, od_tick: bool) -> void:
 			_reload.erase(p.id)
 		elif r[1] <= 0.0:
 			_reload.erase(p.id)
-			var n: int = mini(DB.ITEMS[r[0]].mag - st.mag.get(r[0], 0), st.ammo)
+			var n: int = mini(DB.ITEMS[r[0]].mag - st.mag.get(r[0], 0), DB.spare(st, r[0]))
 			st.mag[r[0]] = st.mag.get(r[0], 0) + n
-			st.ammo -= n
+			DB.take_spare(st, r[0], n)
 			dirty = true
 	if st.ko > 0.0:
 		st.ko -= delta
@@ -1501,8 +1514,9 @@ func _srv_kill(p: CharacterBody3D, attacker: int) -> void:
 
 ## `origin` is where on the attacker's line of sight the blow starts: the point on the camera
 ## ray beside their head, so a shot goes where the crosshair says in third person too.
+## `charge` is how hard something thrown was thrown, 0..1.
 @rpc("any_peer", "call_remote", "reliable")
-func srv_attack(origin: Vector3, dir: Vector3) -> void:
+func srv_attack(origin: Vector3, dir: Vector3, charge := 0.0) -> void:
 	var pid := Net.sender()
 	var p = players.get(pid)
 	if p == null or not p.can_fight() or dir.length_squared() < 0.5:
@@ -1511,7 +1525,8 @@ func srv_attack(origin: Vector3, dir: Vector3) -> void:
 		# Too far gone for anything with moving parts.
 		p.st.equipped = "fists"
 		push_state(p)
-	var w = DB.ITEMS[p.st.equipped]
+	var item: String = p.st.equipped
+	var w = DB.ITEMS[item]
 	var now := Time.get_ticks_msec()
 	if now - _last_attack.get(pid, 0) < w.cooldown * 1000.0 - 60.0:
 		return
@@ -1522,90 +1537,216 @@ func srv_attack(origin: Vector3, dir: Vector3) -> void:
 	var eye: Vector3 = p.eye()
 	if origin.distance_to(eye) > 1.5 or not _clear(eye, origin):
 		origin = eye
-	var reach: float = w.range
-	var crouched: bool = p.is_crouched()
-	if not w.melee:
+	var kind := DB.kind_of(item)
+	if kind == "thrown":
+		_srv_throw(p, item, origin, dir, clampf(charge, 0.0, 1.0))
+		return
+	if kind != "melee":
 		if _reload.has(pid):
 			return
-		if p.st.mag.get(p.st.equipped, 0) <= 0:
+		if p.st.mag.get(item, 0) <= 0:
 			send(pid, "cl_sound", ["dry", eye])
 			_srv_reload(p)
 			return
-		p.st.mag[p.st.equipped] -= 1
+		p.st.mag[item] -= 1
 		# Rounds are the shooter's business; nobody else needs every one of them.
 		send(pid, "cl_state", [pid, p.st])
+	if kind == "rocket":
+		shots.srv_launch(Shots.ROCKET, origin + dir * 0.9, dir * Shots.ROCKET_SPEED, pid, item)
+		bcast("cl_fx", [origin, origin + dir * 1.2, false, DB.WHO_PLAYER, pid, DB.WHO_NONE, -1, 0, item, FX_LAUNCH])
+		Crime.report_noise(origin, 90.0, pid)
+		Crime.report_crime(origin, pid, 3)
+		_srv_reload(p)
+		return
+
+	var reach: float = w.range
+	var spread := 0.0
+	if kind == "shot":
 		if p.is_sniper():
 			reach *= 2.5
 		else:
-			# Steadier crouched, wilder in the air.
-			var spread: float = w.spread * (0.6 if crouched else (1.5 if p.net_byte() & 7 == Player.MV_AIR else 1.0))
-			dir = (dir + Vector3(randf_range(-1, 1), randf_range(-1, 1), randf_range(-1, 1)) * spread).normalized()
-
-	var hit := _ray_hit(origin, dir, reach, 0.35 if w.melee else 0.0, pid)
-	# A football in the way takes the hit instead, and takes off.
-	var ball_t: float = balls.srv_strike(origin, dir, hit.t, pid, 1.0 if w.melee else 1.5)
-	if ball_t >= 0.0:
-		bcast("cl_fx", [origin, origin + dir * ball_t, w.melee, DB.WHO_PLAYER, pid, DB.WHO_NONE, -1])
-		bcast("cl_sound", ["kick", origin + dir * ball_t])
-		if not w.melee:
-			Crime.report_noise(origin, 90.0, pid)
-			Crime.report_crime(origin, pid, 3)
-		return
-	# And the pair on the bike who just had your wallet.
-	var bike_t: float = threats.srv_strike(origin, dir, hit.t)
-	if bike_t >= 0.0:
-		bcast("cl_fx", [origin, origin + dir * bike_t, w.melee, DB.WHO_PLAYER, pid, DB.WHO_NONE, -1])
-		if not w.melee:
-			Crime.report_noise(origin, 90.0, pid)
-		return
-	var dmg: float = w.damage * (p.melee_mult() if w.melee else 1.0)
-	# So does the armoured truck, when there is one to crack.
-	var truck_t: float = events.srv_strike(origin, dir, hit.t, dmg, pid)
-	if truck_t >= 0.0:
-		bcast("cl_fx", [origin, origin + dir * truck_t, w.melee, DB.WHO_PLAYER, pid, DB.WHO_NONE, -1])
-		if not w.melee:
-			Crime.report_noise(origin, 90.0, pid)
-		return
-	var res := 0
-	var ko: bool = w.get("ko", false)
-	if hit.type != DB.WHO_NONE and hit.zone == DB.ZONE_HEAD:
-		res |= DB.FX_HEAD
-		if w.melee:
-			dmg *= 1.5
-		elif randf() < w.head_kill:
-			# One in the head: that is that, most of the time.
-			dmg = 9999.0
-			res |= DB.FX_KILL
-		else:
-			dmg *= DB.HEAD_MULT
-	match hit.type:
-		DB.WHO_PLAYER:
-			if srv_damage(hit.id, dmg, pid, hit.zone, ko):
-				res |= DB.FX_KO
-			if w.melee and p.drug_phase("bomba") != "" and p.drug_phase("bomba") != "down":
-				# A fist with a needle behind it: whoever it lands on leaves the ground.
-				send(hit.id, "cl_knock", [dir * 9.0 + Vector3(0, 6.0, 0)])
-		DB.WHO_COP:
-			if police.srv_damage_cop(hit.id, dmg, pid, hit.zone, ko):
-				res |= DB.FX_KO
-		DB.WHO_NPC:
-			if crowd.srv_damage_npc(hit.id, dmg, pid, hit.zone, ko):
-				res |= DB.FX_KO
-		DB.WHO_DOG:
-			if dogs.srv_damage(hit.id, dmg, pid):
-				res |= DB.FX_KILL
-	bcast("cl_fx", [origin, origin + dir * hit.t, w.melee, DB.WHO_PLAYER, pid, hit.type, hit.id, res])
-	if p.st.jail > 0.0 and w.melee and hit.type != DB.WHO_NONE:
-		prison.srv_fight(p, origin + dir * hit.t, res & DB.FX_KO != 0)
-
-	if not w.melee:
+			# A scope is only any use looked through. Steadier crouched, wilder in the air.
+			spread = w.hip if w.has("scope") and not p.is_aiming() else w.spread
+			spread *= 0.6 if p.is_crouched() else (1.5 if p.net_byte() & 7 == Player.MV_AIR else 1.0)
+	var struck := false
+	for k in w.get("pellets", 1):
+		var d := (dir + Vector3(randf_range(-1, 1), randf_range(-1, 1), randf_range(-1, 1)) * spread).normalized()
+		struck = _srv_strike(p, item, origin, d, reach, k) or struck
+	if kind != "melee":
 		Crime.report_noise(origin, 90.0, pid)
 		Crime.report_crime(origin, pid, 3)
-	elif hit.type != DB.WHO_NONE:
+		if w.mag == 1:
+			_srv_reload(p)
+	elif struck:
 		Crime.report_crime(origin, pid, 2)
 		# Inside, a fight is the afternoon's entertainment.
 		if p.st.jail <= 0.0:
-			crowd.srv_fight_seen(origin + dir * hit.t, pid)
+			crowd.srv_fight_seen(origin + dir * 1.2, pid)
+
+
+## One blow or one round from `p` along `dir`: what it meets, and what that does to it.
+## `k` is which pellet of the shot this is. Returns whether it struck somebody.
+func _srv_strike(p, item: String, origin: Vector3, dir: Vector3, reach: float, k: int) -> bool:
+	var pid: int = p.id
+	var w = DB.ITEMS[item]
+	var mode := FX_PELLET if k > 0 else 0
+	var struck := false
+	var from := origin
+	for pass_k in w.get("pierce", 0) + 1:
+		var hit := _ray_hit(from, dir, reach, 0.35 if w.melee else 0.0, pid)
+		# A football in the way takes the hit instead, and takes off.
+		var ball_t: float = balls.srv_strike(from, dir, hit.t, pid, 1.0 if w.melee else 1.5)
+		if ball_t >= 0.0:
+			bcast("cl_fx", [origin, from + dir * ball_t, w.melee, DB.WHO_PLAYER, pid, DB.WHO_NONE, -1, 0, item, mode])
+			bcast("cl_sound", ["kick", from + dir * ball_t])
+			return struck
+		# And the pair on the bike who just had your wallet.
+		var bike_t: float = threats.srv_strike(from, dir, hit.t)
+		if bike_t >= 0.0:
+			bcast("cl_fx", [origin, from + dir * bike_t, w.melee, DB.WHO_PLAYER, pid, DB.WHO_NONE, -1, 0, item, mode])
+			return struck
+		var dmg: float = w.damage * (p.melee_mult() if w.melee else 1.0)
+		if w.has("pellets"):
+			# Shot spreads and tires: murder across a room, a nuisance across a street.
+			dmg *= lerpf(1.0, 0.4, clampf(hit.t / reach, 0.0, 1.0))
+		# So does the armoured truck, when there is one to crack.
+		var truck_t: float = events.srv_strike(from, dir, hit.t, dmg, pid)
+		if truck_t >= 0.0:
+			bcast("cl_fx", [origin, from + dir * truck_t, w.melee, DB.WHO_PLAYER, pid, DB.WHO_NONE, -1, 0, item, mode])
+			return struck
+		var res := 0
+		var ko: bool = w.get("ko", false)
+		if hit.type != DB.WHO_NONE and hit.zone == DB.ZONE_HEAD:
+			res |= DB.FX_HEAD
+			if w.melee:
+				dmg *= 1.5
+			elif randf() < w.head_kill:
+				# One in the head: that is that, most of the time.
+				dmg = 9999.0
+				res |= DB.FX_KILL
+			else:
+				dmg *= DB.HEAD_MULT
+		match hit.type:
+			DB.WHO_PLAYER:
+				var victim = players[hit.id]
+				if srv_damage(hit.id, dmg, pid, hit.zone, ko):
+					res |= DB.FX_KO
+				if victim.st.dead:
+					res |= DB.FX_KILL
+				if w.melee and p.drug_phase("bomba") != "" and p.drug_phase("bomba") != "down":
+					# A fist with a needle behind it: whoever it lands on leaves the ground.
+					send(hit.id, "cl_knock", [dir * 9.0 + Vector3(0, 6.0, 0)])
+				elif w.has("shove"):
+					send(hit.id, "cl_knock", [dir * w.shove + Vector3(0, 3.0, 0)])
+			DB.WHO_COP:
+				if police.srv_damage_cop(hit.id, dmg, pid, hit.zone, ko):
+					res |= DB.FX_KO
+				if police.cops[hit.id].state == Police.DOWN:
+					res |= DB.FX_KILL
+			DB.WHO_NPC:
+				if crowd.srv_damage_npc(hit.id, dmg, pid, hit.zone, ko):
+					res |= DB.FX_KO
+				if crowd.state[hit.id] == Crowd.DEAD:
+					res |= DB.FX_KILL
+			DB.WHO_DOG:
+				if dogs.srv_damage(hit.id, dmg, pid):
+					res |= DB.FX_KILL
+		bcast("cl_fx", [from if pass_k > 0 else origin, from + dir * hit.t, w.melee, DB.WHO_PLAYER, pid, hit.type, hit.id, res, item, mode | (FX_THROUGH if pass_k > 0 else 0)])
+		if p.st.jail > 0.0 and w.melee and hit.type != DB.WHO_NONE:
+			prison.srv_fight(p, from + dir * hit.t, res & DB.FX_KO != 0)
+		if hit.type == DB.WHO_NONE:
+			break
+		struck = true
+		# On through them, if it is that kind of round, to whoever is standing behind.
+		from += dir * (hit.t + 0.75)
+		reach -= hit.t + 0.75
+		mode |= FX_PELLET
+		if reach <= 1.0:
+			break
+	return struck
+
+
+## Something leaves `p`'s hand: a grenade, a bottle. `charge` 0..1 is how hard.
+func _srv_throw(p, item: String, origin: Vector3, dir: Vector3, charge: float) -> void:
+	var st: Dictionary = p.st
+	if st.inv.get(item, 0) <= 0:
+		return
+	st.inv[item] -= 1
+	if st.inv[item] <= 0:
+		# The last one: whatever else is in the same pocket, or bare hands.
+		st.inv.erase(item)
+		st.equipped = "fists"
+		for other in DB.THROWN:
+			if st.inv.get(other, 0) > 0:
+				st.equipped = other
+	push_state(p)
+	var aim := (dir + Vector3(0, 0.2, 0)).normalized()
+	var vel: Vector3 = aim * lerpf(11.0, 25.0, charge) + Vector3(p.velocity.x, 0.0, p.velocity.z) * 0.5
+	shots.srv_launch(Shots.MOLOTOV if item == "molotov" else Shots.GRENADE, origin + dir * 0.6 + Vector3(0, -0.1, 0), vel, p.id, item)
+	bcast("cl_fx", [origin, origin + dir, true, DB.WHO_PLAYER, p.id, DB.WHO_NONE, -1, 0, item, FX_THROW])
+
+
+## How much of a blast reaches something `d` away from the middle of it.
+static func blast_share(d: float, radius: float) -> float:
+	return clampf(1.3 * (1.0 - d / radius), 0.0, 1.0)
+
+
+## Something goes off at `at`: everybody within `radius` with nothing solid between them and
+## it is hurt, the nearer the worse, and thrown. `pid` set it off.
+func srv_explode(at: Vector3, radius: float, dmg: float, pid: int) -> void:
+	bcast("cl_boom", [at, radius])
+	var from := at + Vector3(0, 0.35, 0)
+	for id in players.keys():
+		var p = players[id]
+		var c: Vector3 = p.global_position + Vector3(0, 0.9, 0)
+		var d := c.distance_to(at)
+		if p.st.dead or d > radius or (d > 1.5 and not _clear(from, c)):
+			continue
+		var f := blast_share(d, radius)
+		send(id, "cl_knock", [(c - at + Vector3(0, 0.6, 0)).normalized() * (5.0 + 13.0 * f)])
+		srv_damage(id, dmg * f, pid)
+	for i in police.cops.size():
+		var c: Vector3 = police.cops[i].pos + Vector3(0, 0.9, 0)
+		var d := c.distance_to(at)
+		if d < radius and (d < 1.5 or _clear(from, c)):
+			police.srv_damage_cop(i, dmg * blast_share(d, radius), pid)
+	crowd.srv_blast(at, radius, dmg, pid)
+	for e in dogs.within(at, radius):
+		var c: Vector3 = dogs.dogs[e[0]].pos + Vector3(0, 0.4, 0)
+		if e[1] < 1.5 or _clear(from, c):
+			dogs.srv_damage(e[0], dmg * blast_share(e[1], radius), pid)
+	balls.srv_blast(at, radius)
+	# The carro-forte is armoured, not bomb-proof.
+	if events.kind == Events.CARRO_FORTE:
+		var to: Vector3 = events.at + Vector3(0, 1.3, 0) - from
+		if to.length() < radius + 2.0:
+			events.srv_strike(from, to.normalized(), radius + 2.0, dmg, pid)
+	Crime.report_noise(at, 170.0, pid)
+	Crime.report_crime(at, pid, 3)
+
+
+## Fire at `at` licks everybody standing within `radius` of it.
+func srv_scorch(at: Vector3, radius: float, dmg: float, pid: int) -> void:
+	for id in players.keys():
+		var p = players[id]
+		if not p.st.dead and Vector2(p.global_position.x - at.x, p.global_position.z - at.z).length() < radius and absf(p.global_position.y - at.y) < 1.8:
+			srv_damage(id, dmg, pid)
+			send(id, "cl_fx", [at, p.global_position + Vector3(0, 0.8, 0), true, DB.WHO_NONE, -1, DB.WHO_PLAYER, id])
+	for i in police.cops.size():
+		if police.cops[i].pos.distance_to(at) < radius:
+			police.srv_damage_cop(i, dmg, pid)
+	crowd.srv_burn(at, radius, dmg, pid)
+	for e in dogs.within(at, radius):
+		dogs.srv_damage(e[0], dmg, pid)
+
+
+@rpc("authority", "call_remote", "reliable")
+func cl_boom(at: Vector3, radius: float) -> void:
+	fx.explosion(at, radius)
+	Sfx.play("boom", at, 12.0)
+	if local_player != null:
+		var d: float = local_player.global_position.distance_to(at)
+		local_player.rig.kick = maxf(local_player.rig.kick, clampf(0.4 * (1.0 - d / 70.0), 0.0, 0.4))
 
 
 ## Nothing solid between a and b.
@@ -1654,7 +1795,7 @@ func srv_reload() -> void:
 
 func _srv_reload(p) -> void:
 	var item: String = p.st.equipped
-	if not DB.is_gun(item) or _reload.has(p.id) or p.st.ammo <= 0 or p.st.mag.get(item, 0) >= DB.ITEMS[item].mag:
+	if not DB.is_gun(item) or _reload.has(p.id) or DB.spare(p.st, item) <= 0 or p.st.mag.get(item, 0) >= DB.ITEMS[item].mag:
 		return
 	_reload[p.id] = [item, DB.ITEMS[item].reload]
 	bcast("cl_anim", [p.id, "reload", DB.ITEMS[item].reload])
@@ -1670,22 +1811,41 @@ func cl_anim(pid: int, what: String, seconds: float) -> void:
 
 ## One attack: who threw it, where it went and who (if anyone) it struck. DB.WHO_* types.
 @rpc("authority", "call_remote", "unreliable")
-## `res` is DB.FX_* bits: a head hit, an outright kill, a knockout.
-func cl_fx(from: Vector3, to: Vector3, melee: bool, src_type: int, src_id: int, hit_type: int, hit_id: int, res := 0) -> void:
-	_fx_actor(src_type, src_id, true)
+## `res` is DB.FX_* bits: a head hit, an outright kill, a knockout. `item` is what did it, and
+## `mode` FX_* bits say which part of the show this is.
+func cl_fx(from: Vector3, to: Vector3, melee: bool, src_type: int, src_id: int, hit_type: int, hit_id: int, res := 0, item := "", mode := 0) -> void:
+	var w: Dictionary = DB.ITEMS.get(item, {})
+	var lead := mode & (FX_PELLET | FX_THROUGH) == 0
+	if lead:
+		_fx_actor(src_type, src_id, true)
 	_fx_actor(hit_type, hit_id, false)
 	var mine: bool = src_type == DB.WHO_PLAYER and local_player != null and src_id == local_player.id
-	if not melee and src_type == DB.WHO_PLAYER:
+	if mode & (FX_THROW | FX_LAUNCH):
+		if mode & FX_LAUNCH:
+			var shooter = players.get(src_id)
+			Sfx.play(w.get("sound", "shot"), shooter.muzzle() if shooter != null else from, 4.0)
+			if shooter != null:
+				fx.backblast(shooter.muzzle(), -(to - from).normalized())
+			if mine:
+				local_player.recoil()
+		else:
+			Sfx.play("throw", from, -2.0)
+		return
+	if not melee and src_type == DB.WHO_PLAYER and mode & FX_THROUGH == 0:
 		var shooter = players.get(src_id)
 		if shooter != null:
 			from = shooter.muzzle()
-			fx.shell(from, shooter.global_basis.x)
-	fx.strike(from, to, melee, hit_type != DB.WHO_NONE)
+			if lead:
+				fx.shell(from, shooter.global_basis.x)
+	fx.strike(from, to, melee, hit_type != DB.WHO_NONE, item, lead)
+	if hit_type != DB.WHO_NONE:
+		fx.wound(from, to, hit_type, res, melee)
 	if not melee:
-		Sfx.play("shot", from, 4.0)
+		if lead:
+			Sfx.play(w.get("sound", "shot"), from, 4.0)
 	elif hit_type != DB.WHO_NONE:
 		Sfx.play("punch", to)
-	if hit_type != DB.WHO_NONE and hit_type != DB.WHO_PLAYER and hit_type != DB.WHO_DOG and res & DB.FX_KILL == 0:
+	if hit_type != DB.WHO_NONE and hit_type != DB.WHO_PLAYER and hit_type != DB.WHO_DOG and res & DB.FX_KILL == 0 and lead:
 		Sfx.play("grunt", to, -3.0, 0.8 + (hit_id * 7 % 50) * 0.01)
 	if res & DB.FX_HEAD:
 		fx.headshot(to, not melee)
@@ -1693,7 +1853,7 @@ func cl_fx(from: Vector3, to: Vector3, melee: bool, src_type: int, src_id: int, 
 	if res & DB.FX_KO:
 		Sfx.play("ko", to, 3.0)
 	if mine:
-		if not melee:
+		if not melee and lead:
 			local_player.recoil()
 		if hit_type != DB.WHO_NONE:
 			hud.hit_marker(res & DB.FX_HEAD != 0, res & (DB.FX_KILL | DB.FX_KO) != 0)
@@ -2020,15 +2180,16 @@ func srv_buy(vi: int, item: String) -> void:
 		return
 	var def = DB.ITEMS[item]
 	var price := price_at(v, item)
-	if p.st.money < price or (def.type == "weapon" and p.st.inv.has(item)):
+	if p.st.money < price or (def.type == "weapon" and p.st.inv.has(item) and not def.get("stack", false)):
 		return
 	p.st.money -= price
 	match def.type:
-		"ammo": p.st.ammo += def.amount
+		"ammo": _give(p.st, item, def.amount)
 		"weapon":
 			_give(p.st, item, 1)
+			# A gun comes with a second load for it.
 			if DB.is_gun(item):
-				p.st.ammo += def.mag
+				_give(p.st, DB.feed_of(item), def.mag)
 		"food":
 			p.st.hp = minf(100.0, p.st.hp + def.heal)
 			if def.get("buff", false):
