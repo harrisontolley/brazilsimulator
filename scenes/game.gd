@@ -208,6 +208,75 @@ func _debug_test(what: String) -> void:
 			local_player.global_position = DB.VENDORS[10].pos + Vector3(0, 0.2, -1)
 			srv_sell(10)
 			print("state ", local_player.st)
+		"hop":
+			# Bunny hops along the promenade, seen from the side: each frame should be a different pose.
+			local_player.global_position = Vector3(-20, 0.2, 45)
+			local_player.rotation.y = -PI / 2.0
+			_debug_side_cam()
+			Input.action_press("move_forward")
+			Input.action_press("sprint")
+			Input.action_press("jump")
+			await get_tree().create_timer(1.0).timeout
+			await _debug_frames("hop", 8, 0.09)
+			debug_result("hop", true)
+		"moves":
+			# Run, slide, crouch-walk and stand, one frame of each.
+			local_player.global_position = Vector3(-20, 0.2, 45)
+			local_player.rotation.y = -PI / 2.0
+			_debug_side_cam()
+			Input.action_press("move_forward")
+			Input.action_press("sprint")
+			await get_tree().create_timer(0.9).timeout
+			await _debug_frames("run", 2, 0.12)
+			Input.action_press("crouch")
+			await get_tree().create_timer(0.25).timeout
+			await _debug_frames("slide", 1, 0.1)
+			Input.action_release("sprint")
+			await get_tree().create_timer(1.6).timeout
+			await _debug_frames("creep", 2, 0.2)
+			Input.action_release("move_forward")
+			Input.action_release("crouch")
+			await get_tree().create_timer(0.6).timeout
+			await _debug_frames("stand", 1, 0.1)
+			debug_result("moves", true)
+		"crouch":
+			local_player.global_position = Vector3(-20, 0.2, 45)
+			Input.action_press("crouch")
+			await get_tree().create_timer(0.5).timeout
+			var still: bool = local_player.is_crouched() and local_player.hspeed() < 0.1
+			Input.action_press("move_forward")
+			await get_tree().create_timer(1.2).timeout
+			var spd: float = local_player.hspeed()
+			var low: float = local_player.rig.position.y
+			Input.action_release("crouch")
+			await get_tree().create_timer(0.4).timeout
+			var up: bool = not local_player.is_crouched()
+			debug_result("crouch", still and up and absf(spd - Player.CROUCH_SPEED) < 0.3 and low < 1.0, "speed %.2f head %.2f" % [spd, low])
+
+
+## A camera that travels beside the local player, looking at them side on.
+func _debug_side_cam() -> void:
+	var cam := Camera3D.new()
+	cam.fov = 40.0
+	local_player.add_child(cam)
+	cam.position = Vector3(4.2, 0.9, 0.0)
+	cam.rotation.y = PI / 2.0
+	cam.current = true
+	hud.visible = false
+	# Nobody else in the picture.
+	crowd.visible = false
+
+
+## Saves `n` viewport frames `every` seconds apart as <--out dir>/<name>_<k>.png.
+func _debug_frames(frame_name: String, n: int, every: float) -> void:
+	var dir := "."
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--out="):
+			dir = a.trim_prefix("--out=")
+	for k in n:
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png("%s/%s_%d.png" % [dir, frame_name, k])
+		await get_tree().create_timer(every).timeout
 
 
 ## Fixed camera for --shot: x,y,z,yaw,pitch in metres and degrees.
@@ -424,15 +493,17 @@ func _srv_process(delta: float) -> void:
 		var ps := PackedVector3Array()
 		var yaws := PackedFloat32Array()
 		var mvs := PackedByteArray()
+		var pitches := PackedFloat32Array()
 		for id in players:
 			var p = players[id]
 			ids.append(id)
 			ps.append(p.global_position if p.is_local else p.net_pos)
 			yaws.append(p.rotation.y if p.is_local else p.net_yaw)
 			mvs.append(p.net_byte())
+			pitches.append(p.rig.rotation.x if p.is_local else p.net_pitch)
 		for pid in ready_peers:
 			if pid != 1:
-				cl_moves.rpc_id(pid, ids, ps, yaws, mvs)
+				cl_moves.rpc_id(pid, ids, ps, yaws, mvs, pitches)
 
 	_clock_t -= delta
 	if _clock_t <= 0.0:
@@ -479,22 +550,24 @@ func _srv_tick_player(p: CharacterBody3D, delta: float, od_tick: bool) -> void:
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
-func srv_move(pos: Vector3, yaw: float, mv: int) -> void:
+func srv_move(pos: Vector3, yaw: float, mv: int, pitch: float) -> void:
 	var p = players.get(Net.sender())
 	if p != null and not p.is_local:
 		p.net_pos = pos
 		p.net_yaw = yaw
-		p.net_mv = mv & 15
+		p.net_mv = mv & 255
+		p.net_pitch = clampf(pitch, -1.5, 1.5)
 
 
 @rpc("authority", "call_remote", "unreliable_ordered")
-func cl_moves(ids: PackedInt32Array, ps: PackedVector3Array, yaws: PackedFloat32Array, mvs: PackedByteArray) -> void:
+func cl_moves(ids: PackedInt32Array, ps: PackedVector3Array, yaws: PackedFloat32Array, mvs: PackedByteArray, pitches: PackedFloat32Array) -> void:
 	for i in ids.size():
 		var p = players.get(ids[i])
 		if p != null and not p.is_local:
 			p.net_pos = ps[i]
 			p.net_yaw = yaws[i]
 			p.net_mv = mvs[i]
+			p.net_pitch = pitches[i]
 
 
 @rpc("authority", "call_remote", "unreliable_ordered")

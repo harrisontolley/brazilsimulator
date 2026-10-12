@@ -4,9 +4,10 @@ extends CharacterBody3D
 
 const CameraRig := preload("res://scenes/player/camera_rig.gd")
 const Kit := preload("res://scenes/characters/char_kit.gd")
+const CharRig := preload("res://scenes/characters/char_rig.gd")
 const Layout := preload("res://scenes/world/layout.gd")
 
-enum { MV_GROUND, MV_AIR, MV_SLIDE, MV_WALLRUN, MV_DIVE, MV_RIDE }
+enum { MV_GROUND, MV_AIR, MV_SLIDE, MV_WALLRUN, MV_DIVE, MV_RIDE, MV_CROUCH }
 
 const WALK := 4.5
 const SPRINT := 7.0
@@ -39,6 +40,9 @@ const BOOST_CAP := 11.5
 const STAND_H := 1.5
 const CROUCH_H := 0.8
 const CROUCH_HEAD := 0.62
+## Creeping about bent double: slow, low and hard to spot.
+const CROUCH_SPEED := 1.8
+const DUCK_HEAD := 0.85
 const WALL_MIN_SPEED := 4.5
 const WALL_GRAVITY := 2.5
 const WALL_TIME := 1.6
@@ -73,8 +77,11 @@ var target_npc := -1
 var robbing := false
 ## What the legs are doing (MV_*). Simulated by the owner; others get it as net_mv.
 var mv := MV_GROUND
-## Replicated mv in the low three bits; bit 3 set while wall running with the wall on the right.
+## Replicated mv in the low three bits; bit 3 set while wall running with the wall on the right,
+## bit 4 while aiming, bits 5-6 count jumps and bit 7 says the last one was in mid-air.
 var net_mv := 0
+## Camera pitch as others should see it: where the head and gun point.
+var net_pitch := 0.0
 
 var _cap: CapsuleShape3D
 var _shape: CollisionShape3D
@@ -110,7 +117,14 @@ var _ev := 0.0  # Kit one-shot event time
 var _pose := 0
 var _prev := 0
 var _pose_t := 0.0
-var _was_dead := false
+var _anim: CharRig
+var _mats: Array = []
+var _hops := 0
+var _hop_air := false
+var _hops_seen := 0
+var _yaw_was := 0.0
+var _turn := 0.0
+var _bank := 0.0
 # First-person hands.
 var _vm: Node3D
 var _vm_r: Node3D
@@ -148,7 +162,9 @@ func _ready() -> void:
 
 	_vis = Node3D.new()
 	add_child(_vis)
-	_body = Kit.add_to(_vis, 1, AABB(Vector3(-2.5, -0.5, -2.5), Vector3(5, 3.5, 5)))
+	_anim = CharRig.new()
+	_mats = Kit.rig_materials()
+	_body = Kit.add_to(_vis, 1, AABB(Vector3(-2.5, -0.5, -2.5), Vector3(5, 3.5, 5)), _mats)
 	_body.set_instance_transform(0, Transform3D(Basis.from_scale(Vector3.ONE * BODY_SCALE), Vector3.ZERO))
 	_body.set_instance_color(0, Color.from_hsv(fmod(id * 0.137, 1.0), 0.75, 0.9, fmod(id * 0.618, 1.0)))
 	_last_pos = position
@@ -166,6 +182,10 @@ func _ready() -> void:
 		_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		_label.position.y = 1.75
 		_vis.add_child(_label)
+
+
+func _exit_tree() -> void:
+	Kit.drop_materials(_mats)
 
 
 ## Fists and pistol seen in first person, where the body itself is hidden.
@@ -257,6 +277,15 @@ func can_fight() -> bool:
 	return can_act() and st.jail <= 0.0
 
 
+## Bent double and creeping (or keeping still): much harder for a cop to pick out.
+func is_crouched() -> bool:
+	return (mv if is_local else net_mv & 7) == MV_CROUCH
+
+
+func is_aiming() -> bool:
+	return net_byte() & 16 != 0
+
+
 func aim_dir() -> Vector3:
 	return -rig.cam.global_basis.z
 
@@ -326,7 +355,7 @@ func _physics_process(delta: float) -> void:
 			_land_dive(crouch)
 	else:
 		_coyote_t -= delta
-		if mv == MV_GROUND or mv == MV_SLIDE:
+		if mv == MV_GROUND or mv == MV_SLIDE or mv == MV_CROUCH:
 			mv = MV_AIR
 			# Running off the lip of a ramp keeps the climb it had.
 			velocity.y = maxf(velocity.y, _ramp_vy)
@@ -338,12 +367,15 @@ func _physics_process(delta: float) -> void:
 	match mv:
 		MV_GROUND:
 			if _crouched and not _set_crouch(false):
-				mv = MV_SLIDE
+				mv = MV_CROUCH
 			elif jump_held or _buffer_t > 0.0:
 				# Jumping on the landing tick skips friction entirely: that is the bunny hop.
 				_jump()
 			elif crouch and _recover_t <= 0.0 and hspeed() >= SLIDE_MIN:
 				_start_slide()
+			elif crouch and _recover_t <= 0.0:
+				mv = MV_CROUCH
+				_set_crouch(true)
 			else:
 				_friction(FRICTION, delta)
 				_accelerate(wish, top, GROUND_ACCEL * top, delta)
@@ -354,14 +386,23 @@ func _physics_process(delta: float) -> void:
 				if _slide_t > SLIDE_HOP_MIN:
 					_boost(SLIDE_HOP)
 				_jump()
-			elif (not crouch or hs < SLIDE_END) and _set_crouch(false):
+			elif not crouch and _set_crouch(false):
 				mv = MV_GROUND
+			elif hs < SLIDE_END:
+				# Run out of slide with crouch still held, or under something too low to stand in.
+				mv = MV_CROUCH
 			else:
 				_friction(SLIDE_FRICTION, delta)
 				_accelerate(wish, 1.5, 12.0, delta)
-				# Stuck under something too low to stand in: shuffle along.
-				if hs < 2.0:
-					_accelerate(wish, 2.0, 30.0, delta)
+		MV_CROUCH:
+			if (jump_held or _buffer_t > 0.0) and _set_crouch(false):
+				_jump()
+			elif not crouch and _set_crouch(false):
+				mv = MV_GROUND
+			else:
+				_set_crouch(true)
+				_friction(FRICTION, delta)
+				_accelerate(wish, CROUCH_SPEED * speed_mult(), GROUND_ACCEL * CROUCH_SPEED, delta)
 		MV_AIR:
 			if _crouched:
 				_set_crouch(false)
@@ -403,7 +444,7 @@ func _physics_process(delta: float) -> void:
 		if not grounded:
 			rig.dip = clampf(-fall * 0.012, 0.0, 0.22)
 	# Bodies only get in the way of someone on their feet, not sliding past or hopping over.
-	if global_position.y < 1.0 and mv != MV_SLIDE and mv != MV_DIVE:
+	if global_position.y < 1.0 and mv != MV_SLIDE and mv != MV_DIVE and mv != MV_CROUCH:
 		global_position += Net.game.crowd.push_out(global_position) * delta
 
 
@@ -425,7 +466,7 @@ func stop_ride() -> void:
 
 ## How far the bike is banked into its turn, for whoever draws it.
 func ride_lean() -> float:
-	return _ride_steer if is_local else 0.0
+	return _ride_steer if is_local else _bank
 
 
 ## Throttle and brake on W / S, steer with A / D or by looking. Hitting a wall at speed throws you.
@@ -493,7 +534,16 @@ func knock(v: Vector3) -> void:
 func net_byte() -> int:
 	if not is_local:
 		return net_mv
-	return mv | (8 if mv == MV_WALLRUN and _wall_side > 0.0 else 0)
+	var aiming := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and Input.is_action_pressed("aim") and can_act()
+	return mv | (8 if mv == MV_WALLRUN and _wall_side > 0.0 else 0) | (16 if aiming else 0) | (_hops << 5) | (128 if _hop_air else 0)
+
+
+## Counts a jump so every peer's copy of this body plays it, even when one hop runs into the next.
+func _hop(kind: int) -> void:
+	_hops = (_hops + 1) & 3
+	_hop_air = kind == CharRig.DOUBLE
+	_hops_seen = _hops
+	_anim.jump(kind)
 
 
 func hspeed() -> float:
@@ -537,6 +587,7 @@ func _jump() -> void:
 	_buffer_t = 0.0
 	_coyote_t = 0.0
 	_jumped = true
+	_hop(CharRig.HOP)
 	mv = MV_AIR
 
 
@@ -544,6 +595,7 @@ func _jump() -> void:
 func _double_jump(wish: Vector3) -> void:
 	_air_jumps -= 1
 	_buffer_t = 0.0
+	_hop(CharRig.DOUBLE)
 	velocity.y = DOUBLE_JUMP
 	if wish != Vector3.ZERO:
 		var s := maxf(hspeed(), WALK)
@@ -586,7 +638,7 @@ func _land_dive(crouch: bool) -> void:
 	velocity.x *= 0.45
 	velocity.z *= 0.45
 	_recover_t = DIVE_RECOVER
-	mv = MV_GROUND if _set_crouch(false) else MV_SLIDE
+	mv = MV_GROUND if _set_crouch(false) else MV_CROUCH
 
 
 ## Touching a runnable wall while airborne. No running up the prison walls.
@@ -611,6 +663,7 @@ func _wall_jump(n: Vector3) -> void:
 	_air_jumps = AIR_JUMPS
 	_buffer_t = 0.0
 	_jumped = true
+	_hop(CharRig.WALL)
 	_leave_wall(n)
 
 
@@ -667,44 +720,56 @@ func _process(delta: float) -> void:
 	_animate(delta)
 
 
-## Picks the body's pose and worn state from how it is moving and from `st`.
+## Poses the body from how it is moving and shows its worn state from `st`.
 func _animate(delta: float) -> void:
 	var moved := global_position - _last_pos
 	_last_pos = global_position
 	if delta > 0.0:
 		var k := minf(1.0, 10.0 * delta)
 		_spd = lerpf(_spd, Vector2(moved.x, moved.z).length() / delta, k)
-		_vy = lerpf(_vy, moved.y / delta, k)
-	if st.dead != _was_dead:
-		_was_dead = st.dead
-		if st.dead:
-			_ev = Kit.now()
+		_vy = lerpf(_vy, moved.y / delta, minf(1.0, 18.0 * delta))
+		_turn = lerpf(_turn, angle_difference(_yaw_was, rotation.y) / delta, k)
+	_yaw_was = rotation.y
 
 	var m: int = mv if is_local else net_mv & 7
 	var side: float = _wall_side if is_local else (1.0 if net_mv & 8 else -1.0)
+	if not is_local and (net_mv >> 5) & 3 != _hops_seen:
+		_hops_seen = (net_mv >> 5) & 3
+		_anim.jump(CharRig.DOUBLE if net_mv & 128 else CharRig.HOP)
+	var out: bool = st.get("ko", 0.0) > 0.0
+	# The pose id only says what kind of thing the body is doing; the rig does the posing.
 	var pose := Kit.STAND
-	var speed := 0.0
 	if st.dead:
 		pose = Kit.DEAD
+	elif out:
+		pose = Kit.KO
 	elif m == MV_RIDE:
 		pose = Kit.RIDE
 	elif m == MV_SLIDE:
 		pose = Kit.SLIDE
 	elif m == MV_DIVE:
 		pose = Kit.DIVE
-	elif m == MV_WALLRUN:
-		pose = Kit.RUN
-		speed = SPRINT
+	elif m == MV_CROUCH:
+		pose = Kit.CROUCH
 	elif m == MV_AIR:
 		pose = Kit.JUMP
-	elif _spd > 5.6:
-		pose = Kit.RUN
-		speed = SPRINT
-	elif _spd > 0.5:
-		pose = Kit.WALK
-		speed = WALK
-	# Wall runners tip over with their feet toward the wall.
-	_vis.rotation.z = lerp_angle(_vis.rotation.z, side * 0.4 if m == MV_WALLRUN and not st.dead else 0.0, minf(1.0, 10.0 * delta))
+	var held: int = DB.ITEMS[st.equipped].get("held", Kit.HELD_NONE)
+	var aim: float = rig.rotation.x if is_local else net_pitch
+	_anim.update(delta, m, CharRig.DEAD if st.dead else (CharRig.OUT if out else CharRig.ALIVE), _spd, _vy, _turn, aim, side, held, net_byte() & 16 != 0)
+	_anim.apply(_mats)
+
+	# Wall runners tip over with their feet toward the wall; riders and runners bank into a turn.
+	_bank = lerpf(_bank, clampf(_turn * _spd * 0.012, -0.35, 0.35), minf(1.0, 8.0 * delta))
+	var roll := 0.0
+	if st.dead or out:
+		roll = 0.0
+	elif m == MV_WALLRUN:
+		roll = side * 0.4
+	elif m == MV_RIDE:
+		roll = ride_lean()
+	elif m == MV_GROUND:
+		roll = _bank * 0.5
+	_vis.rotation.z = lerp_angle(_vis.rotation.z, roll, minf(1.0, 10.0 * delta))
 
 	# Everything another player needs to know about you is worn on the body.
 	var flags := clampi(st.heat, 0, 3) << Kit.HEAT_SHIFT
@@ -722,7 +787,7 @@ func _animate(delta: float) -> void:
 		_prev = _pose
 		_pose = pose
 		_pose_t = Kit.now()
-	_body.set_instance_custom_data(0, Kit.custom(pose, speed, flags, _ev, _prev, _pose_t, Kit.HELD_PISTOL if st.equipped == "pistol" else Kit.HELD_NONE))
+	_body.set_instance_custom_data(0, Kit.custom(pose, 0.0, flags, _ev, _prev, _pose_t, held))
 
 
 ## Plays a punch / recoil (attack) or a flinch on this player's body.
@@ -783,7 +848,7 @@ func _local_process(delta: float) -> void:
 
 	# Speed reads through the camera: wider view, a lean off the wall, a low head in a slide.
 	rig.fov_boost = 0.0 if aiming else clampf((hspeed() - SPRINT) * 1.6, 0.0, 22.0)
-	rig.height_target = CROUCH_HEAD if _crouched else HEAD.y
+	rig.height_target = (DUCK_HEAD if mv == MV_CROUCH else CROUCH_HEAD) if _crouched else HEAD.y
 	match mv:
 		MV_WALLRUN: rig.roll_target = _wall_side * 0.22
 		MV_SLIDE: rig.roll_target = 0.05
@@ -820,7 +885,7 @@ func _local_process(delta: float) -> void:
 	_send_t -= delta
 	if _send_t <= 0.0 and not multiplayer.is_server():
 		_send_t = 0.05
-		g.srv_move.rpc_id(1, global_position, rotation.y, net_byte())
+		g.srv_move.rpc_id(1, global_position, rotation.y, net_byte(), rig.rotation.x)
 
 
 # --- proximity voice playback ---
