@@ -667,11 +667,23 @@ func _debug_test(what: String) -> void:
 			var quiet: bool = absf(db_to_linear(AudioServer.get_bus_volume_db(0)) - 0.3) < 0.01
 			hud.open_pause()
 			await get_tree().process_frame
+			await get_tree().process_frame
 			var rows: int = hud._menu._list.get_child_count()
+			# In the middle of the window and wholly inside it, at this size and a small one.
+			var fits := true
+			for win in [Vector2i(1600, 900), Vector2i(800, 480)]:
+				get_window().size = win
+				get_window().content_scale_size = Vector2i.ZERO
+				await get_tree().process_frame
+				await get_tree().process_frame
+				var view: Rect2 = hud._menu.get_viewport_rect()
+				var box: Rect2 = hud._menu._panel.get_global_rect()
+				fits = fits and view.encloses(box) and box.get_center().distance_to(view.get_center()) < 4.0 and box.size.y > 150.0
+				print("dbg window %s view %s panel %s" % [win, view, box])
 			hud.close_pause()
 			DirAccess.remove_absolute(ProjectSettings.globalize_path(Settings.path))
 			Settings._scripted = true
-			debug_result("settings", kept and quiet and rows > 12 and not hud.menu_open, "kept %s volume applied %s menu rows %d" % [kept, quiet, rows])
+			debug_result("settings", kept and quiet and rows > 12 and fits and not hud.menu_open, "kept %s volume applied %s menu rows %d centred and on screen %s" % [kept, quiet, rows, fits])
 		"crouch":
 			local_player.global_position = Vector3(-20, 0.2, 45)
 			Input.action_press("crouch")

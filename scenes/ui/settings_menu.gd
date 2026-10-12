@@ -1,4 +1,4 @@
-extends PanelContainer
+extends Control
 ## The settings panel, built in code like the rest of the interface. Shown from the main menu
 ## and, in a match, from the pause menu on Esc. Every control writes straight through to
 ## Settings, which applies and saves it: there is no Apply button to forget.
@@ -9,16 +9,37 @@ signal closed
 var in_game := false
 
 var _list: VBoxContainer
+var _panel: PanelContainer
+var _scroll: ScrollContainer
 
 
 func _ready() -> void:
-	set_anchors_preset(Control.PRESET_CENTER)
-	grow_horizontal = Control.GROW_DIRECTION_BOTH
-	grow_vertical = Control.GROW_DIRECTION_BOTH
+	# Fills the screen and dims it; the panel sits in the middle of that whatever the window
+	# size, and scrolls rather than run off the edge of a small one.
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.45)
+	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(dim)
+	var centre := CenterContainer.new()
+	centre.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(centre)
+	_panel = PanelContainer.new()
+	centre.add_child(_panel)
+	var pad := MarginContainer.new()
+	for side in ["left", "right", "top", "bottom"]:
+		pad.add_theme_constant_override("margin_" + side, 14)
+	_panel.add_child(pad)
+	_scroll = ScrollContainer.new()
+	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	pad.add_child(_scroll)
 	_list = VBoxContainer.new()
 	_list.custom_minimum_size.x = 440
+	_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_list.add_theme_constant_override("separation", 8)
-	add_child(_list)
+	_scroll.add_child(_list)
+	get_viewport().size_changed.connect(_fit)
+	_fit.call_deferred()
 
 	_heading("PAUSED" if in_game else "SETTINGS")
 	if in_game:
@@ -83,6 +104,12 @@ func _ready() -> void:
 		_button("Quit game", func(): get_tree().quit())
 	else:
 		_button("Back", func(): closed.emit())
+
+
+## Sizes the scrolling part to its contents, or to what the window has room for.
+func _fit() -> void:
+	var room: float = get_viewport_rect().size.y - 90.0
+	_scroll.custom_minimum_size = Vector2(456, minf(_list.get_combined_minimum_size().y, maxf(room, 160.0)))
 
 
 func _heading(text: String) -> void:
