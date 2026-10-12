@@ -55,6 +55,9 @@ var _last_ping := {}
 var _respawn := {}
 var _last_hit := {}
 var _till_ready := {}   # vendor index -> match time its till is full again
+var _reload := {}       # pid -> [weapon, seconds left]
+var _ko_immune := {}    # pid -> match time until which they cannot be knocked out again
+var _robbed := {}       # pid -> match time until which their pockets are already turned out
 var _bicho_round := 0
 
 
@@ -303,6 +306,59 @@ func _debug_test(what: String) -> void:
 			Engine.time_scale = 1.0
 			var budget: float = Police.PURSUIT_BUDGET[2] + Police.ESCALATE_BONUS
 			debug_result("chase", heat0 == 2 and gave_up > 0.0 and gave_up < budget + 20.0 and pl.st.heat == 0 and steps.size() == 2, "gave up %.0fs (budget %.0f) steps %s" % [gave_up, budget, steps])
+		"headshot":
+			# Rays at a standing man's head, chest and over his head; a sunbather; a seated stance.
+			crowd.debug_clear()
+			var at := Vector3(0, 0, 20)
+			var i: int = crowd.debug_stand(at, 0.0)
+			var h: float = 1.6 * crowd._scale[i]
+			var o := at + Vector3(0, h, -6)
+			var head: Array = crowd.ray_pick(o, Vector3(0, 0, 1), 30.0, 0.0)
+			var chest: Array = crowd.ray_pick(at + Vector3(0, 0.95, -6), Vector3(0, 0, 1), 30.0, 0.0)
+			var over: Array = crowd.ray_pick(at + Vector3(0, h + 0.5, -6), Vector3(0, 0, 1), 30.0, 0.0)
+			var seat: Array = Kit.ray_hit(Vector3(0, 1.22, -6), Vector3(0, 0, 1), 30.0, Vector3.ZERO, 0.0, 1.0, Kit.STANCE_SEAT)
+			var low: Array = Kit.ray_hit(Vector3(0, 1.6, -6), Vector3(0, 0, 1), 30.0, Vector3.ZERO, 0.0, 1.0, Kit.STANCE_CROUCH)
+			# The whole way through: a pistol, aimed at the head, kills in one.
+			local_player.global_position = at + Vector3(0, 0.2, -6)
+			local_player.rotation.y = PI
+			_give(local_player.st, "pistol", 1)
+			local_player.st.equipped = "pistol"
+			var kills := 0
+			for k in 20:
+				crowd.hp[i] = 60.0
+				crowd.state[i] = Crowd.AMBIENT
+				_last_attack.clear()
+				local_player.st.mag["pistol"] = 12
+				srv_attack(o, Vector3(0, 0, 1))
+				if crowd.state[i] == Crowd.DEAD:
+					kills += 1
+			var ok: bool = head[0] == i and head[2] == DB.ZONE_HEAD and chest[0] == i and chest[2] == DB.ZONE_BODY and over[0] < 0 and seat[1] == DB.ZONE_HEAD and seat[0] > 0.0 and low[0] < 0.0 and kills >= 12
+			debug_result("headshot", ok, "head %s chest %s over %s seat %s low %s kills %d/20" % [head, chest, over, seat, low, kills])
+		"ko":
+			# Fists to the head until he drops, then through his pockets, then he comes round.
+			crowd.debug_clear()
+			var at := Vector3(0, 0, 20)
+			var i: int = crowd.debug_stand(at, 0.0)
+			crowd.money[i] = 300
+			crowd.hp[i] = 500.0
+			local_player.global_position = at + Vector3(0, 0.2, -1.2)
+			local_player.rotation.y = PI
+			var o := at + Vector3(0, 1.6 * crowd._scale[i], -1.2)
+			var punches := 0
+			while crowd.state[i] != Crowd.KO and punches < 40:
+				_last_attack.clear()
+				srv_attack(o, Vector3(0, 0, 1))
+				punches += 1
+			var out: bool = crowd.state[i] == Crowd.KO
+			var before: int = local_player.st.money
+			for k in 14:
+				crowd.srv_rob(i, 0.9)
+				await get_tree().create_timer(0.1).timeout
+			var took: int = local_player.st.money - before
+			crowd._ko[i][0] = MatchState.time
+			await get_tree().create_timer(0.3).timeout
+			var woke: bool = crowd.state[i] != Crowd.KO
+			debug_result("ko", out and took == 300 and woke, "punches %d took %d woke %s" % [punches, took, woke])
 		"crouch":
 			local_player.global_position = Vector3(-20, 0.2, 45)
 			Input.action_press("crouch")
@@ -592,6 +648,22 @@ func _srv_tick_player(p: CharacterBody3D, delta: float, od_tick: bool) -> void:
 			dirty = true
 	for d in st.tol:
 		st.tol[d] = maxf(0.0, st.tol[d] - DB.TOLERANCE_DECAY * delta)
+	if _reload.has(p.id):
+		var r: Array = _reload[p.id]
+		r[1] -= delta
+		if st.equipped != r[0] or not p.can_fight():
+			_reload.erase(p.id)
+		elif r[1] <= 0.0:
+			_reload.erase(p.id)
+			var n: int = mini(DB.ITEMS[r[0]].mag - st.mag.get(r[0], 0), st.ammo)
+			st.mag[r[0]] = st.mag.get(r[0], 0) + n
+			st.ammo -= n
+			dirty = true
+	if st.ko > 0.0:
+		st.ko -= delta
+		if st.ko <= 0.0:
+			st.ko = 0.0
+			dirty = true
 	if st.jail > 0.0:
 		st.jail -= delta
 		if st.jail <= 0.0:
@@ -692,14 +764,50 @@ func cl_ping(pos: Vector3) -> void:
 
 # --- combat ---
 
-func srv_damage(pid: int, amount: float, attacker: int) -> void:
+## Hurts a player. A bare fist to the head may put them out cold instead; returns whether it did.
+func srv_damage(pid: int, amount: float, attacker: int, zone := 0, ko := false) -> bool:
 	var p = players.get(pid)
-	if p == null or not p.can_fight():
-		return
+	if p == null or p.st.dead or MatchState.ended or p.st.get("hide", -1) >= 0:
+		return false
+	if ko and zone == DB.ZONE_HEAD and p.st.ko <= 0.0 and MatchState.time > _ko_immune.get(pid, 0.0) and randf() < DB.KO_CHANCE:
+		p.st.ko = DB.KO_PLAYER
+		_ko_immune[pid] = MatchState.time + DB.KO_PLAYER + DB.KO_IMMUNE
+		motos.srv_release(pid)
+		push_state(p)
+		bcast("cl_ko", [p.global_position + Vector3(0, 0.6, 0), DB.KO_PLAYER])
+		return true
 	p.st.hp -= amount * p.damage_taken_mult()
 	if p.st.hp <= 0.0:
 		_srv_kill(p, attacker)
 	push_state(p)
+	return false
+
+
+## Going through the pockets of a player who is out cold: half what they carry.
+@rpc("any_peer", "call_remote", "reliable")
+func srv_rob_player(victim: int) -> void:
+	var p = players.get(Net.sender())
+	var v = players.get(victim)
+	if p == null or v == null or p == v or not p.can_fight() or v.st.ko <= 0.0 or v.st.dead:
+		return
+	if p.global_position.distance_to(v.global_position) > 3.5 or _robbed.get(victim, 0.0) > MatchState.time:
+		return
+	_robbed[victim] = MatchState.time + DB.KO_PLAYER + 1.0
+	var cash: int = v.st.money / 2
+	v.st.money -= cash
+	p.st.money += cash
+	var msg := "Robbed %s of R$%d" % [v.pname, cash]
+	for item in DB.LOOT:
+		if v.st.inv.get(item, 0) > 0:
+			v.st.inv[item] -= 1
+			_give(p.st, item, 1)
+			msg += " + %s" % DB.ITEMS[item].name
+			break
+	push_state(p)
+	push_state(v)
+	send(p.id, "cl_toast", [msg])
+	send(p.id, "cl_sound", ["cash", v.global_position])
+	send(victim, "cl_toast", ["%s went through your pockets" % p.pname])
 
 
 func _srv_kill(p: CharacterBody3D, attacker: int) -> void:
@@ -728,8 +836,10 @@ func _srv_kill(p: CharacterBody3D, attacker: int) -> void:
 		bcast("cl_toast", ["%s died" % p.pname])
 
 
+## `origin` is where on the attacker's line of sight the blow starts: the point on the camera
+## ray beside their head, so a shot goes where the crosshair says in third person too.
 @rpc("any_peer", "call_remote", "reliable")
-func srv_attack(dir: Vector3) -> void:
+func srv_attack(origin: Vector3, dir: Vector3) -> void:
 	var pid := Net.sender()
 	var p = players.get(pid)
 	if p == null or not p.can_fight() or dir.length_squared() < 0.5:
@@ -741,20 +851,30 @@ func srv_attack(dir: Vector3) -> void:
 	_last_attack[pid] = now
 
 	dir = dir.normalized()
-	var origin: Vector3 = p.global_position + Player.HEAD
+	# Trust the client's line only as far as its own head: no shooting from round a corner.
+	var eye: Vector3 = p.eye()
+	if origin.distance_to(eye) > 1.5 or not _clear(eye, origin):
+		origin = eye
 	var reach: float = w.range
-	var radius := 0.9 if w.melee else 0.5
+	var crouched: bool = p.is_crouched()
 	if not w.melee:
-		if p.st.ammo <= 0:
+		if _reload.has(pid):
 			return
-		p.st.ammo -= 1
-		push_state(p)
+		if p.st.mag.get(p.st.equipped, 0) <= 0:
+			send(pid, "cl_sound", ["dry", eye])
+			_srv_reload(p)
+			return
+		p.st.mag[p.st.equipped] -= 1
+		# Rounds are the shooter's business; nobody else needs every one of them.
+		send(pid, "cl_state", [pid, p.st])
 		if p.is_sniper():
 			reach *= 2.5
 		else:
-			dir = (dir + Vector3(randf_range(-1, 1), randf_range(-1, 1), randf_range(-1, 1)) * w.spread).normalized()
+			# Steadier crouched, wilder in the air.
+			var spread: float = w.spread * (0.6 if crouched else (1.5 if p.net_byte() & 7 == Player.MV_AIR else 1.0))
+			dir = (dir + Vector3(randf_range(-1, 1), randf_range(-1, 1), randf_range(-1, 1)) * spread).normalized()
 
-	var hit := _ray_hit(origin, dir, reach, radius, pid)
+	var hit := _ray_hit(origin, dir, reach, 0.35 if w.melee else 0.0, pid)
 	# A football in the way takes the hit instead, and takes off.
 	var ball_t: float = balls.srv_strike(origin, dir, hit.t, pid, 1.0 if w.melee else 1.5)
 	if ball_t >= 0.0:
@@ -772,11 +892,29 @@ func srv_attack(dir: Vector3) -> void:
 		if not w.melee:
 			Crime.report_noise(origin, 90.0, pid)
 		return
+	var res := 0
+	var ko: bool = w.get("ko", false)
+	if hit.type != DB.WHO_NONE and hit.zone == DB.ZONE_HEAD:
+		res |= DB.FX_HEAD
+		if w.melee:
+			dmg *= 1.5
+		elif randf() < w.head_kill:
+			# One in the head: that is that, most of the time.
+			dmg = 9999.0
+			res |= DB.FX_KILL
+		else:
+			dmg *= DB.HEAD_MULT
 	match hit.type:
-		DB.WHO_PLAYER: srv_damage(hit.id, dmg, pid)
-		DB.WHO_COP: police.srv_damage_cop(hit.id, dmg, pid)
-		DB.WHO_NPC: crowd.srv_damage_npc(hit.id, dmg, pid)
-	bcast("cl_fx", [origin, origin + dir * hit.t, w.melee, DB.WHO_PLAYER, pid, hit.type, hit.id])
+		DB.WHO_PLAYER:
+			if srv_damage(hit.id, dmg, pid, hit.zone, ko):
+				res |= DB.FX_KO
+		DB.WHO_COP:
+			if police.srv_damage_cop(hit.id, dmg, pid, hit.zone, ko):
+				res |= DB.FX_KO
+		DB.WHO_NPC:
+			if crowd.srv_damage_npc(hit.id, dmg, pid, hit.zone, ko):
+				res |= DB.FX_KO
+	bcast("cl_fx", [origin, origin + dir * hit.t, w.melee, DB.WHO_PLAYER, pid, hit.type, hit.id, res])
 
 	if not w.melee:
 		Crime.report_noise(origin, 90.0, pid)
@@ -785,40 +923,90 @@ func srv_attack(dir: Vector3) -> void:
 		Crime.report_crime(origin, pid, 2)
 
 
-func _ray_hit(o: Vector3, d: Vector3, max_t: float, radius: float, exclude: int) -> Dictionary:
-	var best := {"type": DB.WHO_NONE, "id": -1, "t": max_t}
+## Nothing solid between a and b.
+func _clear(a: Vector3, b: Vector3) -> bool:
+	if a.distance_squared_to(b) < 0.0001:
+		return true
+	return get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(a, b, 1)).is_empty()
+
+
+## First thing the ray meets: {type (DB.WHO_*), id, t, zone (DB.ZONE_*)}. `grow` fattens bodies.
+func _ray_hit(o: Vector3, d: Vector3, max_t: float, grow: float, exclude: int) -> Dictionary:
+	var best := {"type": DB.WHO_NONE, "id": -1, "t": max_t, "zone": DB.ZONE_BODY}
 	var q := PhysicsRayQueryParameters3D.create(o, o + d * max_t, 1)
 	var wall := get_world_3d().direct_space_state.intersect_ray(q)
 	if not wall.is_empty():
 		best.t = o.distance_to(wall.position)
+	# Inmates and people outside cannot reach each other through the walls.
+	var inside: bool = players.has(exclude) and players[exclude].st.jail > 0.0
 	for pid in players:
 		var p = players[pid]
-		if pid == exclude or not p.can_fight():
+		if pid == exclude or p.st.dead or p.st.get("hide", -1) >= 0 or (p.st.jail > 0.0) != inside:
 			continue
-		var t := DB.ray_point(o, d, p.global_position + Vector3(0, 0.8, 0), radius, best.t)
-		if t >= 0.0:
-			best = {"type": DB.WHO_PLAYER, "id": pid, "t": t}
-	var c: Array = police.ray_pick(o, d, best.t, radius)
+		var h: Array = Kit.ray_hit(o, d, best.t, p.global_position, p.rotation.y if p.is_local else p.net_yaw, Player.BODY_SCALE, p.stance(), grow)
+		if h[0] >= 0.0:
+			best = {"type": DB.WHO_PLAYER, "id": pid, "t": h[0], "zone": h[1]}
+	var c: Array = police.ray_pick(o, d, best.t, grow)
 	if c[0] >= 0:
-		best = {"type": DB.WHO_COP, "id": c[0], "t": c[1]}
-	var n: Array = crowd.ray_pick(o, d, best.t, radius)
+		best = {"type": DB.WHO_COP, "id": c[0], "t": c[1], "zone": c[2]}
+	var n: Array = crowd.ray_pick(o, d, best.t, grow)
 	if n[0] >= 0:
-		best = {"type": DB.WHO_NPC, "id": n[0], "t": n[1]}
+		best = {"type": DB.WHO_NPC, "id": n[0], "t": n[1], "zone": n[2]}
 	return best
+
+
+# --- reloading ---
+
+@rpc("any_peer", "call_remote", "reliable")
+func srv_reload() -> void:
+	var p = players.get(Net.sender())
+	if p != null and p.can_fight():
+		_srv_reload(p)
+
+
+func _srv_reload(p) -> void:
+	var item: String = p.st.equipped
+	if not DB.is_gun(item) or _reload.has(p.id) or p.st.ammo <= 0 or p.st.mag.get(item, 0) >= DB.ITEMS[item].mag:
+		return
+	_reload[p.id] = [item, DB.ITEMS[item].reload]
+	bcast("cl_anim", [p.id, "reload", DB.ITEMS[item].reload])
+
+
+## A player's body doing something other peers should see: reloading, for now.
+@rpc("authority", "call_remote", "reliable")
+func cl_anim(pid: int, what: String, seconds: float) -> void:
+	var p = players.get(pid)
+	if p != null:
+		p.play(what, seconds)
 
 
 ## One attack: who threw it, where it went and who (if anyone) it struck. DB.WHO_* types.
 @rpc("authority", "call_remote", "unreliable")
-func cl_fx(from: Vector3, to: Vector3, melee: bool, src_type: int, src_id: int, hit_type: int, hit_id: int) -> void:
+## `res` is DB.FX_* bits: a head hit, an outright kill, a knockout.
+func cl_fx(from: Vector3, to: Vector3, melee: bool, src_type: int, src_id: int, hit_type: int, hit_id: int, res := 0) -> void:
 	_fx_actor(src_type, src_id, true)
 	_fx_actor(hit_type, hit_id, false)
-	if not melee and src_type == DB.WHO_PLAYER and local_player != null and src_id == local_player.id and local_player.rig.first_person():
-		from = local_player.muzzle()
+	var mine: bool = src_type == DB.WHO_PLAYER and local_player != null and src_id == local_player.id
+	if not melee and src_type == DB.WHO_PLAYER:
+		var shooter = players.get(src_id)
+		if shooter != null:
+			from = shooter.muzzle()
+			fx.shell(from, shooter.global_basis.x)
 	fx.strike(from, to, melee, hit_type != DB.WHO_NONE)
 	if not melee:
 		Sfx.play("shot", from, 4.0)
 	elif hit_type != DB.WHO_NONE:
 		Sfx.play("punch", to)
+	if res & DB.FX_HEAD:
+		fx.headshot(to, not melee)
+		Sfx.play("headshot", to, 2.0)
+	if res & DB.FX_KO:
+		Sfx.play("ko", to, 3.0)
+	if mine:
+		if not melee:
+			local_player.recoil()
+		if hit_type != DB.WHO_NONE:
+			hud.hit_marker(res & DB.FX_HEAD != 0, res & (DB.FX_KILL | DB.FX_KO) != 0)
 
 
 @rpc("authority", "call_remote", "unreliable")
@@ -892,6 +1080,9 @@ func _give(st: Dictionary, item: String, n: int) -> void:
 		st.ammo += n
 	else:
 		st.inv[item] = st.inv.get(item, 0) + n
+		# A gun comes loaded.
+		if DB.is_gun(item) and not st.mag.has(item):
+			st.mag[item] = DB.ITEMS[item].mag
 
 
 func srv_add_drop(pos: Vector3, money: int, items: Dictionary) -> void:
@@ -965,6 +1156,7 @@ func _setup_interact() -> void:
 	interaction.on(&"dismount", func(_a: Dictionary) -> void: to_server("srv_dismount", [], motos))
 	interaction.on(&"mount", func(a: Dictionary) -> void: to_server("srv_mount", [a.arg], motos))
 	interaction.on(&"pickup", func(a: Dictionary) -> void: to_server("srv_pickup", [a.arg]))
+	interaction.on(&"rob_player", func(a: Dictionary) -> void: to_server("srv_rob_player", [a.arg]))
 	interaction.provide(_offer_near)
 
 
@@ -986,6 +1178,10 @@ func _offer_near(p, out: Array) -> void:
 		return
 	if not p.can_fight():
 		return
+	for pid in players:
+		var v = players[pid]
+		if v != p and v.st.ko > 0.0 and not v.st.dead and at.distance_to(v.global_position) < 2.5:
+			out.append(Interact.offer(&"rob_player", at, "go through %s's pockets" % v.pname, pid, 3, 0.8))
 	var bike: int = motos.free_near(at)
 	if bike >= 0:
 		out.append(Interact.offer(&"mount", at, "take the moto", bike, 2))
@@ -1083,8 +1279,9 @@ func srv_buy(vi: int, item: String) -> void:
 	match def.type:
 		"ammo": p.st.ammo += def.amount
 		"weapon":
-			p.st.inv[item] = 1
-			p.st.ammo += 12
+			_give(p.st, item, 1)
+			if DB.is_gun(item):
+				p.st.ammo += def.mag
 		"food":
 			p.st.hp = minf(100.0, p.st.hp + def.heal)
 			if def.get("buff", false):
@@ -1101,8 +1298,8 @@ func srv_till(vi: int) -> void:
 	var v = _vendor_for(p, vi)
 	if v == null or not v.get("till", false):
 		return
-	if p.st.equipped != "pistol":
-		send(pid, "cl_toast", ["Nobody hands over a till to bare fists"])
+	if not DB.is_gun(p.st.equipped):
+		send(pid, "cl_toast", ["Nobody hands over a till to anything less than a gun"])
 		return
 	if MatchState.time < _till_ready.get(vi, 0.0):
 		send(pid, "cl_toast", ["Till is empty - someone got here first"])
@@ -1181,7 +1378,7 @@ func srv_sell(vi: int) -> void:
 @rpc("any_peer", "call_remote", "reliable")
 func srv_equip(item: String) -> void:
 	var p = players.get(Net.sender())
-	if p != null and p.can_act() and p.st.inv.has(item) and DB.ITEMS[item].type == "weapon":
+	if p != null and p.can_act() and p.st.inv.has(item) and DB.ITEMS.has(item) and DB.ITEMS[item].type == "weapon":
 		p.st.equipped = item
 		push_state(p)
 

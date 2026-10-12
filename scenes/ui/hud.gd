@@ -24,6 +24,8 @@ var _heat: Label
 var _speed: Label
 var _target: Label
 var _prompt: Label
+var _mark: Label
+var _mark_t := 0.0
 var _hold_bar: ProgressBar
 var _rob_bar: ProgressBar
 var _mic_bar: ProgressBar
@@ -86,7 +88,7 @@ func _ready() -> void:
 	_heat.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	var help := _label(tr, 13, Color(1, 1, 1, 0.65))
 	help.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	help.text = "WASD move  Shift sprint\nHold Space to hop: strafe + turn in the air for speed\nSpace in the air: double jump   at a wall: wall jump\nCtrl / C slide (jump out of it for a boost), or crouch and creep   Q dive\nScroll: first / third person\nLMB attack  RMB aim\nHold E + SHOUT to rob (V = fake shout)\nHold E silently on a sunbather to pickpocket\nF use / pick up / shop / hide / take a moto   1-2 weapons   3-5 drugs\nRun into a football to dribble, hit it to shoot\nTab scores   Esc free mouse"
+	help.text = "WASD move  Shift sprint\nHold Space to hop: strafe + turn in the air for speed\nSpace in the air: double jump   at a wall: wall jump\nCtrl / C slide (jump out of it for a boost), or crouch and creep   Q dive\nScroll: first / third person\nLMB attack  RMB aim  R reload   the head is a one-tap; a fist there knocks them out\nHold E + SHOUT to rob (V = fake shout)\nHold E silently on a sunbather to pickpocket\nF use / pick up / shop / hide / take a moto   1 fists / knife   2 guns   3-5 drugs\nRun into a football to dribble, hit it to shoot\nTab scores   Esc free mouse"
 
 	# Bottom centre: robbery.
 	var bc := _vbox(Control.PRESET_CENTER_BOTTOM, Vector2(0, -24))
@@ -107,6 +109,8 @@ func _ready() -> void:
 
 	var cross := _label(_vbox(Control.PRESET_CENTER, Vector2.ZERO), 22)
 	cross.text = "+"
+	_mark = _label(_vbox(Control.PRESET_CENTER, Vector2(0, -2)), 34)
+	_mark.visible = false
 	_big = _label(_vbox(Control.PRESET_CENTER, Vector2(0, -140)), 40, Color(1.0, 0.9, 0.3))
 	_banner = _label(_vbox(Control.PRESET_CENTER_TOP, Vector2(0, 120)), 34, Color(1.0, 0.55, 0.15))
 
@@ -195,6 +199,14 @@ func _ignore_mouse(c: Control) -> void:
 
 # --- events from Game ---
 
+## A flick on the crosshair when a blow lands: bigger and red for the head, a cross for a kill.
+func hit_marker(head: bool, kill: bool) -> void:
+	_mark.text = "✕" if kill else "×"
+	_mark.add_theme_color_override("font_color", Color(1.0, 0.2, 0.15) if head else Color.WHITE)
+	_mark.add_theme_font_size_override("font_size", 46 if head else 30)
+	_mark_t = 0.3 if head else 0.15
+
+
 ## What F would do right now, and how far through a hold it is.
 func set_prompt(text: String, frac: float) -> void:
 	_prompt.text = text
@@ -242,7 +254,7 @@ func open_shop(vi: int) -> void:
 		_shop_list.add_child(b)
 	if v.get("till", false):
 		var b := Button.new()
-		b.text = "HOLD UP THE TILL  (needs a pistol)"
+		b.text = "HOLD UP THE TILL  (needs a gun)"
 		b.add_theme_color_override("font_color", Color(1.0, 0.4, 0.3))
 		b.pressed.connect(func():
 			Net.game.to_server("srv_till", [vi])
@@ -324,9 +336,11 @@ func _process(delta: float) -> void:
 	_hp.value = st.hp
 	_money.text = "R$ %d" % st.money
 	var w = DB.ITEMS[st.equipped]
-	_weapon.text = w.name if w.melee else "%s  [%d]" % [w.name, st.ammo]
-	if st.inv.has("pistol") and w.melee:
-		_weapon.text += "   (2: pistol)"
+	_weapon.text = w.name if w.melee else "%s  [%d / %d]" % [w.name, st.mag.get(st.equipped, 0), st.ammo]
+	if not w.melee and st.mag.get(st.equipped, 0) == 0:
+		_weapon.text += "   R: reload" if st.ammo > 0 else "   EMPTY"
+	_mark_t -= delta
+	_mark.visible = _mark_t > 0.0
 
 	var lines: Array = []
 	var fx: Array = []
@@ -376,7 +390,10 @@ func _process(delta: float) -> void:
 	if p.robbing:
 		_target.text = "SHOUT!"
 	elif p.target_npc >= 0:
-		_target.text = "Hold E and keep QUIET to go through their bag" if g.crowd.is_lying(p.target_npc) else "Hold E and shout to rob"
+		if g.crowd.is_out(p.target_npc):
+			_target.text = "Out cold: hold E to go through their pockets"
+		else:
+			_target.text = "Hold E and keep QUIET to go through their bag" if g.crowd.is_lying(p.target_npc) else "Hold E and shout to rob"
 	elif p.mv == p.MV_RIDE:
 		_target.text = "W / S throttle   A / D steer   Space hop   F get off"
 	elif p.is_crouched():

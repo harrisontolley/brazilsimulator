@@ -137,6 +137,10 @@ func _build() -> void:
 	made["firework"] = _wav(_firework(), false)
 	made["crash"] = _wav(_crash(), false)
 	made["thunder"] = _wav(_thunder(), false)
+	made["headshot"] = _wav(_headshot(), false)
+	made["ko"] = _wav(_ko(), false)
+	made["dry"] = _wav(_dry(), false)
+	made["reload"] = _wav(_reload(), false)
 	_adopt.call_deferred(made)
 
 
@@ -317,6 +321,46 @@ func _shot() -> PackedFloat32Array:
 	_hiss(f, rng, 0.0, 0.05, 1.0)
 	_hiss(f, rng, 0.0, 0.12, 0.5, 0.15)
 	_tone(f, 0.0, 150.0, 55.0, 0.05, 0.8)
+	return f
+
+
+## A wet crack with a ring to it: the sound of having got the head.
+func _headshot() -> PackedFloat32Array:
+	var f := _buf(0.4)
+	var rng := RandomNumberGenerator.new()
+	_hiss(f, rng, 0.0, 0.012, 1.0)
+	_tone(f, 0.0, 420.0, 180.0, 0.03, 0.9)
+	_tone(f, 0.01, 2100.0, 1900.0, 0.07, 0.35)
+	return f
+
+
+## Lights out: a deep thud and a falling whistle.
+func _ko() -> PackedFloat32Array:
+	var f := _buf(0.7)
+	var rng := RandomNumberGenerator.new()
+	_hiss(f, rng, 0.0, 0.03, 0.8, 0.2)
+	_tone(f, 0.0, 90.0, 45.0, 0.06, 1.0)
+	_tone(f, 0.05, 1400.0, 500.0, 0.14, 0.3)
+	return f
+
+
+## Hammer on an empty chamber.
+func _dry() -> PackedFloat32Array:
+	var f := _buf(0.12)
+	var rng := RandomNumberGenerator.new()
+	_hiss(f, rng, 0.0, 0.004, 0.9)
+	_tone(f, 0.0, 2400.0, 2000.0, 0.008, 0.5)
+	return f
+
+
+## Magazine out, magazine in, slide forward.
+func _reload() -> PackedFloat32Array:
+	var f := _buf(1.0)
+	var rng := RandomNumberGenerator.new()
+	for at in [0.0, 0.45, 0.8]:
+		_hiss(f, rng, at, 0.012, 0.8, 0.6)
+		_tone(f, at, 900.0, 500.0, 0.015, 0.5)
+	_tone(f, 0.8, 300.0, 200.0, 0.03, 0.6)
 	return f
 
 

@@ -21,6 +21,7 @@ var _arm: SpringArm3D
 var _step := 0
 var _t := 0.0
 var _roll := 0.0
+var _recoil := Vector2.ZERO
 
 
 func _ready() -> void:
@@ -47,6 +48,12 @@ func pitch(amount: float) -> void:
 	rotation.x = clampf(rotation.x + amount, -1.45, 1.45)
 
 
+## Kicks the view up by `up` radians and sideways by `side`; most of it settles back.
+func recoil(up: float, side: float) -> void:
+	rotation.x = clampf(rotation.x + up * 0.4, -1.45, 1.45)
+	_recoil += Vector2(up * 0.6, side)
+
+
 func first_person() -> bool:
 	return _arm.spring_length < 0.5
 
@@ -60,4 +67,5 @@ func _process(delta: float) -> void:
 	kick = move_toward(kick, 0.0, 0.25 * delta)
 	dip = move_toward(dip, 0.0, 1.1 * delta)
 	cam.position.y = lerpf(cam.position.y, -dip, minf(1.0, 25.0 * delta))
-	cam.rotation = Vector3(sin(_t * 13.0) + sin(_t * 7.3) * 0.5, cos(_t * 11.0) + sin(_t * 5.1) * 0.5, 0.0) * (shake + kick) + Vector3(0.0, 0.0, _roll)
+	_recoil = _recoil.lerp(Vector2.ZERO, minf(1.0, 9.0 * delta))
+	cam.rotation = Vector3(sin(_t * 13.0) + sin(_t * 7.3) * 0.5, cos(_t * 11.0) + sin(_t * 5.1) * 0.5, 0.0) * (shake + kick) + Vector3(_recoil.x, _recoil.y, _roll)

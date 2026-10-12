@@ -11,7 +11,8 @@ extends Node3D
 const Kit := preload("res://scenes/characters/char_kit.gd")
 const Layout := preload("res://scenes/world/layout.gd")
 
-enum { AMBIENT, COWER, FLEE, HOSTILE, PARADE, DEAD, GONE }
+## Everything before DEAD is somebody who is still there to be dealt with.
+enum { AMBIENT, COWER, FLEE, HOSTILE, PARADE, KO, DEAD, GONE }
 
 const COUNT := 2500
 const FLEE_SPEED := 5.5
@@ -22,6 +23,8 @@ const ROB_TICK := 0.1
 ## Mic level under which a sunbather sleeps on, and how long their bag takes to go through.
 const PICK_LOUD := 0.08
 const PICK_TIME := 2.5
+## Someone out cold takes no time at all to go through, and will not wake for it.
+const PICK_TIME_KO := 1.0
 ## A hold-up in progress is one crime that goes on, not ten a second.
 const ROB_CRIME_EVERY := 1.0
 const BODY_RADIUS := 0.5
@@ -84,6 +87,7 @@ var _changed := {}         # idx -> last state event, replayed to late joiners
 # server only
 var _rob := {}      # pid -> {npc, meter, quiet, last}
 var _hostile := {}  # idx -> {target, cd, until, shooter}
+var _ko := {}       # idx -> [match time they come round, pid who did it]
 var _send_t := 0.0
 
 
@@ -99,6 +103,7 @@ func setup(seed_value: int) -> void:
 	_changed.clear()
 	_rob.clear()
 	_hostile.clear()
+	_ko.clear()
 	_walkers.clear()
 	near.clear()
 	_leave_ptr = 0
@@ -384,6 +389,9 @@ func _restyle(i: int) -> void:
 			flags |= Kit.F_ANGRY
 			if _shooter.has(i):
 				held = Kit.HELD_PISTOL
+		KO:
+			pose = Kit.KO
+			held = Kit.HELD_NONE
 		DEAD:
 			pose = Kit.DEAD
 			flags = _look[i]
@@ -465,6 +473,14 @@ func _process(delta: float) -> void:
 				_hostile_step(i, pos[i].lerp(_hostile_target[i], minf(1.0, 10.0 * delta)), delta)
 
 	if server:
+		for i in _ko.keys():
+			if t >= _ko[i][0]:
+				# Comes round with a sore head and a grudge, or just legs it.
+				var who: int = _ko[i][1]
+				_ko.erase(i)
+				if state[i] == KO:
+					var pl = Net.game.players.get(who)
+					_srv_react(i, who, pl.global_position if pl != null else pos[i])
 		for pid in _rob.keys():
 			_rob[pid].last += delta
 			if _rob[pid].last > 0.8:
@@ -525,7 +541,7 @@ func pick_near(o: Vector3, d: Vector3, max_t: float) -> int:
 	for i in near:
 		if state[i] >= DEAD:
 			continue
-		var t := DB.ray_point(o, d, pos[i] + Vector3(0, 0.3 if is_lying(i) else 0.9, 0), BODY_RADIUS, best_t)
+		var t := DB.ray_point(o, d, pos[i] + Vector3(0, 0.3 if _down(i) else 0.9, 0), BODY_RADIUS, best_t)
 		if t >= 0.0:
 			best = i
 			best_t = t
@@ -537,28 +553,56 @@ func is_lying(i: int) -> bool:
 	return _lying[i] == 1 and state[i] == AMBIENT
 
 
-## Full-crowd ray test (server). Returns [index, distance]; index -1 on a miss.
-func ray_pick(o: Vector3, d: Vector3, max_t: float, radius: float) -> Array:
+## Knocked out: pockets there for the taking.
+func is_out(i: int) -> bool:
+	return state[i] == KO
+
+
+## On the ground one way or another, so not part of the standing crowd.
+func _down(i: int) -> bool:
+	return state[i] == KO or (_lying[i] == 1 and state[i] == AMBIENT)
+
+
+## Kit.STANCE_* of NPC i, for working out where its head is.
+func stance(i: int) -> int:
+	if state[i] == KO:
+		return Kit.STANCE_BACK
+	if _lying[i] == 1 and state[i] == AMBIENT:
+		return Kit.STANCE_TOWEL
+	if state[i] == COWER:
+		return Kit.STANCE_CROUCH
+	return Kit.STANCE_STAND
+
+
+## Full-crowd ray test (server). Returns [index, distance, DB.ZONE_*]; index -1 on a miss.
+func ray_pick(o: Vector3, d: Vector3, max_t: float, grow: float) -> Array:
 	var best := -1
 	var best_t := max_t
+	var zone := DB.ZONE_BODY
+	var flat := Vector2(d.x, d.z)
 	for i in count:
 		if state[i] >= DEAD:
 			continue
 		var c := pos[i]
-		if absf(c.x - o.x) > best_t or absf(c.z - o.z) > best_t:
+		var to := Vector2(c.x - o.x, c.z - o.z)
+		if absf(to.x) > best_t or absf(to.y) > best_t:
 			continue
-		var t := DB.ray_point(o, d, c + Vector3(0, 0.9, 0), radius, best_t)
-		if t >= 0.0:
+		# Nowhere near the line: no need for the careful test.
+		if absf(to.x * flat.y - to.y * flat.x) > 2.2:
+			continue
+		var h := Kit.ray_hit(o, d, best_t, c, _yaw[i], _scale[i], stance(i), grow)
+		if h[0] >= 0.0:
 			best = i
-			best_t = t
-	return [best, best_t]
+			best_t = h[0]
+			zone = h[1]
+	return [best, best_t, zone]
 
 
 ## People on their feet within r of p: how much of a crowd someone there is standing in.
 func count_near(p: Vector3, r: float) -> int:
 	var n := 0
 	for i in count:
-		if state[i] >= DEAD or (_lying[i] == 1 and state[i] == AMBIENT) or absf(pos[i].y - p.y) > 2.5:
+		if state[i] >= DEAD or _down(i) or absf(pos[i].y - p.y) > 2.5:
 			continue
 		var dx := pos[i].x - p.x
 		var dz := pos[i].z - p.z
@@ -582,7 +626,7 @@ func count_on_segment(a: Vector3, b: Vector3, w: float) -> int:
 		var c := pos[i]
 		if c.x < lo_x or c.x > hi_x or c.z < lo_z or c.z > hi_z:
 			continue
-		if state[i] >= DEAD or (_lying[i] == 1 and state[i] == AMBIENT):
+		if state[i] >= DEAD or _down(i):
 			continue
 		var ac := Vector2(c.x - a.x, c.z - a.z)
 		var t := ac.dot(ab) / len2
@@ -595,7 +639,7 @@ func count_on_segment(a: Vector3, b: Vector3, w: float) -> int:
 func push_out(p: Vector3) -> Vector3:
 	var out := Vector3.ZERO
 	for i in near:
-		if state[i] >= DEAD or (_lying[i] == 1 and state[i] == AMBIENT):
+		if state[i] >= DEAD or _down(i):
 			continue
 		var v := p - pos[i]
 		var d := Vector2(v.x, v.z).length()
@@ -638,6 +682,11 @@ func cl_npc(i: int, s: int, p: Vector3, dir: Vector3, t0: float, flags: int) -> 
 			_place(i, p)
 			_active[i] = true
 			_hostile_target[i] = p
+		KO:
+			_walker[i] = 0
+			_lying[i] = 0
+			_home[i] = p
+			_place(i, p)
 		DEAD:
 			_ev[i] = Kit.now()
 			_place(i, p)
@@ -695,8 +744,8 @@ func snapshot() -> Array:
 func apply_snapshot(snap: Array) -> void:
 	for e in snap:
 		cl_npc(e[0], e[1], e[2], e[3], e[4], e[5])
-		if e[1] == DEAD:
-			# Died before we joined: already on the ground, not falling over now.
+		if e[1] == DEAD or e[1] == KO:
+			# Went down before we joined: already on the ground, not falling over now.
 			_pose_t[e[0]] = Kit.now() - 5.0
 			_restyle(e[0])
 
@@ -854,23 +903,34 @@ func srv_provoke(i: int, pid: int) -> void:
 	_srv_set(i, HOSTILE)
 
 
-func srv_damage_npc(i: int, dmg: float, attacker: int) -> void:
+## Hurts NPC i. `ko` says the blow can knock them out: to the head it may, and one that would
+## have killed with bare hands always does instead. Returns whether they went out cold.
+func srv_damage_npc(i: int, dmg: float, attacker: int, zone := 0, ko := false) -> bool:
 	if i < 0 or i >= count or state[i] >= DEAD:
-		return
+		return false
 	var g = Net.game
-	hp[i] -= dmg
 	for pid in _rob.keys():
 		if _rob[pid].npc == i:
 			_rob.erase(pid)
+	if ko and state[i] != KO and ((zone == DB.ZONE_HEAD and randf() < DB.KO_CHANCE) or hp[i] - dmg <= 0.0):
+		hp[i] = maxf(hp[i] - dmg, 5.0)
+		_hostile.erase(i)
+		_ko[i] = [MatchState.time + DB.KO_NPC, attacker]
+		_srv_set(i, KO)
+		g.bcast("cl_ko", [pos[i] + Vector3(0, 0.7, 0), DB.KO_NPC])
+		return true
+	hp[i] -= dmg
 	if hp[i] <= 0.0:
 		_hostile.erase(i)
+		_ko.erase(i)
 		_srv_set(i, DEAD)
 		if money[i] > 0:
 			g.srv_add_drop(pos[i], money[i], {})
 			money[i] = 0
-	elif state[i] != HOSTILE:
+	elif state[i] != HOSTILE and state[i] != KO:
 		var p = g.players.get(attacker)
 		_srv_react(i, attacker, p.global_position if p != null else pos[i])
+	return false
 
 
 # --- server: robbery ---
@@ -886,16 +946,18 @@ func srv_rob(i: int, loud: float) -> void:
 	loud = clampf(loud, 0.0, 1.0)
 	var r = _rob.get(pid)
 	if r == null or r.npc != i:
-		if state[i] != AMBIENT:
+		if state[i] != AMBIENT and state[i] != KO:
 			return
 		if r != null:
 			_srv_rob_abort(pid)
 		# Someone asleep on a towel can be robbed without a word, if you keep it that way.
-		r = {"npc": i, "meter": 0.0, "quiet": 0.0, "last": 0.0, "crime": 0.0, "pick": is_lying(i) and loud < PICK_LOUD}
+		# Someone out cold can be robbed however loud you like.
+		var out := state[i] == KO
+		r = {"npc": i, "meter": 0.0, "quiet": 0.0, "last": 0.0, "crime": 0.0, "out": out, "pick": out or (is_lying(i) and loud < PICK_LOUD)}
 		_rob[pid] = r
 		if not r.pick:
 			_srv_set(i, COWER)
-	elif state[i] != (AMBIENT if r.pick else COWER):
+	elif state[i] != (KO if r.out else (AMBIENT if r.pick else COWER)):
 		_rob.erase(pid)
 		return
 	if r.pick:
@@ -937,7 +999,7 @@ func srv_rob(i: int, loud: float) -> void:
 			g._give(p.st, loot, 1)
 			msg += " + %s" % DB.ITEMS[loot].name
 		if randf() < a.gun:
-			p.st.inv["pistol"] = 1
+			g._give(p.st, "pistol", 1)
 			p.st.ammo += 6
 			msg += " + a pistol"
 		g.push_state(p)
@@ -963,6 +1025,14 @@ func _srv_pickpocket(pid: int, p, r: Dictionary, loud: float) -> void:
 		g.send(pid, "cl_rob_meter", [0.0])
 		return
 	r.last = 0.0
+	if r.out:
+		r.meter += ROB_TICK / PICK_TIME_KO
+		if r.meter >= 1.0:
+			_rob.erase(pid)
+			_srv_strip(pid, p, i)
+		else:
+			g.send(pid, "cl_rob_meter", [r.meter])
+		return
 	r.meter += ROB_TICK / PICK_TIME
 	if loud > PICK_LOUD * 2.0 or randf() < 0.035 * ROB_TICK * 10.0:
 		_rob.erase(pid)
@@ -990,6 +1060,37 @@ func _srv_pickpocket(pid: int, p, r: Dictionary, loud: float) -> void:
 	_srv_set(i, AMBIENT)
 
 
+## Everything NPC i has on them goes to player p: cash, whatever they were wearing, maybe a gun.
+func _srv_strip(pid: int, p, i: int) -> void:
+	var g = Net.game
+	var a = DB.ARCHETYPES[arch[i]]
+	var cash := money[i]
+	var tier := DB.wealth_tier(cash)
+	money[i] = 0
+	p.st.money += cash
+	var msg := "Took R$%d" % cash
+	var loot := ""
+	if _look[i] & Kit.F_CAMERA:
+		loot = "camera"
+	elif tier == 2:
+		loot = "chain"
+	elif tier >= 1:
+		loot = "watch" if randf() < 0.5 else "phone"
+	if loot != "":
+		g._give(p.st, loot, 1)
+		msg += " + %s" % DB.ITEMS[loot].name
+	if randf() < a.gun:
+		g._give(p.st, "pistol", 1)
+		p.st.ammo += 6
+		msg += " + a pistol"
+	g.push_state(p)
+	g.send(pid, "cl_toast", [msg])
+	g.send(pid, "cl_rob_meter", [0.0])
+	g.send(pid, "cl_sound", ["cash", pos[i]])
+	# Pockets turned out for all to see; still out cold.
+	_srv_set(i, KO)
+
+
 func _srv_rob_abort(pid: int) -> void:
 	var r = _rob.get(pid)
 	_rob.erase(pid)
@@ -1000,6 +1101,23 @@ func _srv_rob_abort(pid: int) -> void:
 
 
 # --- debug ---
+
+## For tests: brings one plain local to stand at `at` and returns their index.
+func debug_stand(at: Vector3, yaw: float) -> int:
+	var i := 0
+	while arch[i] != 1:
+		i += 1
+	state[i] = AMBIENT
+	_walker[i] = 0
+	_lying[i] = 0
+	_idle[i] = Kit.STAND
+	_home[i] = at
+	_yaw[i] = yaw
+	hp[i] = 60.0
+	_place(i, at)
+	_restyle(i)
+	return i
+
 
 ## For tests: everybody goes home, so nothing but walls is in the way.
 func debug_clear() -> void:

@@ -4,6 +4,7 @@ extends Node3D
 var _star: ArrayMesh
 var _beam: BoxMesh
 var _mats := {}
+var _shells := 0
 
 
 func _ready() -> void:
@@ -150,3 +151,38 @@ func ko_stars(at: Vector3, seconds: float) -> void:
 	var tw := create_tween()
 	tw.tween_property(ring, "rotation:y", seconds * 5.0, seconds)
 	tw.tween_callback(ring.queue_free)
+
+
+## A head hit: a bigger, redder burst, and a spray for a bullet.
+func headshot(at: Vector3, shot: bool) -> void:
+	_burst(at, 0.75 if shot else 0.6, Color(1.0, 0.1, 0.05))
+	_burst(at, 0.3, Color(1.0, 0.95, 0.3))
+	if not shot:
+		return
+	for k in 6:
+		var mi := _node(_beam, Color(0.75, 0.03, 0.03))
+		mi.position = at
+		mi.scale = Vector3(1.0, 1.0, 0.12)
+		var to := at + Vector3(randf_range(-0.7, 0.7), randf_range(0.1, 0.9), randf_range(-0.7, 0.7))
+		var tw := create_tween()
+		tw.tween_property(mi, "position", to, 0.18)
+		tw.parallel().tween_property(mi, "scale", Vector3(0.3, 0.3, 0.02), 0.18)
+		tw.tween_callback(mi.queue_free)
+
+
+## A spent case flicked out to the shooter's right.
+func shell(at: Vector3, right: Vector3) -> void:
+	if _shells >= 24:
+		return
+	_shells += 1
+	var mi := _node(_beam, Color(0.95, 0.75, 0.2))
+	mi.position = at
+	mi.scale = Vector3(0.6, 0.6, 0.07)
+	var out := at + right * randf_range(0.5, 0.9) + Vector3(0, 0.35, 0)
+	var tw := create_tween()
+	tw.tween_property(mi, "position", out, 0.12)
+	tw.tween_property(mi, "position", Vector3(out.x + right.x * 0.3, maxf(at.y - 1.2, 0.03), out.z + right.z * 0.3), 0.28).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	tw.tween_interval(0.6)
+	tw.tween_callback(func() -> void:
+		_shells -= 1
+		mi.queue_free())

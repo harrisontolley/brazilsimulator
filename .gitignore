@@ -1,3 +1,6 @@
 .godot/
 *.import.bak
 export_presets.cfg
+
+# Scratch worktrees used by coding agents
+.claude/worktrees/

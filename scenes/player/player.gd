@@ -117,6 +117,8 @@ var _ev := 0.0  # Kit one-shot event time
 var _pose := 0
 var _prev := 0
 var _pose_t := 0.0
+var _reload_t := -10.0
+var _reload_len := 1.0
 var _anim: CharRig
 var _mats: Array = []
 var _hops := 0
@@ -144,7 +146,7 @@ static func fresh_state() -> Dictionary:
 	return {
 		"hp": 100.0, "money": 0, "kills": 0,
 		"inv": {"fists": 1}, "equipped": "fists", "ammo": 0,
-		"heat": 0, "vis": 0, "hide": -1, "jail": 0.0, "dead": false,
+		"heat": 0, "vis": 0, "hide": -1, "jail": 0.0, "dead": false, "ko": 0.0, "mag": {},
 		"drugs": {}, "tol": {}, "bet": {},
 	}
 
@@ -270,7 +272,7 @@ func mic_mult() -> float:
 
 
 func can_act() -> bool:
-	return not st.dead and not MatchState.ended
+	return not st.dead and not MatchState.ended and st.ko <= 0.0
 
 
 func can_fight() -> bool:
@@ -285,6 +287,25 @@ func at_large() -> bool:
 ## How fast this body is covering ground, as anyone watching would judge it.
 func ground_speed() -> float:
 	return _spd
+
+
+## Where this player's eyes are, as the host reckons it.
+func eye() -> Vector3:
+	var m: int = mv if is_local else net_mv & 7
+	var h := HEAD.y
+	if m == MV_CROUCH:
+		h = DUCK_HEAD
+	elif m == MV_SLIDE or m == MV_DIVE:
+		h = CROUCH_HEAD
+	return global_position + Vector3(0, h, 0)
+
+
+## Kit.STANCE_* for hit testing.
+func stance() -> int:
+	if st.ko > 0.0:
+		return Kit.STANCE_BACK
+	var m: int = mv if is_local else net_mv & 7
+	return Kit.STANCE_CROUCH if m == MV_CROUCH or m == MV_SLIDE or m == MV_DIVE else Kit.STANCE_STAND
 
 
 ## Bent double and creeping (or keeping still): much harder for a cop to pick out.
@@ -756,7 +777,7 @@ func _animate(delta: float) -> void:
 	if not is_local and (net_mv >> 5) & 3 != _hops_seen:
 		_hops_seen = (net_mv >> 5) & 3
 		_anim.jump(CharRig.DOUBLE if net_mv & 128 else CharRig.HOP)
-	var out: bool = st.get("ko", 0.0) > 0.0
+	var out: bool = st.ko > 0.0
 	# The pose id only says what kind of thing the body is doing; the rig does the posing.
 	var pose := Kit.STAND
 	if st.dead:
@@ -819,14 +840,32 @@ func fx_event(attack: bool) -> void:
 		rig.kick = 0.05
 
 
-## Where the local player's shots visibly leave from in first person.
+## Where this player's shots visibly leave from: the gun in first person, the hand otherwise.
 func muzzle() -> Vector3:
-	return rig.cam.global_transform * Vector3(0.24, -0.16, -0.95)
+	if is_local and rig.first_person():
+		return rig.cam.global_transform * Vector3(0.24, -0.16, -0.95)
+	var pitch: float = rig.rotation.x if is_local else net_pitch
+	return global_position + Vector3(0, 1.0, 0) + global_basis * (Basis(Vector3.RIGHT, pitch) * Vector3(0.2, 0.0, -0.75))
+
+
+## The gun bucks: the view jumps and only mostly comes back.
+func recoil() -> void:
+	var k: float = DB.ITEMS[st.equipped].get("recoil", 0.0)
+	rig.recoil(k, randf_range(-0.4, 0.4) * k)
+	_vm_t = Kit.now()
+
+
+## A one-off bit of body language started by the host (Game.cl_anim).
+func play(what: String, seconds: float) -> void:
+	if what == "reload":
+		_reload_t = Kit.now()
+		_reload_len = seconds
+		Sfx.play("reload", global_position + HEAD)
 
 
 func _animate_viewmodel() -> void:
 	_vm.visible = rig.first_person() and not st.dead
-	var gun: bool = st.equipped == "pistol"
+	var gun: bool = DB.is_gun(st.equipped)
 	_vm_gun.visible = gun
 	var dt := Kit.now() - _vm_t
 	var e := smoothstep(0.0, 0.06, dt) * (1.0 - smoothstep(0.08, 0.28, dt))
@@ -839,6 +878,12 @@ func _animate_viewmodel() -> void:
 		_vm_r.position = Vector3(0.24, -0.24, -0.7) + sway + Vector3(0.0, 0.03, 0.1) * e
 		_vm_r.rotation.x = 0.35 * e
 		_vm_l.position = VM_LEFT + Vector3(0.0, -0.12, 0.1)
+		# Reloading: the gun drops out of view and comes back up.
+		var r := clampf((Kit.now() - _reload_t) / _reload_len, 0.0, 1.0)
+		var dip := sin(r * PI)
+		_vm_r.position += Vector3(0.0, -0.22, 0.05) * dip
+		_vm_r.rotation.x += 0.7 * dip
+		_vm_l.position += Vector3(0.12, 0.06, -0.1) * dip
 	elif _vm_side > 0.0:
 		_vm_r.position += Vector3(-0.2, 0.14, -0.45) * e
 	else:
@@ -883,19 +928,23 @@ func _local_process(delta: float) -> void:
 	if captured and can_fight():
 		if Input.is_action_pressed("attack") and _attack_t <= 0.0:
 			_attack_t = DB.ITEMS[st.equipped].cooldown
-			g.to_server("srv_attack", [dir])
-			if DB.ITEMS[st.equipped].melee or st.ammo > 0:
+			# The point on the line of sight level with the head: where the blow starts from.
+			var cam: Vector3 = rig.cam.global_position
+			g.to_server("srv_attack", [cam + dir * maxf(0.0, (head - cam).dot(dir)), dir])
+			if DB.ITEMS[st.equipped].melee:
 				_vm_t = Kit.now()
 				_vm_side = -_vm_side
+		if Input.is_action_just_pressed("reload"):
+			g.to_server("srv_reload")
 		if Input.is_action_pressed("rob") and target_npc >= 0:
 			robbing = true
 			if _rob_t <= 0.0:
 				_rob_t = 0.1
 				g.to_server("srv_rob", [target_npc, Mic.loudness * mic_mult()], g.crowd)
 		if Input.is_action_just_pressed("weapon_1"):
-			g.to_server("srv_equip", ["fists"])
+			g.to_server("srv_equip", [_next_weapon(DB.MELEE)])
 		if Input.is_action_just_pressed("weapon_2"):
-			g.to_server("srv_equip", ["pistol"])
+			g.to_server("srv_equip", [_next_weapon(DB.GUNS)])
 		for d in DB.DRUGS:
 			if Input.is_action_just_pressed(DB.ITEMS[d].key):
 				g.to_server("srv_use", [d])
@@ -904,6 +953,16 @@ func _local_process(delta: float) -> void:
 	if _send_t <= 0.0 and not multiplayer.is_server():
 		_send_t = 0.05
 		g.srv_move.rpc_id(1, global_position, rotation.y, net_byte(), rig.rotation.x)
+
+
+## The next weapon of this kind the player owns after the one in hand, or the first.
+func _next_weapon(kinds: Array) -> String:
+	var at: int = kinds.find(st.equipped)
+	for k in kinds.size():
+		var item: String = kinds[(at + 1 + k) % kinds.size()]
+		if st.inv.has(item):
+			return item
+	return st.equipped
 
 
 # --- proximity voice playback ---

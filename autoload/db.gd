@@ -2,8 +2,14 @@ extends Node
 ## Static game data: items, NPC archetypes, vendors, map constants.
 
 const ITEMS := {
-	"fists": {"name": "Fists", "type": "weapon", "melee": true, "damage": 12.0, "range": 2.3, "cooldown": 0.45, "spread": 0.0, "intimidation": 1.0, "price": 0},
-	"pistol": {"name": "Pistol", "type": "weapon", "melee": false, "damage": 34.0, "range": 60.0, "cooldown": 0.35, "spread": 0.035, "intimidation": 2.5, "price": 400, "held": 2},
+	# Weapons. `held` is the Kit.HELD_* shown in the hand. `ko`: a blow to the head can knock
+	# someone out. Guns carry `mag` rounds, take `reload` seconds to refill, kick the view up by
+	# `recoil`, and a shot to the head kills outright `head_kill` of the time.
+	"fists": {"name": "Fists", "type": "weapon", "melee": true, "damage": 12.0, "range": 2.3, "cooldown": 0.45, "spread": 0.0, "intimidation": 1.0, "price": 0, "held": 0, "ko": true},
+	"knife": {"name": "Faca", "type": "weapon", "melee": true, "damage": 28.0, "range": 2.1, "cooldown": 0.5, "spread": 0.0, "intimidation": 1.8, "price": 150, "held": 1},
+	"pistol": {"name": "Pistol", "type": "weapon", "melee": false, "damage": 34.0, "range": 60.0, "cooldown": 0.35, "spread": 0.035, "intimidation": 2.5, "price": 400, "held": 2, "mag": 12, "reload": 1.4, "recoil": 0.03, "head_kill": 0.85},
+	"revolver": {"name": "Três-oitão", "type": "weapon", "melee": false, "damage": 55.0, "range": 70.0, "cooldown": 0.6, "spread": 0.02, "intimidation": 2.8, "price": 900, "held": 3, "mag": 6, "reload": 2.2, "recoil": 0.065, "head_kill": 1.0},
+	"smg": {"name": "Submetralhadora", "type": "weapon", "melee": false, "damage": 16.0, "range": 45.0, "cooldown": 0.09, "spread": 0.06, "intimidation": 3.0, "price": 1500, "held": 4, "mag": 30, "reload": 2.0, "recoil": 0.016, "head_kill": 0.45},
 	"ammo": {"name": "Ammo x12", "type": "ammo", "amount": 12, "price": 60},
 	"cocaine": {"name": "Cocaine", "type": "drug", "key": "drug_1", "duration": 25.0, "comedown": 20.0, "od": 12.0, "price": 150},
 	"weed": {"name": "Weed", "type": "drug", "key": "drug_2", "duration": 45.0, "comedown": 0.0, "od": 20.0, "price": 60},
@@ -20,6 +26,15 @@ const ITEMS := {
 	"chain": {"name": "Cordão de ouro", "type": "loot", "price": 450},
 }
 const DRUGS := ["cocaine", "weed", "meth"]
+## What the two weapon keys cycle through.
+const MELEE := ["fists", "knife"]
+const GUNS := ["pistol", "revolver", "smg"]
+## A head shot that does not kill outright still does this much more.
+const HEAD_MULT := 2.5
+# What came of a hit, as sent in Game.cl_fx.
+const FX_HEAD := 1
+const FX_KILL := 2
+const FX_KO := 4
 const TOLERANCE_PER_DOSE := 0.45
 const TOLERANCE_DECAY := 0.02
 
@@ -49,7 +64,7 @@ const LOOT := ["phone", "watch", "camera", "chain"]
 ## `till` shops keep cash that can be taken at gunpoint.
 const VENDORS := [
 	{"name": "DEALER", "kind": "shop", "pos": Vector3(-60, 0, 47), "stock": ["cocaine", "weed", "meth"], "color": Color(0.2, 0.7, 0.3)},
-	{"name": "ARMS", "kind": "shop", "pos": Vector3(80, 0, 47), "stock": ["pistol", "ammo"], "color": Color(0.25, 0.25, 0.3)},
+	{"name": "ARMS", "kind": "shop", "pos": Vector3(80, 0, 47), "stock": ["knife", "pistol", "revolver", "smg", "ammo"], "color": Color(0.25, 0.25, 0.3)},
 	{"name": "QUIOSQUE 1", "kind": "shop", "till": true, "pos": Vector3(-240, 0, 47), "stock": FOOD, "color": Color(0.9, 0.3, 0.2)},
 	{"name": "QUIOSQUE 2", "kind": "shop", "till": true, "pos": Vector3(-150, 0, 47), "stock": FOOD, "color": Color(0.95, 0.6, 0.1)},
 	{"name": "QUIOSQUE 3", "kind": "shop", "till": true, "pos": Vector3(10, 0, 47), "stock": FOOD, "color": Color(0.9, 0.3, 0.2)},
@@ -129,6 +144,25 @@ static func clear_of_solids(p: Vector3, margin: float) -> Vector3:
 ## 0 poor, 1 mid, 2 rich.
 static func wealth_tier(cash: int) -> int:
 	return 2 if cash >= WEALTH_TIERS[1] else (1 if cash >= WEALTH_TIERS[0] else 0)
+
+
+static func is_gun(item: String) -> bool:
+	return GUNS.has(item)
+
+
+## Distance along ray (o, d) at which it passes nearest the segment a-b, or -1 if it never
+## comes within `radius` of it. A capsule test for a body that is not a ball.
+static func ray_segment(o: Vector3, d: Vector3, a: Vector3, b: Vector3, radius: float, max_t: float) -> float:
+	var ab := b - a
+	var ao := o - a
+	var dd := ab.dot(d)
+	var len2 := ab.length_squared()
+	var denom := len2 - dd * dd
+	# s: how far along the body the nearest point is.
+	var s := 0.5
+	if denom > 0.0001:
+		s = clampf((ab.dot(ao) - dd * d.dot(ao)) / denom, 0.0, 1.0)
+	return ray_point(o, d, a + ab * s, radius, max_t)
 
 
 ## Distance along ray (o, d) to the point nearest c, or -1 if the ray misses a sphere of `radius`.

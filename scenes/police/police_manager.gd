@@ -253,38 +253,43 @@ func cl_cops(ps: PackedVector3Array, states: PackedByteArray, yaws: PackedFloat3
 		_yaw_to = yaws
 
 
-## Server ray test. Returns [cop index, distance]; index -1 on a miss.
-func ray_pick(o: Vector3, d: Vector3, max_t: float, radius: float) -> Array:
+## Server ray test. Returns [cop index, distance, DB.ZONE_*]; index -1 on a miss.
+func ray_pick(o: Vector3, d: Vector3, max_t: float, grow: float) -> Array:
 	var best := -1
 	var best_t := max_t
+	var zone := DB.ZONE_BODY
 	for i in cops.size():
-		if cops[i].state == DOWN:
+		var c: Dictionary = cops[i]
+		if c.state == DOWN:
 			continue
-		var t := DB.ray_point(o, d, cops[i].pos + Vector3(0, 0.9, 0), radius, best_t)
-		if t >= 0.0:
+		var h := Kit.ray_hit(o, d, best_t, c.pos, c.yaw, HEIGHT, Kit.STANCE_BACK if c.state == KO else Kit.STANCE_STAND, grow)
+		if h[0] >= 0.0:
 			best = i
-			best_t = t
-	return [best, best_t]
+			best_t = h[0]
+			zone = h[1]
+	return [best, best_t, zone]
 
 
 ## `zone` is DB.ZONE_*. A fist to the head can lay a cop out cold for a while instead.
-func srv_damage_cop(i: int, dmg: float, attacker: int, zone := 0, melee := false) -> void:
+## Returns whether it did.
+func srv_damage_cop(i: int, dmg: float, attacker: int, zone := 0, ko := false) -> bool:
 	var c = cops[i]
 	if c.state == DOWN:
-		return
+		return false
 	Crime.report_crime(c.pos, attacker, 3)
-	if melee and zone == DB.ZONE_HEAD and c.state != KO and randf() < DB.KO_CHANCE:
+	if ko and zone == DB.ZONE_HEAD and c.state != KO and randf() < DB.KO_CHANCE:
 		c.state = KO
 		c.t = DB.KO_COP
 		c.target = attacker
 		Net.game.bcast("cl_ko", [c.pos + Vector3(0, 1.6, 0), DB.KO_COP])
 		Net.game.srv_add_drop(c.pos + Vector3(0.6, 0, 0.4), 0, {"pistol": 1, "ammo": 6})
-		return
+		return true
 	c.hp -= dmg
 	if c.hp <= 0.0:
 		c.state = DOWN
 		c.t = DOWN_TIME
 		Net.game.srv_add_drop(c.pos, 0, {"pistol": 1, "ammo": 12})
+	return false
 
 
 # --- server ---

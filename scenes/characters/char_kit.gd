@@ -62,6 +62,16 @@ const _PROP_CUP := 41
 const _PROP_PHONE := 42
 const _PROP_SPADE := 43
 
+# How a body is arranged, for working out where its head is (see zones()).
+const STANCE_STAND := 0
+const STANCE_CROUCH := 1
+const STANCE_SEAT := 2
+const STANCE_TOWEL := 3  # on the back, centred on its spot
+const STANCE_BACK := 4   # on the back where it fell
+const STANCE_FACE := 5   # on the face where it fell
+const HEAD_R := 0.23
+const BODY_R := 0.3
+
 # Flag bits. The first twelve switch props on; the rest restyle the body. Bit 7 is free.
 const F_HAT := 1 << 0
 const F_SHADES := 1 << 1
@@ -204,6 +214,34 @@ static func drop_materials(mats: Array) -> void:
 static func custom(pose: int, speed: float, flags: int, event: float, prev := -1, t0 := 0.0, held := 0) -> Color:
 	var word := pose | ((pose if prev < 0 else prev) << 6) | (clampi(roundi(speed * 10.0), 0, 255) << 12) | (held << 20)
 	return Color(word, t0, flags, event)
+
+
+## Where to hit a character: [head centre, body from, body to], in its own unscaled space
+## (feet at the origin, facing -Z). The numbers follow the mesh and the poses in the shader.
+static func zones(stance: int) -> Array:
+	match stance:
+		STANCE_CROUCH:
+			return [Vector3(0, 1.15, -0.3), Vector3(0, 0.25, 0.05), Vector3(0, 0.85, -0.15)]
+		STANCE_SEAT:
+			return [Vector3(0, 1.22, 0), Vector3(0, 0.45, -0.1), Vector3(0, 0.95, 0)]
+		STANCE_TOWEL:
+			return [Vector3(0, 0.2, 0.68), Vector3(0, 0.2, -0.6), Vector3(0, 0.2, 0.35)]
+		STANCE_BACK:
+			return [Vector3(0, 0.2, 1.58), Vector3(0, 0.2, 0.3), Vector3(0, 0.2, 1.25)]
+		STANCE_FACE:
+			return [Vector3(0, 0.2, -1.58), Vector3(0, 0.2, -0.3), Vector3(0, 0.2, -1.25)]
+	return [Vector3(0, 1.6, 0), Vector3(0, 0.3, 0), Vector3(0, 1.25, 0)]
+
+
+## Tests ray (o, d) against a character at `at`. Returns [distance, DB.ZONE_*], distance -1 on
+## a miss. `grow` fattens the zones: a swung fist is not a bullet.
+static func ray_hit(o: Vector3, d: Vector3, max_t: float, at: Vector3, yaw: float, scale: float, stance: int, grow := 0.0) -> Array:
+	var z := zones(stance)
+	var b := Basis(Vector3.UP, yaw) * scale
+	var t := DB.ray_point(o, d, at + b * z[0], HEAD_R * scale + grow * 0.5, max_t)
+	if t >= 0.0:
+		return [t, DB.ZONE_HEAD]
+	return [DB.ray_segment(o, d, at + b * z[1], at + b * z[2], BODY_R * scale + grow, max_t), DB.ZONE_BODY]
 
 
 ## Yaw that turns a character (which faces -Z) toward `dir`.
