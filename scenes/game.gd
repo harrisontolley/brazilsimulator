@@ -8,6 +8,7 @@ extends Node3D
 const Player := preload("res://scenes/player/player.gd")
 const Beach := preload("res://scenes/world/beach.gd")
 const Ambient := preload("res://scenes/world/ambient.gd")
+const Traffic := preload("res://scenes/world/traffic.gd")
 const Crowd := preload("res://scenes/crowd/crowd_manager.gd")
 const Police := preload("res://scenes/police/police_manager.gd")
 const Hud := preload("res://scenes/ui/hud.gd")
@@ -24,6 +25,7 @@ var ready_peers: Array = []  # server: peers that have loaded this scene
 var drops := {}         # drop id -> {pos, money, items, node}
 var world: Node3D
 var ambient: Node3D
+var traffic: Node3D
 var crowd: Node3D
 var police: Node3D
 var hud: CanvasLayer
@@ -40,6 +42,7 @@ var _od_t := 0.0
 var _last_attack := {}
 var _last_ping := {}
 var _respawn := {}
+var _last_hit := {}
 
 
 func _ready() -> void:
@@ -49,6 +52,8 @@ func _ready() -> void:
 	ambient = Ambient.new()
 	ambient.world = world
 	add_child(ambient)
+	traffic = Traffic.new()
+	add_child(traffic)
 	crowd = Crowd.new()
 	crowd.name = "Crowd"
 	add_child(crowd)
@@ -543,6 +548,22 @@ func _fx_actor(type: int, id: int, attack: bool) -> void:
 				p.fx_event(attack)
 		DB.WHO_COP: police.fx_event(id, attack)
 		DB.WHO_NPC: crowd.fx_event(id, attack)
+
+
+## A client reporting that it walked in front of vehicle `vi`.
+@rpc("any_peer", "call_remote", "reliable")
+func srv_run_over(vi: int) -> void:
+	var pid := Net.sender()
+	var p = players.get(pid)
+	var now := Time.get_ticks_msec()
+	if p == null or not p.can_fight() or vi < 0 or vi >= traffic.vehicles.size() or now - _last_hit.get(pid, 0) < 800:
+		return
+	var at: Vector3 = traffic.pos_of(vi, MatchState.time)
+	if at.distance_to(p.global_position) > 14.0:
+		return
+	_last_hit[pid] = now
+	bcast("cl_fx", [at + Vector3(0, 1, 0), p.global_position + Vector3(0, 0.8, 0), true, DB.WHO_NONE, -1, DB.WHO_PLAYER, pid])
+	srv_damage(pid, traffic.vehicles[vi].damage, -1)
 
 
 # --- arrest ---

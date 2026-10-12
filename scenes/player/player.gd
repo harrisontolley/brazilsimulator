@@ -381,6 +381,17 @@ func _physics_process(delta: float) -> void:
 		global_position += Net.game.crowd.push_out(global_position) * delta
 
 
+## Thrown through the air by something big: a bus, a crash.
+func knock(v: Vector3) -> void:
+	velocity = v
+	mv = MV_AIR
+	_air_jumps = 0
+	_coyote_t = 0.0
+	_recover_t = 0.5
+	_set_crouch(false)
+	rig.kick = 0.1
+
+
 ## This player's net_mv as others should see it.
 func net_byte() -> int:
 	if not is_local:
