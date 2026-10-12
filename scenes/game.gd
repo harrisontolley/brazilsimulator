@@ -536,6 +536,8 @@ func _debug_test(what: String) -> void:
 			local_player.st.money = 1000
 			MatchState.time = Threats.QUIET_START + 1.0
 			police.debug_solo(Vector3(280, 0, -30), Vector3.RIGHT)
+			for i in dogs.dogs.size():
+				dogs.debug_pose(i, Vector3(-250 + i * 3, 0, -30), 0.0, Dogs.SIT)
 			var mugged := false
 			var carrying := 0
 			for tries in 30:
@@ -1857,6 +1859,13 @@ func cl_fx(from: Vector3, to: Vector3, melee: bool, src_type: int, src_id: int, 
 			local_player.recoil()
 		if hit_type != DB.WHO_NONE:
 			hud.hit_marker(res & DB.FX_HEAD != 0, res & (DB.FX_KILL | DB.FX_KO) != 0)
+			if res & (DB.FX_KILL | DB.FX_KO):
+				var who := "a dog"
+				match hit_type:
+					DB.WHO_PLAYER: who = players[hit_id].pname if players.has(hit_id) else "somebody"
+					DB.WHO_COP: who = "a policeman"
+					DB.WHO_NPC: who = "a " + DB.ARCHETYPES[crowd.arch[hit_id]].id
+				hud.feed("%s %s%s" % ["Knocked out" if res & DB.FX_KILL == 0 else "Killed", who, "  (head)" if res & DB.FX_HEAD else ""], Color(1.0, 0.82, 0.12) if res & DB.FX_HEAD else Color(0.97, 0.91, 0.78))
 
 
 @rpc("authority", "call_remote", "unreliable")

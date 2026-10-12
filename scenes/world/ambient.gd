@@ -83,7 +83,7 @@ func _build_kites(rng: RandomNumberGenerator) -> void:
 		xf.append(Transform3D())
 		tint.append(Color.from_hsv(rng.randf(), 0.8, 1.0))
 	_kites = _free_multi(mesh, xf, tint)
-	_strings = _free_multi(_box_mesh(Vector3(0.02, 0.02, 1.0)), xf, [])
+	_strings = _free_multi(_box_mesh(Vector3(0.02, 0.02, 1.0)), xf, [], false)
 	_strings.get_meta("node").material_override = _mat(Color(0.9, 0.9, 0.9))
 
 
@@ -173,7 +173,7 @@ func _build_sky(rng: RandomNumberGenerator) -> void:
 	for i in 16:
 		_cloud_home.append([Vector3(rng.randf_range(-1400, 1400), rng.randf_range(260, 420), rng.randf_range(-900, 700)), Vector3(rng.randf_range(90, 220), rng.randf_range(18, 34), rng.randf_range(60, 120))])
 		xf.append(Transform3D())
-	_clouds = _free_multi(_ball(1.0, 2.0, 10), xf, [])
+	_clouds = _free_multi(_ball(1.0, 2.0, 10), xf, [], false)
 	var cm := _mat(Color(1, 1, 1, 0.85))
 	cm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	cm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -254,11 +254,13 @@ func _build_sky(rng: RandomNumberGenerator) -> void:
 		_gliders.append(g)
 
 
-## A MultiMesh whose instances roam the whole map, so it is never culled.
-func _free_multi(mesh: Mesh, xf: Array, tint: Array) -> MultiMesh:
+## A MultiMesh whose instances roam the whole map, so it is never culled. `shadows`: whether
+## it is near enough the ground for its shadow to be worth drawing.
+func _free_multi(mesh: Mesh, xf: Array, tint: Array, shadows := true) -> MultiMesh:
 	var mmi := _instances(mesh, _vertex_mat(), xf, tint)
 	mmi.custom_aabb = AABB(Vector3(-1500, -5, -1200), Vector3(3000, 500, 2000))
-	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	if not shadows:
+		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	mmi.multimesh.set_meta("node", mmi)
 	return mmi.multimesh
 

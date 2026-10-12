@@ -1,18 +1,41 @@
 extends CanvasLayer
-## Whole HUD built in code: status, mic + intimidation meters, noise pings,
-## scoreboard, vendor shop and drug screen effects.
+## Whole HUD built in code: what you have and what state you are in round the edges of the
+## screen, the crosshair in the middle, and the panels that open over it (shop, games,
+## scoreboard, controls, pause).
+##
+## Health sits bottom left and the weapon bottom right, where the eye drops to in a fight;
+## money top left; the clock and anything the game has to tell you top centre; how wanted
+## you are top right. Every line of text has a width it wraps or shrinks to, so nothing runs
+## off the sides. The look comes from ui_kit.gd.
 
-const HEAT_TEXT := ["", "WANTED: robbery", "WANTED: assault", "WANTED: armed - police will shoot"]
+const HEAT_TEXT := ["", "WANTED  robbery", "WANTED  assault", "WANTED  armed: police will shoot"]
 ## By Police.VIS_*: whether they can see you right now.
-const VIS_TEXT := ["", "\nSEARCHING - stay out of sight", "\nSPOTTED", "\nHIDDEN - cooling off faster"]
+const VIS_TEXT := ["", "SEARCHING: stay out of sight", "SPOTTED", "HIDDEN: cooling off faster"]
 const PING_TIME := 2.5
 const PING_RADIUS := 230.0
+const TOAST_TIME := 3.5
+const TOASTS := 3
+## How much of each side of the screen the columns in the corners may take.
+const SIDE_W := 330.0
+const FEED_TIME := 5.0
+## The widest a block of text in the middle of the screen is allowed to be.
+const TEXT_W := 900.0
 
 const SettingsMenu := preload("res://scenes/ui/settings_menu.gd")
 const DrugKit := preload("res://scenes/items/drug_kit.gd")
+const UI := preload("res://scenes/ui/ui_kit.gd")
 
 const PHASE_TEXT := {"high": "HIGH", "down": "COMEDOWN", "od": "OVERDOSE"}
 const SLOT_PX := 56
+const HELP := [
+	["W A S D", "move"], ["Shift", "sprint"], ["Space", "jump; hold to hop, again in the air, off a wall"],
+	["Ctrl / C", "slide, or crouch and creep"], ["Q", "dive"], ["Scroll", "first / third person"],
+	["Left mouse", "attack; hold to draw back a throw"], ["Right mouse", "aim; look down a scope"], ["R", "reload"],
+	["1  2  3  4", "fists and blades / guns / sniper and launcher / grenades"],
+	["E (hold)", "rob: shout at them, or keep quiet over a sunbather"], ["V", "fake a shout"],
+	["F", "use, pick up, shop, hide, take a moto"], ["Z  X  G", "pick a drug, take it"],
+	["Tab", "scores"], ["Esc", "menu and settings"], ["F11", "fullscreen"],
+]
 
 var shop_open := false
 ## The pause menu (Esc) is up: settings, leave, quit. The match carries on behind it.
@@ -21,9 +44,17 @@ var menu_open := false
 var _root: Control
 var _tint: ColorRect
 var _blur: ColorRect
-var _hp: ProgressBar
+var _hurt: ColorRect
+var _scope: ColorRect
+var _reticle: UI.Reticle
+var _hp: UI.Meter
+var _hp_text: Label
 var _money: Label
 var _weapon: Label
+var _mag: Label
+var _spare: Label
+var _reload: ProgressBar
+var _slot_tabs: Array = []
 var _trip: ColorRect
 var _icons := {}        # item id -> the texture of its photograph
 var _bar_name: Label
@@ -37,21 +68,26 @@ var _effects: Label
 var _clock: Label
 var _crowd: Label
 var _heat: Label
+var _heat_pips: Array = []
 var _speed: Label
 var _target: Label
 var _prompt: Label
-var _mark: Label
 var _result: Label
 var _menu: Control
-var _mark_t := 0.0
 var _hold_bar: ProgressBar
 var _rob_bar: ProgressBar
 var _mic_bar: ProgressBar
-var _toast: Label
+var _toasts: VBoxContainer
+var _toast_log: Array = []   # [label, seconds left]
+var _feed: VBoxContainer
+var _feed_log: Array = []
 var _big: Label
 var _scores: PanelContainer
-var _scores_text: Label
+var _scores_grid: GridContainer
+var _scores_t := 0.0
+var _help: PanelContainer
 var _shop: PanelContainer
+var _shop_scroll: ScrollContainer
 var _shop_list: VBoxContainer
 var _loot: Label
 var _banner: Label
@@ -60,31 +96,24 @@ var _ping_nodes: Array = []
 var _pings: Array = []  # {pos, t}
 var _rob_meter := 0.0
 var _rob_show := 0.0
-var _toast_t := 0.0
 var _slow_t := 0.0
 var _fake_ping_t := 0.0
 var _winner := ""
+var _wrapped: Array = []     # [label, widest it may be]: text that wraps to the screen
+var _mid: VBoxContainer
+var _top: VBoxContainer
+var _hp_was := 100.0
+var _hurt_k := 0.0
 
 
 func _ready() -> void:
 	_root = Control.new()
 	_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_root.theme = UI.theme()
 	add_child(_root)
 
-	_blur = ColorRect.new()
-	_blur.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	var blur_mat := ShaderMaterial.new()
-	blur_mat.shader = load("res://shaders/blur.gdshader")
-	_blur.material = blur_mat
-	_blur.visible = false
-	_root.add_child(_blur)
-	_trip = ColorRect.new()
-	_trip.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	var trip_mat := ShaderMaterial.new()
-	trip_mat.shader = load("res://shaders/trip.gdshader")
-	_trip.material = trip_mat
-	_trip.visible = false
-	_root.add_child(_trip)
+	_blur = _overlay("res://shaders/blur.gdshader")
+	_trip = _overlay("res://shaders/trip.gdshader")
 	# Each drug is photographed once, off to one side, and the picture kept.
 	for item in DB.DRUGS:
 		var studio := DrugKit.icon_viewport(item)
@@ -94,63 +123,108 @@ func _ready() -> void:
 	_tint.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_tint.color = Color(0, 0, 0, 0)
 	_root.add_child(_tint)
+	_hurt = _overlay("res://shaders/hurt.gdshader")
+	_scope = _overlay("res://shaders/scope.gdshader")
+	_reticle = UI.Reticle.new()
+	_reticle.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_root.add_child(_reticle)
 
-	# Top left: status.
-	var tl := _vbox(Control.PRESET_TOP_LEFT, Vector2(16, 16))
-	_hp = _bar(Color(0.85, 0.15, 0.15))
-	_hp.max_value = 100.0
-	tl.add_child(_hp)
-	_money = _label(tl, 26, Color(0.4, 1.0, 0.45))
-	_weapon = _label(tl, 18)
-	_effects = _label(tl, 16, Color(1.0, 0.75, 0.3))
-	_loot = _label(tl, 16, Color(0.85, 0.7, 1.0))
+	# Top left: what you have made.
+	var tl := _stack(Control.PRESET_TOP_LEFT)
+	_money = _text(tl, 38, UI.CANARY, true)
+	_loot = _text(tl, 17, Color(0.85, 0.74, 1.0), false, SIDE_W - 20.0)
 
-	# Top centre: clock and how full the beach still is.
-	var tc := _vbox(Control.PRESET_CENTER_TOP, Vector2(0, 12))
-	_clock = _label(tc, 30)
-	_crowd = _label(tc, 14, Color(1, 1, 1, 0.7))
-	_toast = _label(tc, 20, Color(1.0, 0.9, 0.4))
+	# Top centre: the clock, and whatever the game has to say.
+	_top = _stack(Control.PRESET_CENTER_TOP)
+	_clock = _text(_top, 36, UI.SAND, true)
+	_crowd = _text(_top, 15, UI.DIM)
+	_banner = _text(_top, 34, Color(1.0, 0.6, 0.15), true, TEXT_W)
+	_toasts = VBoxContainer.new()
+	_toasts.add_theme_constant_override("separation", 0)
+	_top.add_child(_toasts)
 
-	# Top right: heat and controls.
-	var tr := _vbox(Control.PRESET_TOP_RIGHT, Vector2(-16, 16))
-	_heat = _label(tr, 20, Color(1.0, 0.25, 0.25))
-	_heat.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	var help := _label(tr, 13, Color(1, 1, 1, 0.65))
-	help.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	help.text = "WASD move  Shift sprint\nHold Space to hop: strafe + turn in the air for speed\nSpace in the air: double jump   at a wall: wall jump\nCtrl / C slide (jump out of it for a boost), or crouch and creep   Q dive\nScroll: first / third person\nLMB attack  RMB aim  R reload   the head is a one-tap; a fist there knocks them out\nHold E + SHOUT to rob (V = fake shout)\nHold E silently on a sunbather to pickpocket\nF use / pick up / shop / hide / take a moto   1 fists / knife   2 guns\nZ / X pick a drug   G take it\nRun into a football to dribble, hit it to shoot\nTab scores   Esc menu / settings   F11 fullscreen"
+	# Top right: how wanted you are, and who has been dropping whom.
+	var tr := _stack(Control.PRESET_TOP_RIGHT)
+	var pips := HBoxContainer.new()
+	pips.alignment = BoxContainer.ALIGNMENT_END
+	pips.add_theme_constant_override("separation", 5)
+	tr.add_child(pips)
+	for k in 3:
+		var pip := Panel.new()
+		pip.custom_minimum_size = Vector2(30, 12)
+		pips.add_child(pip)
+		_heat_pips.append(pip)
+	_heat = _text(tr, 19, UI.GUARANA, true, SIDE_W - 20.0)
+	_feed = VBoxContainer.new()
+	_feed.add_theme_constant_override("separation", 0)
+	tr.add_child(_feed)
+	var hint := _text(tr, 15, UI.DIM)
+	hint.text = "H  controls"
 
-	# Bottom centre: robbery.
-	var bc := _vbox(Control.PRESET_CENTER_BOTTOM, Vector2(0, -24))
+	# Bottom left: what state you are in.
+	var bl := _stack(Control.PRESET_BOTTOM_LEFT)
+	_effects = _text(bl, 17, Color(1.0, 0.75, 0.3), false, 360.0)
+	var vida := _plate(bl)
+	var row := HBoxContainer.new()
+	vida.add_child(row)
+	var cap := UI.label(15, UI.DIM)
+	cap.text = "HEALTH"
+	cap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cap.size_flags_vertical = Control.SIZE_SHRINK_END
+	row.add_child(cap)
+	_hp_text = UI.label(34, UI.SAND, true)
+	row.add_child(_hp_text)
+	_hp = UI.Meter.new()
+	vida.add_child(_hp)
+
+	# Bottom right: what is in your hand.
+	var br := _stack(Control.PRESET_BOTTOM_RIGHT)
+	var arma := _plate(br)
+	_weapon = UI.label(18, UI.SEA, true)
+	_weapon.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	arma.add_child(_weapon)
+	var rounds := HBoxContainer.new()
+	rounds.alignment = BoxContainer.ALIGNMENT_END
+	rounds.add_theme_constant_override("separation", 6)
+	arma.add_child(rounds)
+	_mag = UI.label(46, UI.SAND, true)
+	rounds.add_child(_mag)
+	_spare = UI.label(22, UI.DIM, true)
+	_spare.size_flags_vertical = Control.SIZE_SHRINK_END
+	rounds.add_child(_spare)
+	_reload = ProgressBar.new()
+	_reload.custom_minimum_size = Vector2(250, 5)
+	_reload.show_percentage = false
+	_reload.max_value = 1.0
+	arma.add_child(_reload)
+	var tabs := HBoxContainer.new()
+	tabs.alignment = BoxContainer.ALIGNMENT_END
+	tabs.add_theme_constant_override("separation", 10)
+	arma.add_child(tabs)
+	for k in 4:
+		var tab := UI.label(15, UI.DIM)
+		tab.text = "%d %s" % [k + 1, ["HANDS", "GUNS", "HEAVY", "THROWN"][k]]
+		tabs.add_child(tab)
+		_slot_tabs.append(tab)
+
+	# Bottom centre: what you are doing, and what is in your pockets.
+	_mid = _stack(Control.PRESET_CENTER_BOTTOM)
+	_target = _text(_mid, 18, UI.SAND, false, 620.0)
+	_prompt = _text(_mid, 22, Color(0.75, 1.0, 0.8), true, 620.0)
+	_hold_bar = _bar(Color(0.5, 1.0, 0.6))
+	_hold_bar.visible = false
+	_rob_bar = _bar(UI.CANARY)
+	_mic_bar = _bar(Color(0.3, 0.7, 1.0))
+	_mic_bar.custom_minimum_size = Vector2(160, 5)
 	# The drugs in your pockets: Z / X move along the row, G takes the one lit up.
-	_bar_name = _label(bc, 16, Color(1.0, 0.9, 0.5))
+	_bar_name = _text(_mid, 16, Color(1.0, 0.9, 0.5), false, 620.0)
 	_hotbar = HBoxContainer.new()
 	_hotbar.alignment = BoxContainer.ALIGNMENT_CENTER
 	_hotbar.add_theme_constant_override("separation", 6)
-	bc.add_child(_hotbar)
-	_speed = _label(bc, 22)
-	_target = _label(bc, 18)
-	_prompt = _label(bc, 20, Color(0.75, 1.0, 0.8))
-	_hold_bar = _bar(Color(0.5, 1.0, 0.6))
-	_hold_bar.max_value = 1.0
-	_hold_bar.visible = false
-	bc.add_child(_hold_bar)
-	_rob_bar = _bar(Color(1.0, 0.8, 0.1))
-	_rob_bar.max_value = 1.0
-	bc.add_child(_rob_bar)
-	_mic_bar = _bar(Color(0.3, 0.7, 1.0))
-	_mic_bar.max_value = 1.0
-	bc.add_child(_mic_bar)
-	_label(bc, 12, Color(1, 1, 1, 0.6)).text = "MIC"
-	# The hotbar can be wider than the meters; they keep their own width under it.
-	for b in [_hold_bar, _rob_bar, _mic_bar]:
-		b.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_mid.add_child(_hotbar)
+	_speed = _text(_mid, 20, UI.SAND, true)
 
-	var cross := _label(_vbox(Control.PRESET_CENTER, Vector2.ZERO), 22)
-	cross.text = "+"
-	_mark = _label(_vbox(Control.PRESET_CENTER, Vector2(0, -2)), 34)
-	_mark.visible = false
-	_big = _label(_vbox(Control.PRESET_CENTER, Vector2(0, -140)), 40, Color(1.0, 0.9, 0.3))
-	_banner = _label(_vbox(Control.PRESET_CENTER_TOP, Vector2(0, 120)), 34, Color(1.0, 0.55, 0.15))
+	_big = _text(_stack(Control.PRESET_CENTER, Vector2(0, -70)), 44, UI.CANARY, true, TEXT_W)
 
 	for i in 8:
 		var dot := ColorRect.new()
@@ -160,72 +234,178 @@ func _ready() -> void:
 		_root.add_child(dot)
 		_ping_nodes.append(dot)
 
-	_scores = PanelContainer.new()
-	_scores.set_anchors_preset(Control.PRESET_CENTER)
-	_scores.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	_scores.grow_vertical = Control.GROW_DIRECTION_BOTH
-	_scores.visible = false
-	_root.add_child(_scores)
-	_scores_text = Label.new()
-	_scores_text.add_theme_font_size_override("font_size", 20)
-	_scores.add_child(_scores_text)
+	_scores = _panel()
+	var board := VBoxContainer.new()
+	_scores.add_child(board)
+	var board_title := UI.label(26, UI.CANARY, true)
+	board_title.text = "SCORES"
+	board_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	board.add_child(board_title)
+	_scores_grid = GridContainer.new()
+	_scores_grid.columns = 3
+	_scores_grid.add_theme_constant_override("h_separation", 34)
+	board.add_child(_scores_grid)
+
+	_help = _panel()
+	var keys := GridContainer.new()
+	keys.columns = 2
+	keys.add_theme_constant_override("h_separation", 22)
+	keys.add_theme_constant_override("v_separation", 2)
+	_help.add_child(keys)
+	for pair in HELP:
+		var key := UI.label(18, UI.CANARY, true)
+		key.text = pair[0]
+		keys.add_child(key)
+		var what := UI.label(18, UI.SAND)
+		what.text = pair[1]
+		keys.add_child(what)
 
 	_ignore_mouse(_root)
 
 	# Shop is the one interactive panel, so it is added after the mouse pass.
-	_shop = PanelContainer.new()
-	_shop.set_anchors_preset(Control.PRESET_CENTER)
-	_shop.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	_shop.grow_vertical = Control.GROW_DIRECTION_BOTH
-	_shop.visible = false
-	_root.add_child(_shop)
+	_shop = _panel()
+	_shop_scroll = ScrollContainer.new()
+	_shop_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_shop.add_child(_shop_scroll)
 	_shop_list = VBoxContainer.new()
-	_shop_list.custom_minimum_size.x = 280
-	_shop.add_child(_shop_list)
+	_shop_list.custom_minimum_size.x = 320
+	_shop_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_shop_list.add_theme_constant_override("separation", 6)
+	_shop_scroll.add_child(_shop_list)
+
+	get_viewport().size_changed.connect(_layout)
+	_layout.call_deferred()
 
 
-func _vbox(preset: Control.LayoutPreset, offset: Vector2) -> VBoxContainer:
+## A full-screen sheet with a shader on it, hidden until it is wanted.
+func _overlay(shader: String) -> ColorRect:
+	var r := ColorRect.new()
+	r.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var mat := ShaderMaterial.new()
+	mat.shader = load(shader)
+	r.material = mat
+	r.visible = false
+	_root.add_child(r)
+	return r
+
+
+## A column of things pinned to a corner or an edge of the screen, growing away from it.
+func _stack(preset: Control.LayoutPreset, nudge := Vector2.ZERO) -> VBoxContainer:
 	var v := VBoxContainer.new()
 	v.set_anchors_preset(preset)
+	var at := nudge
 	match preset:
+		Control.PRESET_TOP_LEFT:
+			at += Vector2(UI.EDGE, UI.EDGE)
 		Control.PRESET_TOP_RIGHT:
+			at += Vector2(-UI.EDGE, UI.EDGE)
 			v.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+		Control.PRESET_BOTTOM_LEFT:
+			at += Vector2(UI.EDGE, -UI.EDGE)
+			v.grow_vertical = Control.GROW_DIRECTION_BEGIN
+		Control.PRESET_BOTTOM_RIGHT:
+			at += Vector2(-UI.EDGE, -UI.EDGE)
+			v.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+			v.grow_vertical = Control.GROW_DIRECTION_BEGIN
 		Control.PRESET_CENTER_TOP:
+			at += Vector2(0, UI.EDGE - 8.0)
 			v.grow_horizontal = Control.GROW_DIRECTION_BOTH
 		Control.PRESET_CENTER_BOTTOM:
+			at += Vector2(0, -UI.EDGE)
 			v.grow_horizontal = Control.GROW_DIRECTION_BOTH
 			v.grow_vertical = Control.GROW_DIRECTION_BEGIN
 		Control.PRESET_CENTER:
 			v.grow_horizontal = Control.GROW_DIRECTION_BOTH
 			v.grow_vertical = Control.GROW_DIRECTION_BOTH
-	v.offset_left = offset.x
-	v.offset_right = offset.x
-	v.offset_top = offset.y
-	v.offset_bottom = offset.y
-	v.alignment = BoxContainer.ALIGNMENT_CENTER
+	v.offset_left = at.x
+	v.offset_right = at.x
+	v.offset_top = at.y
+	v.offset_bottom = at.y
+	v.alignment = BoxContainer.ALIGNMENT_END if v.grow_vertical == Control.GROW_DIRECTION_BEGIN else BoxContainer.ALIGNMENT_BEGIN
+	v.add_theme_constant_override("separation", 2)
 	_root.add_child(v)
 	return v
 
 
-func _label(parent: Control, size: int, color := Color.WHITE) -> Label:
-	var l := Label.new()
-	l.add_theme_font_size_override("font_size", size)
-	l.add_theme_color_override("font_color", color)
-	l.add_theme_color_override("font_outline_color", Color.BLACK)
-	l.add_theme_constant_override("outline_size", 5)
-	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER if parent.grow_horizontal == Control.GROW_DIRECTION_BOTH else HORIZONTAL_ALIGNMENT_LEFT
+## A line of text in `parent`, aligned the way its column grows. Give it `wide` and it wraps
+## at that width, or at the width of the screen if that is less.
+func _text(parent: Control, size: int, color := UI.SAND, bold := false, wide := 0.0) -> Label:
+	var l := UI.label(size, color, bold)
+	match parent.grow_horizontal:
+		Control.GROW_DIRECTION_BOTH: l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		Control.GROW_DIRECTION_BEGIN: l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	if wide > 0.0:
+		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		l.set_meta("size", size)
+		_wrapped.append([l, wide])
 	parent.add_child(l)
 	return l
 
 
+## One of the two plates at the foot of the screen, with the pavement running along its top.
+func _plate(parent: Control) -> VBoxContainer:
+	var wave := UI.Wave.new()
+	parent.add_child(wave)
+	var plate := PanelContainer.new()
+	plate.add_theme_stylebox_override("panel", UI.plate())
+	parent.add_child(plate)
+	var inside := VBoxContainer.new()
+	inside.add_theme_constant_override("separation", 2)
+	plate.add_child(inside)
+	return inside
+
+
+## A panel in the middle of the screen, shut until it is opened.
+func _panel() -> PanelContainer:
+	var p := PanelContainer.new()
+	p.set_anchors_preset(Control.PRESET_CENTER)
+	p.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	p.grow_vertical = Control.GROW_DIRECTION_BOTH
+	p.visible = false
+	_root.add_child(p)
+	return p
+
+
 func _bar(color: Color) -> ProgressBar:
 	var b := ProgressBar.new()
-	b.custom_minimum_size = Vector2(240, 16)
+	b.custom_minimum_size = Vector2(240, 10)
 	b.show_percentage = false
-	var fill := StyleBoxFlat.new()
-	fill.bg_color = color
-	b.add_theme_stylebox_override("fill", fill)
+	b.max_value = 1.0
+	b.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	b.add_theme_stylebox_override("fill", UI.box(color, 2, 0.0))
+	if _mid != null:
+		_mid.add_child(b)
 	return b
+
+
+## Fits everything that wraps to the screen as it is now.
+func _layout() -> void:
+	var view := _root.get_viewport_rect().size
+	for e in _wrapped:
+		var l: Label = e[0]
+		var w: float = minf(e[1], view.x - UI.EDGE * 2.0)
+		# Whatever is at the foot of the screen in the middle has the two plates either side of it.
+		if l.get_parent() == _mid:
+			w = minf(w, maxf(view.x - 2.0 * (322.0 + UI.EDGE), 220.0))
+		elif l.get_parent() == _top:
+			w = _top_w()
+		l.custom_minimum_size.x = w
+	for e in _toast_log:
+		e[0].custom_minimum_size.x = _top_w()
+	_shop_scroll.custom_minimum_size = Vector2(minf(_shop_list.get_combined_minimum_size().x + 12.0, view.x - 80.0), minf(_shop_list.get_combined_minimum_size().y, view.y - 120.0))
+
+
+## How wide the column at the top of the screen can be, with a column either side of it.
+func _top_w() -> float:
+	return minf(TEXT_W, maxf(_root.get_viewport_rect().size.x - 2.0 * (SIDE_W + UI.EDGE), 240.0))
+
+
+## Sets a headline, shrunk if it has to be so that its widest line fits across the screen.
+func _headline(l: Label, text: String) -> void:
+	if l.text == text:
+		return
+	l.text = text
+	l.add_theme_font_size_override("font_size", UI.fit_size(text, l.get_meta("size"), l.custom_minimum_size.x - 8.0))
 
 
 func _ignore_mouse(c: Control) -> void:
@@ -237,12 +417,12 @@ func _ignore_mouse(c: Control) -> void:
 
 # --- events from Game ---
 
-## A flick on the crosshair when a blow lands: bigger and red for the head, a cross for a kill.
+## A flick across the crosshair when a blow lands: yellow for the head, red for a kill.
 func hit_marker(head: bool, kill: bool) -> void:
-	_mark.text = "✕" if kill else "×"
-	_mark.add_theme_color_override("font_color", Color(1.0, 0.2, 0.15) if head else Color.WHITE)
-	_mark.add_theme_font_size_override("font_size", 46 if head else 30)
-	_mark_t = 0.3 if head else 0.15
+	_reticle.hit(head, kill)
+	var p = Net.game.local_player
+	if p != null:
+		Sfx.play("tick_kill" if kill else "tick", p.global_position + Vector3(0, 1.4, 0), -4.0 if not kill else 0.0, 1.25 if head else 1.0)
 
 
 ## What F would do right now, and how far through a hold it is.
@@ -252,9 +432,38 @@ func set_prompt(text: String, frac: float) -> void:
 	_hold_bar.value = frac
 
 
+## Something the game has to tell you. They stack, newest at the bottom, and fade.
 func toast(text: String) -> void:
-	_toast.text = text
-	_toast_t = 3.5
+	for e in _toast_log:
+		if e[0].text == text:
+			e[1] = TOAST_TIME
+			return
+	var l := UI.label(21, Color(1.0, 0.9, 0.45))
+	l.text = text
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	l.custom_minimum_size.x = _top_w()
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_toasts.add_child(l)
+	_toast_log.append([l, TOAST_TIME])
+	if _toast_log.size() > TOASTS:
+		_toast_log[0][0].queue_free()
+		_toast_log.pop_front()
+
+
+## A line in the corner for somebody going down: who, and in what colour.
+func feed(text: String, color := UI.SAND) -> void:
+	var l := UI.label(16, color)
+	l.text = text
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	l.custom_minimum_size.x = SIDE_W - 20.0
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_feed.add_child(l)
+	_feed_log.append([l, FEED_TIME])
+	if _feed_log.size() > 5:
+		_feed_log[0][0].queue_free()
+		_feed_log.pop_front()
 
 
 func set_rob_meter(v: float) -> void:
@@ -270,7 +479,7 @@ func add_ping(pos: Vector3) -> void:
 
 ## Big announcement across the top: a world event starting.
 func banner(text: String) -> void:
-	_banner.text = text
+	_headline(_banner, text)
 	_banner_t = 6.0
 
 
@@ -296,7 +505,7 @@ func open_shop(vi: int) -> void:
 	if v.get("till", false):
 		var b := Button.new()
 		b.text = "HOLD UP THE TILL  (needs a gun)"
-		b.add_theme_color_override("font_color", Color(1.0, 0.4, 0.3))
+		b.add_theme_color_override("font_color", UI.GUARANA.lightened(0.25))
 		b.pressed.connect(func():
 			Net.game.to_server("srv_till", [vi])
 			close_shop())
@@ -321,7 +530,8 @@ func open_bicho(vi: int) -> void:
 		b.pressed.connect(func(): stake[0] = amount)
 		stakes.add_child(b)
 	var grid := GridContainer.new()
-	grid.columns = 5
+	# As many across as the window has room for.
+	grid.columns = clampi(int((_root.get_viewport_rect().size.x - 140.0) / 130.0), 2, 5)
 	_shop_list.add_child(grid)
 	for n in DB.BICHOS.size():
 		var b := Button.new()
@@ -357,9 +567,10 @@ func _game_panel(title_text: String, hint: String) -> void:
 	_result = Label.new()
 	_result.text = hint
 	_result.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_result.custom_minimum_size = Vector2(460, 56)
-	_result.add_theme_font_size_override("font_size", 20)
-	_result.add_theme_color_override("font_color", Color(1.0, 0.9, 0.4))
+	_result.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_result.custom_minimum_size = Vector2(minf(460.0, _root.get_viewport_rect().size.x - 120.0), 62)
+	_result.add_theme_font_size_override("font_size", 21)
+	_result.add_theme_color_override("font_color", UI.CANARY)
 	_shop_list.add_child(_result)
 
 
@@ -445,9 +656,11 @@ func game_result(text: String) -> void:
 func _open_panel(title_text: String) -> void:
 	for c in _shop_list.get_children():
 		c.queue_free()
-	var title := Label.new()
+	var title := UI.label(26, UI.CANARY, true)
 	title.text = title_text
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	title.custom_minimum_size.x = 300
 	_shop_list.add_child(title)
 	_shop.visible = true
 	shop_open = true
@@ -459,6 +672,7 @@ func _close_button() -> void:
 	close.text = "Close"
 	close.pressed.connect(close_shop)
 	_shop_list.add_child(close)
+	_layout.call_deferred()
 
 
 func close_shop() -> void:
@@ -505,33 +719,76 @@ func _process(delta: float) -> void:
 	var p = g.local_player
 	var st: Dictionary = p.st
 
-	_hp.value = st.hp
+	# Health, and the red that closes in when some of it goes.
+	_hp.value = clampf(st.hp / 100.0, 0.0, 1.0)
+	_hp_text.text = "%d" % ceili(maxf(st.hp, 0.0))
+	_hp_text.add_theme_color_override("font_color", UI.GUARANA.lightened(0.2) if st.hp < 30.0 else UI.SAND)
+	if st.hp < _hp_was - 0.5:
+		_hurt_k = minf(1.0, _hurt_k + (_hp_was - st.hp) / 35.0 + 0.25)
+	_hp_was = st.hp
+	_hurt_k = move_toward(_hurt_k, 0.0, delta * 1.3)
+	var low := clampf((30.0 - st.hp) / 30.0, 0.0, 1.0) * (0.45 + 0.15 * sin(Time.get_ticks_msec() * 0.006)) if not st.dead else 0.6
+	_hurt.visible = _hurt_k > 0.01 or low > 0.01
+	_hurt.material.set_shader_parameter("amount", maxf(_hurt_k, low))
+
 	_money.text = "R$ %d" % st.money
+
+	# What is in the hand, and how much of it is left.
 	var w = DB.ITEMS[st.equipped]
+	var kind := DB.kind_of(st.equipped)
+	_weapon.text = w.name.to_upper()
 	if DB.is_gun(st.equipped):
-		_weapon.text = "%s  [%d / %d]" % [w.name, st.mag.get(st.equipped, 0), DB.spare(st, st.equipped)]
-	elif DB.kind_of(st.equipped) == "thrown":
-		_weapon.text = "%s  x%d" % [w.name, st.inv.get(st.equipped, 0)]
+		var loaded: int = st.mag.get(st.equipped, 0)
+		var spare: int = DB.spare(st, st.equipped)
+		_mag.text = "%d" % loaded
+		_spare.text = "/ %d" % spare
+		_mag.add_theme_color_override("font_color", UI.GUARANA.lightened(0.2) if loaded == 0 else UI.SAND)
+		if loaded == 0:
+			_weapon.text += "   R TO RELOAD" if spare > 0 else "   EMPTY"
+	elif kind == "thrown":
+		_mag.text = "%d" % st.inv.get(st.equipped, 0)
+		_spare.text = "left"
+		_mag.add_theme_color_override("font_color", UI.SAND)
 	else:
-		_weapon.text = w.name
-	if DB.is_gun(st.equipped) and st.mag.get(st.equipped, 0) == 0:
-		_weapon.text += "   R: reload" if DB.spare(st, st.equipped) > 0 else "   EMPTY"
-	_mark_t -= delta
-	_mark.visible = _mark_t > 0.0
+		_mag.text = ""
+		_spare.text = ""
+	_mag.visible = _mag.text != ""
+	_spare.visible = _mag.visible
+	var reloading: float = clampf((Time.get_ticks_msec() * 0.001 - p._reload_t) / maxf(p._reload_len, 0.01), 0.0, 1.0)
+	_reload.value = reloading if reloading < 1.0 else p.wind_up()
+	_reload.modulate.a = 1.0 if _reload.value > 0.0 and _reload.value < 1.0 or p.wind_up() > 0.0 else 0.0
+	var groups := [DB.MELEE, DB.GUNS, DB.HEAVY, DB.THROWN]
+	for k in 4:
+		var has := false
+		for item in groups[k]:
+			has = has or st.inv.has(item)
+		var tab: Label = _slot_tabs[k]
+		tab.add_theme_color_override("font_color", UI.CANARY if groups[k].has(st.equipped) else (UI.SAND if has else Color(UI.SAND.r, UI.SAND.g, UI.SAND.b, 0.25)))
+
+	# The crosshair opens with how unsteady the gun is, and gives way to the scope.
+	var loose := 0.0
+	if kind == "shot":
+		loose = w.hip if w.has("scope") and not p.is_aiming() else w.spread
+		loose *= 0.6 if p.is_crouched() else (1.5 if p.mv == p.MV_AIR else 1.0)
+	_reticle.spread = loose / deg_to_rad(maxf(p.rig.cam.fov, 1.0))
+	_reticle.show_cross = not p.scoped and not shop_open and not menu_open and not st.dead
+	_scope.visible = p.scoped and p.rig.first_person()
 
 	_update_hotbar(p)
 	var fx: Array = []
 	for d in st.drugs:
 		var word: String = "TIPSY" if DB.DRINKS.has(d) else ("PUMPED" if d == "ferro" else PHASE_TEXT[st.drugs[d].phase])
-		fx.append("%s: %s %ds" % [DB.ITEMS[d].name, word, ceili(st.drugs[d].t)])
+		fx.append("%s  %s  %ds" % [DB.ITEMS[d].name, word, ceili(st.drugs[d].t)])
 	_effects.text = "\n".join(fx)
+	_effects.visible = not fx.is_empty()
 	var loot: Array = []
 	for item in DB.LOOT:
 		if st.inv.get(item, 0) > 0:
 			loot.append("%s x%d" % [DB.ITEMS[item].name, st.inv[item]])
-	_loot.text = "" if loot.is_empty() else "Stolen: %s\n(sell to the RECEPTADOR up in the favela)" % ", ".join(loot)
+	_loot.text = "" if loot.is_empty() else "Stolen: %s. Sell it to the RECEPTADOR up in the favela." % ", ".join(loot)
 	if not st.get("bet", {}).is_empty():
-		_loot.text += "\nBet: R$%d on %s  (draw in %ds)" % [st.bet.amount, DB.BICHOS[st.bet.animal], int(DB.BICHO_EVERY - fmod(MatchState.time, DB.BICHO_EVERY))]
+		_loot.text += ("\n" if _loot.text != "" else "") + "Bet: R$%d on %s, draw in %ds" % [st.bet.amount, DB.BICHOS[st.bet.animal], int(DB.BICHO_EVERY - fmod(MatchState.time, DB.BICHO_EVERY))]
+	_loot.visible = _loot.text != ""
 	_banner_t -= delta
 	_banner.visible = _banner_t > 0.0
 
@@ -541,18 +798,36 @@ func _process(delta: float) -> void:
 	if _slow_t <= 0.0:
 		_slow_t = 1.0
 		_crowd.text = "%d people on the beach" % g.crowd.alive_count()
-	_toast_t -= delta
-	_toast.visible = _toast_t > 0.0
-	_heat.text = HEAT_TEXT[clampi(st.heat, 0, 3)]
-	if st.heat > 0:
-		_heat.text += VIS_TEXT[clampi(st.get("vis", 0), 0, 3)]
+	for log in [_toast_log, _feed_log]:
+		for k in range(log.size() - 1, -1, -1):
+			log[k][1] -= delta
+			log[k][0].modulate.a = clampf(log[k][1] / 0.5, 0.0, 1.0)
+			if log[k][1] <= 0.0:
+				log[k][0].queue_free()
+				log.remove_at(k)
+
+	# On a small screen long messages take a lot of room: the oldest gives way.
+	if _toast_log.size() > 1 and _toasts.get_combined_minimum_size().y > _root.get_viewport_rect().size.y * 0.3:
+		_toast_log[0][0].queue_free()
+		_toasts.remove_child(_toast_log[0][0])
+		_toast_log.pop_front()
+
+	var heat: int = clampi(st.heat, 0, 3)
+	for k in 3:
+		_heat_pips[k].add_theme_stylebox_override("panel", UI.box(UI.GUARANA if k < heat else Color(0, 0, 0, 0.45), 2, 0.0))
+	_heat.text = HEAT_TEXT[heat]
+	if heat > 0 and VIS_TEXT[clampi(st.get("vis", 0), 0, 3)] != "":
+		_heat.text += "\n" + VIS_TEXT[clampi(st.get("vis", 0), 0, 3)]
+	_heat.visible = heat > 0
 
 	# Speed past a flat-out sprint is momentum the player built; show it warming up.
 	var spd: float = p.hspeed()
 	_speed.text = "%.1f m/s" % spd
-	_speed.add_theme_color_override("font_color", Color.WHITE.lerp(Color(1.0, 0.55, 0.15), clampf((spd - p.SPRINT) / 8.0, 0.0, 1.0)))
+	_speed.visible = spd > p.SPRINT + 0.3
+	_speed.add_theme_color_override("font_color", UI.SAND.lerp(Color(1.0, 0.55, 0.15), clampf((spd - p.SPRINT) / 8.0, 0.0, 1.0)))
 
 	_mic_bar.value = p.mic_level()
+	_mic_bar.visible = p.mic_level() > 0.02 or p.robbing or p.target_npc >= 0
 	_rob_show -= delta
 	_rob_bar.visible = _rob_show > 0.0
 	_rob_bar.value = _rob_meter
@@ -571,22 +846,50 @@ func _process(delta: float) -> void:
 		_target.text = "Crouched: harder to spot, hardest of all keeping still"
 	else:
 		_target.text = ""
+	_target.visible = _target.text != ""
+	_prompt.visible = _prompt.text != ""
 
 	if MatchState.ended:
-		_big.text = "TIME!  %s wins" % _winner
+		_headline(_big, "TIME!  %s wins" % _winner)
 	elif st.dead:
-		_big.text = "YOU DIED"
+		_headline(_big, "YOU DIED")
 	elif st.jail > 0.0:
-		_big.text = "IN PRISON  %ds\nwork a shift, score in the yard, win in the ring, pay the gate guard - or find another way out" % ceili(st.jail)
+		_headline(_big, "IN PRISON  %ds" % ceili(st.jail))
+		if _target.text == "":
+			_target.text = "Work a shift, score in the yard, win in the ring or pay the gate guard. Or find another way out."
+			_target.visible = true
 	else:
-		_big.text = ""
+		_headline(_big, "")
+	# The headline sits above the middle of the screen, or under whatever the top has run to.
+	var half: float = _root.get_viewport_rect().size.y * 0.5
+	var need: float = maxf(-70.0, _top.get_global_rect().end.y + _big.get_combined_minimum_size().y * 0.5 + 10.0 - half)
+	var stack: Control = _big.get_parent()
+	stack.offset_top = need
+	stack.offset_bottom = need
 
 	_scores.visible = MatchState.ended or Input.is_action_pressed("scores")
-	if _scores.visible:
-		var text := "%-16s %8s %6s\n" % ["PLAYER", "MONEY", "KILLS"]
+	_scores_t -= delta
+	if _scores.visible and _scores_t <= 0.0:
+		_scores_t = 0.5
+		for c in _scores_grid.get_children():
+			c.queue_free()
+		for head in ["PLAYER", "MONEY", "KILLS"]:
+			var h := UI.label(16, UI.DIM)
+			h.text = head
+			_scores_grid.add_child(h)
 		for r in _ranked():
-			text += "%-16s %8s %6d\n" % [r.pname, "R$%d" % r.st.money, r.st.kills]
-		_scores_text.text = text
+			var who := UI.label(22, UI.CANARY if r == p else UI.SAND, true)
+			who.text = r.pname
+			who.clip_text = true
+			who.custom_minimum_size.x = 240
+			_scores_grid.add_child(who)
+			var cash := UI.label(22, UI.SAND, true)
+			cash.text = "R$ %d" % r.st.money
+			_scores_grid.add_child(cash)
+			var kills := UI.label(22, UI.SAND, true)
+			kills.text = "%d" % r.st.kills
+			_scores_grid.add_child(kills)
+	_help.visible = Input.is_action_pressed("help") and not _scores.visible and not shop_open and not menu_open
 
 	_drug_screen(p, delta)
 	_update_pings(p, delta)
@@ -619,11 +922,12 @@ func _update_hotbar(p) -> void:
 			pic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 			pic.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 			box.add_child(pic)
-			var count := Label.new()
-			count.add_theme_font_size_override("font_size", 13)
+			var count := UI.label(15, UI.SAND, true)
 			count.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			box.add_child(count)
-			var tol := _bar(Color(1.0, 0.35, 0.2))
+			var tol := ProgressBar.new()
+			tol.show_percentage = false
+			tol.add_theme_stylebox_override("fill", UI.box(UI.GUARANA, 2, 0.0))
 			tol.custom_minimum_size = Vector2(SLOT_PX, 4)
 			tol.max_value = 1.0
 			box.add_child(tol)
@@ -648,10 +952,10 @@ func _slot_style(on: bool) -> StyleBoxFlat:
 	if _slot_styles.is_empty():
 		for lit in [false, true]:
 			var frame := StyleBoxFlat.new()
-			frame.bg_color = Color(0, 0, 0, 0.55 if lit else 0.35)
+			frame.bg_color = Color(UI.ASPHALT.r, UI.ASPHALT.g, UI.ASPHALT.b, 0.85 if lit else 0.6)
 			frame.set_border_width_all(3 if lit else 1)
-			frame.border_color = Color(1.0, 0.85, 0.3) if lit else Color(1, 1, 1, 0.25)
-			frame.set_corner_radius_all(6)
+			frame.border_color = UI.CANARY if lit else Color(1, 1, 1, 0.2)
+			frame.set_corner_radius_all(3)
 			frame.set_content_margin_all(4)
 			_slot_styles.append(frame)
 	return _slot_styles[1 if on else 0]

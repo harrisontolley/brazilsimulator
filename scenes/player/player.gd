@@ -980,7 +980,15 @@ func _process(delta: float) -> void:
 		for d in st.tol:
 			st.tol[d] = maxf(0.0, st.tol[d] - DB.TOLERANCE_DECAY * delta)
 	if is_local:
-		_vis.visible = (st.dead or not rig.first_person() or _fly.length() > 0.5) and st.get("hide", -1) < 0
+		# Looking out of your own eyes there is no body in the way, but it still has a shadow.
+		var seen: bool = st.dead or not rig.first_person() or _fly.length() > 0.5
+		_vis.visible = st.get("hide", -1) < 0
+		for k in _vis.get_child_count():
+			var part: GeometryInstance3D = _vis.get_child(k)
+			if k % 2 == 1:
+				part.visible = seen
+			else:
+				part.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if seen else GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
 		_local_process(delta)
 	else:
 		_vis.visible = st.get("hide", -1) < 0

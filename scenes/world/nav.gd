@@ -19,6 +19,8 @@ const HIGH := 1.5
 const MARGIN := 0.1
 const STEP := 0.25
 const FAR := 1.0e6
+## The furthest ahead anybody plans a way round things.
+const REACH := 38.0
 
 static var _grid: AStarGrid2D
 
@@ -324,6 +326,13 @@ static func add_cost(box: AABB, times: float) -> void:
 ## round the corners when it is not. `m` is theirs to keep between calls; it remembers the
 ## way, so that it is only worked out again a couple of times a second.
 static func steer(m: Dictionary, pos: Vector3, goal: Vector3, step: float, now: float) -> Vector3:
+	# Nobody plans a walk the length of the beach in one go: head for a spot some way toward
+	# it and think again from there. (Working out a long way round is what costs.)
+	var whole := Vector3(goal.x - pos.x, 0.0, goal.z - pos.z)
+	if whole.length() > REACH:
+		var near := pos + whole.normalized() * REACH
+		near.y = goal.y
+		goal = nearest_free(near, 4.0)
 	if now >= m.get("t", -1.0) or goal.distance_squared_to(m.get("goal", goal)) > 9.0:
 		m.t = now + 0.45 + fmod(pos.x * 13.7 + pos.z * 7.3, 0.2)
 		m.goal = goal

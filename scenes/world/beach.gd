@@ -81,9 +81,8 @@ func _environment() -> void:
 	sun = DirectionalLight3D.new()
 	sun.light_color = Color(1.0, 0.95, 0.85)
 	sun.light_energy = 1.0
-	sun.shadow_enabled = Settings.shadows
-	sun.directional_shadow_max_distance = 140.0
 	add_child(sun)
+	Settings.shade(sun, env)
 	# High over the sea and a little toward Sugarloaf, so the seafront is lit.
 	sun.look_at_from_position(Vector3(-0.45, 0.8, -0.5) * 100.0, Vector3.ZERO)
 

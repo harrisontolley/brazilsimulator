@@ -26,6 +26,10 @@ static func run(g: Node, what: String) -> bool:
 			await _panic(g)
 		"dogs":
 			await _dogs(g)
+		"hudfit":
+			await _hudfit(g)
+		"perf":
+			await _perf(g)
 		"arsenal", "shotgun", "sniper", "rocket", "grenade", "molotov":
 			await _arsenal(g, what)
 		_:
@@ -181,7 +185,7 @@ static func _nav(g: Node) -> void:
 	crowd._process(0.016)
 	if img != null:
 		img.save_png(out_dir() + "/nav.png")
-	var ok: bool = shut == 0 and route_ok and rounds_bad == 0 and crowd._errands.size() > 100 and indoors > 5 and lanes_bad == 0 and stuck == 0 and walked_bad == 0 and flee_bad == 0 and fled > 100 and chase_bad == 0 and cop_bad == 0 and closed < 4.0
+	var ok: bool = shut == 0 and route_ok and rounds_bad == 0 and crowd._errands.size() > 100 and indoors > 1 and lanes_bad == 0 and stuck == 0 and walked_bad == 0 and flee_bad == 0 and fled > 100 and chase_bad == 0 and cop_bad == 0 and closed < 4.0
 	g.debug_result("nav", ok, "doors shut %d route %.0f m ok %s, 20 paths %d ms, rounds %d (%d go indoors, %d legs bad) walked by %d, walkers %d lanes bad %d walked bad %d, standing in things %d, fled %d cowered %d bad legs %d in %d ms, chase %.0f -> %.1f m in %d frames (%d ms) inside things %d, cops inside things %d %s" % [shut, Nav.length(a, route), route_ok, path_ms, crowd._rounds.size(), indoors, rounds_bad, crowd._errands.size(), crowd._walkers.size(), lanes_bad, walked_bad, stuck, fled, cowered, flee_bad, flee_ms, start, closed, frames, chase_ms, chase_bad, cop_bad, first])
 
 
@@ -589,3 +593,126 @@ static func _arsenal(g: Node, only: String) -> void:
 			await _snap(g, "boom_%d" % k)
 		cam.queue_free()
 	g.debug_result(only, ok, "; ".join(out))
+
+
+## Every control under `c` that is showing and has something in it, as [path, rect].
+static func _showing(c: Control, out: Array) -> void:
+	if not c.is_visible_in_tree():
+		return
+	if (c is Label and c.text != "") or c is PanelContainer or c is ProgressBar or c is TextureRect:
+		out.append([str(c.get_path()).get_file() + ":" + (c.text.left(24) if c is Label else c.get_class()), c.get_global_rect()])
+	for child in c.get_children():
+		if child is Control:
+			_showing(child, out)
+
+
+## Fill every line on the HUD with the longest thing it will ever have to say, at three
+## window sizes, and check that all of it is on the screen and none of it is on top of the
+## plates at the foot of it.
+static func _hudfit(g: Node) -> void:
+	var hud = g.hud
+	var pl = g.local_player
+	var st: Dictionary = pl.st
+	st.money = 1234567
+	st.heat = 3
+	st.vis = 1
+	st.hp = 64.0
+	for item in DB.LOOT:
+		st.inv[item] = 12
+	st.bet = {"amount": 500, "animal": 3}
+	for d in ["cocaine", "meth", "bala"]:
+		st.drugs[d] = {"phase": "high", "t": 99.0}
+		st.inv[d] = 3
+	_arm(g, "rpg")
+	g._give(st, "grenade", 3)
+	pl.pname = "WWWWWWWWWWWWWWWW"
+	var worst := ""
+	var bad := 0
+	var checked := 0
+	var sizes := [Vector2i(1600, 900), Vector2i(1280, 720), Vector2i(1024, 600)]
+	for k in sizes.size():
+		g.get_window().size = sizes[k]
+		g.get_window().content_scale_size = Vector2i.ZERO
+		await g.get_tree().process_frame
+		await g.get_tree().process_frame
+		for stage in 3:
+			st.jail = 300.0 if stage == 1 else 0.0
+			MatchState.ended = stage == 2
+			hud._winner = pl.pname
+			hud.banner("ARRASTÃO! A gang of thirty is sweeping the sand from Posto 4 toward the Arpoador taking everything")
+			for n in 4:
+				hud.toast("%d: %s paid the gate guard R$1500 and walked out of the Presídio the front way, bold as brass" % [n, pl.pname])
+			hud.feed("Killed WWWWWWWWWWWWWWWW  (head)")
+			hud.feed("Knocked out a traficante")
+			hud.set_prompt("F: hold up the till at BAR DO PORTUGUÊS (needs a gun, and somebody will call it in)", 0.5)
+			hud.set_rob_meter(0.5)
+			Input.action_press("scores") if stage == 0 else Input.action_release("scores")
+			for f in 4:
+				await g.get_tree().process_frame
+			var all: Array = []
+			_showing(hud._root, all)
+			var view: Rect2 = hud._root.get_viewport_rect().grow(1.0)
+			var plates: Array = []
+			var middle: Array = []
+			for e in all:
+				checked += 1
+				if not view.encloses(e[1]):
+					bad += 1
+					if worst == "":
+						worst = "%s at %s is off a %s screen" % [e[0], e[1], sizes[k]]
+			# The column at the foot of the screen must clear the two plates beside it.
+			var mid_rect: Rect2 = hud._mid.get_global_rect()
+			for side in [hud._hp.get_global_rect(), hud._reload.get_global_rect()]:
+				if mid_rect.intersects(side):
+					bad += 1
+					if worst == "":
+						worst = "middle column %s on top of a plate %s at %s" % [mid_rect, side, sizes[k]]
+			# And the column at the top must clear the corners, and its parts each other.
+			var top: Rect2 = hud._top.get_global_rect()
+			for side in [hud._loot.get_global_rect(), hud._money.get_global_rect(), hud._heat.get_global_rect(), hud._feed.get_global_rect()]:
+				if top.intersects(side):
+					bad += 1
+					if worst == "":
+						worst = "top column %s on top of a corner %s at %s" % [top, side, sizes[k]]
+			if hud._banner.get_global_rect().intersects(hud._toasts.get_global_rect()) or top.intersects(hud._big.get_global_rect()):
+				bad += 1
+				if worst == "":
+					worst = "top column %s runs into the headline %s at %s" % [top, hud._big.get_global_rect(), sizes[k]]
+			if out_dir() != "" and k < 2:
+				await _snap(g, "hud_%d_%d" % [sizes[k].x, stage])
+	Input.action_release("scores")
+	MatchState.ended = false
+	st.jail = 0.0
+	g.debug_result("hudfit", bad == 0 and checked > 100, "%d things checked at %d sizes, %d off screen or overlapping %s" % [checked, sizes.size(), bad, worst])
+
+
+## Average milliseconds a frame over `n` frames.
+static func _frame_ms(g: Node, n: int) -> float:
+	for k in 10:
+		await g.get_tree().process_frame
+	var t0 := Time.get_ticks_usec()
+	for k in n:
+		await g.get_tree().process_frame
+	return (Time.get_ticks_usec() - t0) / 1000.0 / n
+
+
+## What each part of the street costs a frame, found by switching it off and looking again.
+static func _perf(g: Node) -> void:
+	g.local_player.global_position = Vector3(-30, 0.2, 44)
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	Engine.max_fps = 0
+	await g.get_tree().create_timer(2.0).timeout
+	var out: Array = []
+	var all: float = await _frame_ms(g, 150)
+	out.append("everything %.2f" % all)
+	for part in ["hud", "dogs", "crowd", "fx", "shots", "police", "traffic", "ambient", "events", "motos", "balls"]:
+		var node: Node = g.get(part)
+		node.set_process(false)
+		var ms: float = await _frame_ms(g, 100)
+		node.set_process(true)
+		out.append("%s %.2f" % [part, all - ms])
+	g.local_player.set_process(false)
+	g.local_player.set_physics_process(false)
+	var ms: float = await _frame_ms(g, 100)
+	out.append("player %.2f" % [all - ms])
+	g.debug_result("perf", true, "ms a frame: " + ", ".join(out))

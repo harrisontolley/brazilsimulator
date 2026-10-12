@@ -1,6 +1,7 @@
 extends Control
 
 const SettingsMenu := preload("res://scenes/ui/settings_menu.gd")
+const UI := preload("res://scenes/ui/ui_kit.gd")
 
 var _name: LineEdit
 var _ip: LineEdit
@@ -12,10 +13,17 @@ var _settings: Control
 func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	theme = UI.theme()
 	var bg := ColorRect.new()
-	bg.color = Color(0.0, 0.42, 0.33)
+	bg.color = UI.ASPHALT
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
+	# The pavement along the foot of the screen, as it runs along the foot of the beach.
+	var wave := UI.Wave.new()
+	wave.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	wave.custom_minimum_size.y = 46
+	wave.offset_top = -46
+	add_child(wave)
 
 	var box := VBoxContainer.new()
 	box.set_anchors_preset(Control.PRESET_CENTER)
@@ -29,12 +37,14 @@ func _ready() -> void:
 	var title := Label.new()
 	title.text = "BRAZIL SIMULATOR"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 54)
-	title.add_theme_color_override("font_color", Color(1.0, 0.86, 0.1))
+	title.add_theme_font_override("font", UI.font(true))
+	title.add_theme_font_size_override("font_size", 76)
+	title.add_theme_color_override("font_color", UI.CANARY)
 	box.add_child(title)
 
 	_name = LineEdit.new()
 	_name.placeholder_text = "Name"
+	_name.max_length = 16
 	_name.text = Settings.player_name if Settings.player_name != "" else Net.local_name
 	box.add_child(_name)
 

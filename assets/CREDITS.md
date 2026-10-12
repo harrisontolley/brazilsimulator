@@ -15,3 +15,9 @@ https://creativecommons.org/publicdomain/zero/1.0/). Downloaded from Poly Pizza.
 | `smg.glb` | Submachine Gun | https://poly.pizza/m/7ehatxr7FY |
 
 CC0 needs no credit; it is given here so the next person knows where they came from.
+
+## Fonts (`assets/fonts/`)
+
+**Barlow Condensed** (SemiBold and Bold) by Jeremy Tribby and the Barlow Project Authors
+(https://github.com/jpt/barlow), under the SIL Open Font License 1.1: see `assets/fonts/OFL.txt`.
+Downloaded from https://github.com/google/fonts/tree/main/ofl/barlowcondensed.

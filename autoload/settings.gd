@@ -14,6 +14,18 @@ const MODES := ["Windowed", "Borderless fullscreen", "Exclusive fullscreen"]
 const SIZES := [Vector2i(1280, 720), Vector2i(1366, 768), Vector2i(1600, 900), Vector2i(1920, 1080), Vector2i(2560, 1440), Vector2i(3840, 2160)]
 const MSAA := ["Off", "2x", "4x", "8x"]
 const FPS_CAPS := [0, 30, 60, 120, 144, 240]
+enum { SHADOWS_OFF, SHADOWS_LOW, SHADOWS_MEDIUM, SHADOWS_HIGH, SHADOWS_ULTRA }
+const SHADOWS := ["Off", "Low", "Medium", "High", "Ultra"]
+## What each shadow setting buys: [how many slices the view is cut into, how far out shadows
+## are drawn in metres, the size of the map they are drawn on, how soft the filter is,
+## whether creases and corners are darkened too].
+const SHADE := [
+	[],
+	[2, 90.0, 2048, RenderingServer.SHADOW_QUALITY_SOFT_LOW, false],
+	[4, 140.0, 4096, RenderingServer.SHADOW_QUALITY_SOFT_MEDIUM, false],
+	[4, 190.0, 4096, RenderingServer.SHADOW_QUALITY_SOFT_HIGH, true],
+	[4, 240.0, 8192, RenderingServer.SHADOW_QUALITY_SOFT_ULTRA, true],
+]
 
 ## Window mode (WINDOWED / BORDERLESS / FULLSCREEN).
 var mode := WINDOWED
@@ -25,7 +37,10 @@ var vsync := true
 var fps_cap := 0
 ## Index into MSAA.
 var msaa := 1
-var shadows := true
+## Index into SHADOWS.
+var shadows := SHADOWS_HIGH
+## Blood on the ground, and what an explosion does to whoever is standing on it.
+var gore := true
 ## 0..1.
 var volume := 0.8
 var fov := 75.0
@@ -67,7 +82,10 @@ func _load() -> void:
 	vsync = cfg.get_value("display", "vsync", vsync)
 	fps_cap = cfg.get_value("display", "fps_cap", fps_cap)
 	msaa = clampi(cfg.get_value("display", "msaa", msaa), 0, MSAA.size() - 1)
-	shadows = cfg.get_value("display", "shadows", shadows)
+	# It used to be a plain on or off.
+	var shade = cfg.get_value("display", "shadows", shadows)
+	shadows = (SHADOWS_HIGH if shade else SHADOWS_OFF) if shade is bool else clampi(int(shade), 0, SHADOWS.size() - 1)
+	gore = cfg.get_value("display", "gore", gore)
 	volume = clampf(cfg.get_value("audio", "volume", volume), 0.0, 1.0)
 	fov = clampf(cfg.get_value("controls", "fov", fov), 60.0, 110.0)
 	sens = clampf(cfg.get_value("controls", "sens", sens), 0.0005, 0.01)
@@ -87,6 +105,7 @@ func save() -> void:
 	cfg.set_value("display", "fps_cap", fps_cap)
 	cfg.set_value("display", "msaa", msaa)
 	cfg.set_value("display", "shadows", shadows)
+	cfg.set_value("display", "gore", gore)
 	cfg.set_value("audio", "volume", volume)
 	cfg.set_value("controls", "fov", fov)
 	cfg.set_value("controls", "sens", sens)
@@ -133,5 +152,31 @@ func apply() -> void:
 	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(volume, 0.0001)))
 	AudioServer.set_bus_mute(0, volume <= 0.001)
 	if Net.game != null and Net.game.world != null and Net.game.world.sun != null:
-		Net.game.world.sun.shadow_enabled = shadows
+		shade(Net.game.world.sun, Net.game.world.env)
 	changed.emit()
+
+
+## Sets up the sun's shadows, and the darkening of corners that goes with the better ones,
+## for the shadow setting chosen.
+func shade(sun: DirectionalLight3D, env: Environment) -> void:
+	sun.shadow_enabled = shadows != SHADOWS_OFF
+	env.ssao_enabled = false
+	if shadows == SHADOWS_OFF:
+		return
+	var q: Array = SHADE[shadows]
+	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS if q[0] == 4 else DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+	sun.directional_shadow_max_distance = q[1]
+	# One slice fading into the next, so there is no line across the sand where they meet.
+	sun.directional_shadow_blend_splits = shadows >= SHADOWS_MEDIUM
+	sun.directional_shadow_fade_start = 0.85
+	sun.shadow_bias = 0.05
+	sun.shadow_normal_bias = 1.2
+	sun.shadow_blur = 1.0
+	# A sun with some width to it: edges sharp at the feet and softer the further they fall.
+	sun.light_angular_distance = 0.6 if shadows >= SHADOWS_HIGH else 0.0
+	RenderingServer.directional_shadow_atlas_set_size(q[2], true)
+	RenderingServer.directional_soft_shadow_filter_set_quality(q[3])
+	env.ssao_enabled = q[4]
+	env.ssao_radius = 0.8
+	env.ssao_intensity = 1.4
+	env.ssao_power = 1.4

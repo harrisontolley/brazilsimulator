@@ -13,8 +13,6 @@ const BLOOD := Color(0.5, 0.01, 0.02)
 ## Marks: shader kinds.
 enum { MARK_BLOOD, MARK_HOLE, MARK_SCORCH }
 
-## Blood and bits of people can be turned off in the settings.
-static var gore := true
 
 var _star: ArrayMesh
 var _beam: BoxMesh
@@ -160,7 +158,7 @@ func _surface(a: Vector3, b: Vector3) -> Dictionary:
 ## Blood from a wound at `at`, made by something travelling along `dir`: a spray out of the
 ## far side, a splash on the ground underneath, and a smear up whatever is behind.
 func blood(at: Vector3, dir: Vector3, amount := 1.0) -> void:
-	if not gore:
+	if not Settings.gore:
 		return
 	var under := _surface(at, at + Vector3(0, -3.0, 0))
 	var floor_y: float = under.position.y if not under.is_empty() else at.y - 1.2
@@ -193,7 +191,7 @@ func wound(from: Vector3, to: Vector3, type: int, res: int, melee: bool) -> void
 
 ## Somebody caught in the middle of a blast: there is not a body to speak of.
 func gibs(at: Vector3) -> void:
-	if not gore:
+	if not Settings.gore:
 		return
 	var under := _surface(at + Vector3(0, 1, 0), at + Vector3(0, -3.0, 0))
 	var floor_y: float = under.position.y if not under.is_empty() else at.y

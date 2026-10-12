@@ -31,13 +31,13 @@ const BREEDS := [
 		[Color(0.7, 0.45, 0.2), Color(0.3, 0.2, 0.12), Color(0.95, 0.9, 0.8)],
 		[Color(0.35, 0.25, 0.18), Color(0.2, 0.15, 0.1), Color(0.8, 0.56, 0.28)],
 		[Color(0.9, 0.85, 0.75), Color(0.8, 0.56, 0.28), Color(0.9, 0.85, 0.75)]]},
-	{"name": "pitbull", "size": 1.0, "speed": 7.4, "hp": 85.0, "bite": 18.0, "voice": 2, "coats": [
+	{"name": "pitbull", "size": 1.0, "speed": 7.4, "hp": 85.0, "bite": 14.0, "voice": 2, "coats": [
 		[Color(0.45, 0.47, 0.52), Color(0.38, 0.4, 0.45), Color(0.95, 0.95, 0.95)],
 		[Color(0.6, 0.4, 0.25), Color(0.35, 0.22, 0.14), Color(0.95, 0.93, 0.9)],
 		[Color(0.93, 0.92, 0.9), Color(0.5, 0.35, 0.25), Color(0.93, 0.92, 0.9)]]},
-	{"name": "rottweiler", "size": 1.2, "speed": 6.8, "hp": 110.0, "bite": 22.0, "voice": 2, "coats": [
+	{"name": "rottweiler", "size": 1.2, "speed": 6.8, "hp": 110.0, "bite": 17.0, "voice": 2, "coats": [
 		[Color(0.09, 0.08, 0.08), Color(0.6, 0.35, 0.15), Color(0.6, 0.35, 0.15)]]},
-	{"name": "pastor alemão", "size": 1.2, "speed": 7.8, "hp": 90.0, "bite": 18.0, "voice": 2, "coats": [
+	{"name": "pastor alemão", "size": 1.2, "speed": 7.8, "hp": 90.0, "bite": 14.0, "voice": 2, "coats": [
 		[Color(0.72, 0.52, 0.28), Color(0.1, 0.08, 0.07), Color(0.72, 0.52, 0.28)]]},
 	{"name": "labrador", "size": 1.1, "speed": 6.8, "hp": 70.0, "bite": 10.0, "voice": 1, "coats": [
 		[Color(0.92, 0.82, 0.55), Color(0.85, 0.72, 0.45), Color(0.92, 0.82, 0.55)],
@@ -109,7 +109,8 @@ func setup(seed_value: int, crowd: Node3D) -> void:
 	# The lads on the corner keep something with teeth, and so does the foot of every stair.
 	if crowd.acts != null:
 		for gi in crowd.acts.gangs:
-			_add(rng, ROTTWEILER, GUARD, _open(crowd.acts.groups[gi].pos + Vector3(rng.randf_range(-2.5, 2.5), 0, 1.6), rng), 5.0)
+			# Theirs is for show: it makes the noise and leaves the robbing to them, unless it is hit.
+			_add(rng, ROTTWEILER, GUARD, _open(crowd.acts.groups[gi].pos + Vector3(rng.randf_range(-2.5, 2.5), 0, 1.6), rng), 5.0)["show"] = true
 	for k in 2:
 		_add(rng, PITBULL, GUARD, _open(Vector3(Layout.STAIR_X[k] + (5.0 if k == 0 else -5.0), 0, 134.0), rng), 5.0)
 	# And the ones on a lead, out for their walk.
@@ -451,7 +452,13 @@ func _srv_look(d: Dictionary, i: int) -> void:
 				return
 		AGGRESSIVE, GUARD:
 			var from_post: float = d.pos.distance_to(d.home)
-			if p != null and not p.is_loved() and dist < WARN_R and d.state != WARN and (d.temper == AGGRESSIVE or from_post < 14.0) and d.bored <= 0.0:
+			if p != null and d.get("show", false) and dist < WARN_R and d.bored <= 0.0 and (d.state == IDLE or d.state == WANDER):
+				d.state = BARKING
+				d.goal = p.global_position
+				d.t = 3.0
+				d.bored = 5.0
+				return
+			if p != null and not p.is_loved() and dist < WARN_R and d.state != WARN and (d.temper == AGGRESSIVE or from_post < 14.0) and d.bored <= 0.0 and not d.get("show", false):
 				d.state = WARN
 				d.target = pid
 				d.t = 2.4 if not quick else 0.6

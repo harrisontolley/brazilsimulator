@@ -22,6 +22,7 @@ const KEYS := {
 	"crouch": KEY_CTRL,
 	"dive": KEY_Q,
 	"reload": KEY_R,
+	"help": KEY_H,
 }
 ## Second key for an action that already has one.
 const ALT_KEYS := {

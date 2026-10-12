@@ -5,6 +5,8 @@ extends Control
 
 signal closed
 
+const UI := preload("res://scenes/ui/ui_kit.gd")
+
 ## In a match there are also buttons to carry on, leave, or quit.
 var in_game := false
 
@@ -17,8 +19,9 @@ func _ready() -> void:
 	# Fills the screen and dims it; the panel sits in the middle of that whatever the window
 	# size, and scrolls rather than run off the edge of a small one.
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	theme = UI.theme()
 	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.45)
+	dim.color = Color(0, 0, 0, 0.55)
 	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(dim)
 	var centre := CenterContainer.new()
@@ -72,8 +75,12 @@ func _ready() -> void:
 	aa.item_selected.connect(func(k: int):
 		Settings.msaa = k
 		Settings.save())
-	_check("Shadows", Settings.shadows, func(on: bool):
-		Settings.shadows = on
+	var shade := _options("Shadows", Settings.SHADOWS, Settings.shadows)
+	shade.item_selected.connect(func(k: int):
+		Settings.shadows = k
+		Settings.save())
+	_check("Blood and gore", Settings.gore, func(on: bool):
+		Settings.gore = on
 		Settings.save())
 	_slider("Field of view", 60.0, 110.0, 1.0, Settings.fov, "%d", func(v: float):
 		Settings.fov = v
@@ -94,7 +101,7 @@ func _ready() -> void:
 
 	var note := Label.new()
 	note.text = "F11 toggles fullscreen. Changes are saved as you make them."
-	note.add_theme_font_size_override("font_size", 12)
+	note.add_theme_font_size_override("font_size", 15)
 	note.modulate = Color(1, 1, 1, 0.6)
 	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_list.add_child(note)
@@ -114,9 +121,10 @@ func _fit() -> void:
 
 func _heading(text: String) -> void:
 	var l := Label.new()
-	l.text = text
-	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	l.add_theme_color_override("font_color", Color(1.0, 0.86, 0.1))
+	l.text = text.to_upper()
+	l.add_theme_font_override("font", UI.font(true))
+	l.add_theme_font_size_override("font_size", 24 if _list.get_child_count() == 0 else 18)
+	l.add_theme_color_override("font_color", UI.CANARY)
 	_list.add_child(l)
 
 
