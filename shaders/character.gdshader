@@ -23,6 +23,7 @@ const int S_CASH = 14;
 const int S_STRIPE = 15;
 const int S_SACK = 16;
 const int S_WATCH = 17;
+const int S_VCOL = 18;
 
 const int F_SHORTS = 1 << 12;
 const int F_TANK = 1 << 13;
@@ -153,6 +154,10 @@ void vertex() {
 		col = vec3(0.75, 0.62, 0.42);
 	} else if (slot == S_WATCH) {
 		col = (flags & F_GOLDWATCH) != 0 ? vec3(1.0, 0.78, 0.1) : vec3(0.8, 0.82, 0.86);
+	} else if (slot == S_VCOL) {
+		// Seven bits a channel, packed into UV.y by the weapon kit.
+		int packed = int(UV.y + 0.5);
+		col = vec3(float(packed & 127), float((packed >> 7) & 127), float((packed >> 14) & 127)) / 127.0;
 	}
 
 	col = lin(col);

@@ -33,6 +33,7 @@ var _seed := 0
 var _dir := 1.0
 var _stage: Node3D
 var _gang: MultiMesh
+var _gang_held: MultiMesh
 var _gang_off: Array = []
 var _mover: Node3D
 var _rain: GPUParticles3D
@@ -53,6 +54,7 @@ var _guard_cd := 0.0
 
 func _ready() -> void:
 	_gang = Kit.add_to(self, GANG, Layout.WORLD_AABB)
+	_gang_held = Kit.add_held(self, 4, Layout.WORLD_AABB)
 	_hide_gang()
 	_rain = GPUParticles3D.new()
 	_rain.amount = 2200
@@ -78,6 +80,8 @@ func _ready() -> void:
 
 
 func _hide_gang() -> void:
+	for j in _gang_held.instance_count:
+		_gang_held.set_instance_transform(j, Transform3D(Basis.from_scale(Vector3.ZERO), Vector3(0, -50, 0)))
 	for j in GANG:
 		_gang.set_instance_transform(j, Transform3D(Basis.from_scale(Vector3.ZERO), Vector3(0, -50, 0)))
 
@@ -446,7 +450,11 @@ func _build_truck() -> void:
 		var p := at + Vector3(4.2 if j == 0 else -4.2, 0, -0.8)
 		_gang.set_instance_color(j, Color(0.12, 0.14, 0.2, 0.3 + j * 0.4))
 		_gang.set_instance_transform(j, Kit.xform(p, 0.0, 1.25, 1.1))
-		_gang.set_instance_custom_data(j, Kit.custom(Kit.AIM, 0.0, Kit.F_SUIT | Kit.F_SHADES, 0.0, -1, 0.0, Kit.HELD_PISTOL))
+		_gang.set_instance_custom_data(j, Kit.custom(Kit.AIM, 0.0, Kit.F_SUIT | Kit.F_SHADES, 0.0, -1, 0.0, Kit.HELD_SMG))
+		if j < _gang_held.instance_count:
+			_gang_held.set_instance_color(j, _gang.get_instance_color(j))
+			_gang_held.set_instance_transform(j, _gang.get_instance_transform(j))
+			_gang_held.set_instance_custom_data(j, _gang.get_instance_custom_data(j))
 
 
 ## Trio elétrico: the sound truck a bloco follows.

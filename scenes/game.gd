@@ -20,6 +20,7 @@ const Layout := preload("res://scenes/world/layout.gd")
 const CombatFx := preload("res://scenes/fx/combat_fx.gd")
 const Interact := preload("res://scenes/player/interact.gd")
 const Places := preload("res://scenes/world/places.gd")
+const WeaponKit := preload("res://scenes/weapons/weapon_kit.gd")
 
 const END_SCREEN_TIME := 15.0
 const PICKUP_RANGE := 2.6
@@ -359,6 +360,25 @@ func _debug_test(what: String) -> void:
 			await get_tree().create_timer(0.3).timeout
 			var woke: bool = crowd.state[i] != Crowd.KO
 			debug_result("ko", out and took == 300 and woke, "punches %d took %d woke %s" % [punches, took, woke])
+		"weapons":
+			# Each weapon in the hand, seen from the side, then down the sights.
+			local_player.global_position = Vector3(-20, 0.2, 45)
+			local_player.rotation.y = -PI / 2.0
+			_debug_side_cam()
+			for item in ["knife", "pistol", "revolver", "smg"]:
+				_give(local_player.st, item, 1)
+				local_player.st.equipped = item
+				await get_tree().create_timer(0.5).timeout
+				await _debug_frames(item, 1, 0.05)
+			local_player.get_child(local_player.get_child_count() - 1).current = false
+			local_player.rig.cam.current = true
+			local_player.rig.zoom(-2)
+			for item in ["knife", "pistol", "revolver", "smg"]:
+				local_player.st.equipped = item
+				await get_tree().create_timer(0.5).timeout
+				await _debug_frames("fp_" + item, 1, 0.05)
+			srv_add_drop(Vector3(-17, 0.2, 45), 0, {"smg": 1})
+			debug_result("weapons", true)
 		"crouch":
 			local_player.global_position = Vector3(-20, 0.2, 45)
 			Input.action_press("crouch")
@@ -1101,6 +1121,15 @@ func cl_drop_add(id: int, pos: Vector3, money: int, items: Dictionary) -> void:
 	turn.add_child(_drop_part(Vector3(0.55, 0.22, 0.3) if money > 0 else Vector3(0.42, 0.36, 0.42), color))
 	if money > 0:
 		turn.add_child(_drop_part(Vector3(0.12, 0.24, 0.32), Color(1.0, 0.85, 0.3)))
+	# A weapon lies on top where it can be seen for what it is.
+	for item in items:
+		if DB.ITEMS.has(item) and DB.ITEMS[item].get("held", 0) > 0:
+			var gun := WeaponKit.node(DB.ITEMS[item].held)
+			gun.scale = Vector3.ONE * 1.8
+			gun.position = Vector3(0, 0.38, 0)
+			gun.rotation = Vector3(0, PI / 2.0, 1.2)
+			turn.add_child(gun)
+			break
 	var parts: Array = []
 	if money > 0:
 		parts.append("R$%d" % money)

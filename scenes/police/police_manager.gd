@@ -79,6 +79,7 @@ const VIS_HIDDEN := 3
 var cops: Array = []
 
 var _mm: MultiMesh
+var _held: MultiMesh
 var _target := PackedVector3Array()
 var _state := PackedByteArray()
 var _shown := PackedByteArray()   # state each cop was last drawn in
@@ -105,8 +106,10 @@ var blitz_until := 0.0
 
 func _ready() -> void:
 	_mm = Kit.add_to(self, N, Layout.WORLD_AABB)
+	_held = Kit.add_held(self, N, Layout.WORLD_AABB)
 	for i in N:
 		_mm.set_instance_color(i, Color(0.1, 0.17, 0.52, fmod(0.07 + i * 0.37, 1.0)))
+		_held.set_instance_color(i, _mm.get_instance_color(i))
 	_target.resize(N)
 	_state.resize(N)
 	_shown.resize(N)
@@ -195,8 +198,12 @@ func _process(delta: float) -> void:
 			_prev[i] = _pose[i]
 			_pose[i] = pose
 			_pose_t[i] = now
-		_mm.set_instance_transform(i, Kit.xform(_vpos[i], _vyaw[i], HEIGHT, HEIGHT))
-		_mm.set_instance_custom_data(i, Kit.custom(pose, speed, flags, _ev[i], _prev[i], _pose_t[i], held))
+		var xf := Kit.xform(_vpos[i], _vyaw[i], HEIGHT, HEIGHT)
+		var data := Kit.custom(pose, speed, flags, _ev[i], _prev[i], _pose_t[i], held)
+		_mm.set_instance_transform(i, xf)
+		_mm.set_instance_custom_data(i, data)
+		_held.set_instance_transform(i, xf)
+		_held.set_instance_custom_data(i, data)
 
 	# Sirens ride on the first few cops who are chasing someone.
 	var k := 0

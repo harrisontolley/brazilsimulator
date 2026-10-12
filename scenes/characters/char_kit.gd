@@ -8,6 +8,8 @@ extends RefCounted
 ## Instance colour: rgb = top colour, a = look seed (skin, hair, legs).
 ## Instance custom data: see custom().
 
+const WeaponKit := preload("res://scenes/weapons/weapon_kit.gd")
+
 # Poses (shader P_*).
 const STAND := 0
 const WALK := 1
@@ -132,6 +134,7 @@ const _CASH := 14
 const _STRIPE := 15
 const _SACK := 16
 const _WATCH := 17
+const _VCOL := 18  # colour carried by the vertex itself (held weapons)
 
 static var _mesh: ArrayMesh
 static var _mat: ShaderMaterial
@@ -177,6 +180,33 @@ static func add_to(parent: Node3D, count: int, aabb: AABB, mats: Array = []) -> 
 	mm.use_custom_data = true
 	mm.mesh = _mesh
 	mm.instance_count = count
+	if mats.is_empty():
+		mats = [_mat, _line]
+	for k in 2:
+		var mmi := MultiMeshInstance3D.new()
+		mmi.multimesh = mm
+		mmi.material_override = mats[k]
+		mmi.custom_aabb = aabb
+		if k == 1:
+			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		parent.add_child(mmi)
+	return mm
+
+
+## What `count` characters hold in their hands, as a second layer over the bodies made by
+## add_to(). Give each instance exactly the transform, colour and custom data of its owner and
+## the shader puts the weapon in the hand; only the one matching the owner's `held` shows.
+static func add_held(parent: Node3D, count: int, aabb: AABB, mats: Array = []) -> MultiMesh:
+	if _mesh == null:
+		_build()
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.use_custom_data = true
+	mm.mesh = WeaponKit.held_mesh()
+	mm.instance_count = count
+	for i in count:
+		mm.set_instance_transform(i, Transform3D(Basis.from_scale(Vector3.ZERO), Vector3(0, -50, 0)))
 	if mats.is_empty():
 		mats = [_mat, _line]
 	for k in 2:
@@ -300,8 +330,6 @@ static func _build() -> void:
 	_chain()
 	_ell(Vector3(0, 1.265, -0.15), Vector3(0.04, 0.045, 0.03), _TORSO, _GOLD, 6, 6, 3)
 	_box(Vector3(-0.245, 0.56, 0), Vector3(0.07, 0.26, 0.24), _FORE_L, _ACCENT, 7)
-	# The pistol points down the hanging arm so it points forward once the arm is raised.
-	_box(Vector3(0.245, 0.64, -0.03), Vector3(0.045, 0.22, 0.065), _FORE_R, _BLACK, _PROP_HELD + HELD_PISTOL)
 	# Police: white cap with a black band and brim, gold badges, beacon, hi-vis band, belt.
 	_ell(Vector3(0, 1.76, 0), Vector3(0.215, 0.085, 0.215), _HEAD, _WHITE, 9, 10, 4, 1.73)
 	_ell(Vector3(0, 1.725, 0), Vector3(0.208, 0.035, 0.208), _HEAD, _BLACK, 9, 10, 2)

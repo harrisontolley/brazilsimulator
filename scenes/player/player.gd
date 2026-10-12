@@ -4,6 +4,7 @@ extends CharacterBody3D
 
 const CameraRig := preload("res://scenes/player/camera_rig.gd")
 const Kit := preload("res://scenes/characters/char_kit.gd")
+const WeaponKit := preload("res://scenes/weapons/weapon_kit.gd")
 const CharRig := preload("res://scenes/characters/char_rig.gd")
 const Layout := preload("res://scenes/world/layout.gd")
 
@@ -109,6 +110,7 @@ var _ram_cd := 0.0
 
 var _vis: Node3D
 var _body: MultiMesh
+var _held: MultiMesh
 var _label: Label3D
 var _last_pos := Vector3.ZERO
 var _spd := 0.0
@@ -131,7 +133,7 @@ var _bank := 0.0
 var _vm: Node3D
 var _vm_r: Node3D
 var _vm_l: Node3D
-var _vm_gun: MeshInstance3D
+var _vm_guns := {}  # Kit.HELD_* -> the model shown in the right hand
 var _vm_t := -10.0
 var _vm_side := 1.0
 var _send_t := 0.0
@@ -167,8 +169,10 @@ func _ready() -> void:
 	_anim = CharRig.new()
 	_mats = Kit.rig_materials()
 	_body = Kit.add_to(_vis, 1, AABB(Vector3(-2.5, -0.5, -2.5), Vector3(5, 3.5, 5)), _mats)
-	_body.set_instance_transform(0, Transform3D(Basis.from_scale(Vector3.ONE * BODY_SCALE), Vector3.ZERO))
-	_body.set_instance_color(0, Color.from_hsv(fmod(id * 0.137, 1.0), 0.75, 0.9, fmod(id * 0.618, 1.0)))
+	_held = Kit.add_held(_vis, 1, AABB(Vector3(-2.5, -0.5, -2.5), Vector3(5, 3.5, 5)), _mats)
+	for mm in [_body, _held]:
+		mm.set_instance_transform(0, Transform3D(Basis.from_scale(Vector3.ONE * BODY_SCALE), Vector3.ZERO))
+		mm.set_instance_color(0, Color.from_hsv(fmod(id * 0.137, 1.0), 0.75, 0.9, fmod(id * 0.618, 1.0)))
 	_last_pos = position
 
 	if is_local:
@@ -209,10 +213,14 @@ func _build_viewmodel() -> void:
 		var fore := _mesh(arm, Vector3(0.0, -0.07, 0.27), skin)
 		fore.rotation.x = 1.84
 		hand.add_child(fore)
-	var gun := BoxMesh.new()
-	gun.size = Vector3(0.05, 0.1, 0.3)
-	_vm_gun = _mesh(gun, Vector3(0.0, 0.08, -0.13), Color(0.1, 0.1, 0.1))
-	_vm_r.add_child(_vm_gun)
+	for held in WeaponKit.MODELS:
+		var gun := WeaponKit.node(held)
+		# Big and close, the way a gun fills the corner of the eye.
+		gun.position = Vector3(0.0, 0.04, -0.06)
+		gun.scale = Vector3.ONE * 1.3
+		gun.visible = false
+		_vm_r.add_child(gun)
+		_vm_guns[held] = gun
 
 
 func _mesh(mesh: Mesh, p: Vector3, c: Color) -> MeshInstance3D:
@@ -828,7 +836,9 @@ func _animate(delta: float) -> void:
 		_prev = _pose
 		_pose = pose
 		_pose_t = Kit.now()
-	_body.set_instance_custom_data(0, Kit.custom(pose, 0.0, flags, _ev, _prev, _pose_t, held))
+	var data := Kit.custom(pose, 0.0, flags, _ev, _prev, _pose_t, held)
+	_body.set_instance_custom_data(0, data)
+	_held.set_instance_custom_data(0, data)
 
 
 ## Plays a punch / recoil (attack) or a flinch on this player's body.
@@ -866,7 +876,8 @@ func play(what: String, seconds: float) -> void:
 func _animate_viewmodel() -> void:
 	_vm.visible = rig.first_person() and not st.dead
 	var gun: bool = DB.is_gun(st.equipped)
-	_vm_gun.visible = gun
+	for held in _vm_guns:
+		_vm_guns[held].visible = held == DB.ITEMS[st.equipped].held
 	var dt := Kit.now() - _vm_t
 	var e := smoothstep(0.0, 0.06, dt) * (1.0 - smoothstep(0.08, 0.28, dt))
 	var sway := Vector3(0.0, sin(Kit.now() * 9.0) * 0.012, 0.0) * minf(_spd / WALK, 1.5)

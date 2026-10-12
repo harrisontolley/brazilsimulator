@@ -38,6 +38,8 @@ const NPC_STROLL := 16
 const STROLL_SPEED := 1.5
 const DANCE_SPEED := 1.6
 const SHELTER_SPEED := 4.6
+## How many of the crowd can have something in their hand at once.
+const HELD_POOL := 64
 const NO_POSE := 255
 const LOCAL_TOPS := [Color(1.0, 0.85, 0.1), Color(0.1, 0.65, 0.3), Color(0.95, 0.95, 0.95), Color(0.3, 0.7, 0.95), Color(0.9, 0.35, 0.2)]
 
@@ -74,6 +76,9 @@ var _pose := PackedByteArray()     # Kit pose now showing, NO_POSE before the fi
 var _prev := PackedByteArray()     # the pose it is blending out of
 var _pose_t := PackedFloat32Array()  # Kit.now() when the pose last changed
 var _mm: MultiMesh
+var _held: MultiMesh
+var _held_slot := {}   # idx -> slot in _held
+var _held_free: Array[int] = []
 var _blood: MultiMesh
 var _blood_n := 0
 var _active := {}          # idx -> true while FLEE / HOSTILE
@@ -304,6 +309,11 @@ func _build_meshes(tops: PackedColorArray, towels: PackedInt32Array) -> void:
 	_mm = Kit.add_to(self, count, WORLD_AABB)
 	for i in count:
 		_mm.set_instance_color(i, tops[i])
+	_held = Kit.add_held(self, HELD_POOL, WORLD_AABB)
+	_held_slot.clear()
+	_held_free.clear()
+	for k in HELD_POOL:
+		_held_free.append(HELD_POOL - 1 - k)
 
 	var flat := StandardMaterial3D.new()
 	flat.vertex_color_use_as_albedo = true
@@ -353,11 +363,35 @@ func _add_mmi(mm: MultiMesh, mat: Material) -> void:
 
 func _place(i: int, p: Vector3) -> void:
 	pos[i] = p
-	_mm.set_instance_transform(i, Kit.xform(p, _yaw[i], _width[i], _scale[i]))
+	var xf := Kit.xform(p, _yaw[i], _width[i], _scale[i])
+	_mm.set_instance_transform(i, xf)
+	if _held_slot.has(i):
+		_held.set_instance_transform(_held_slot[i], xf)
 
 
 func _hide(i: int) -> void:
 	_mm.set_instance_transform(i, Transform3D(Basis.from_scale(Vector3.ZERO), Vector3(0, -50, 0)))
+	_drop_held(i)
+
+
+## Gives NPC i a slot in the held layer, or takes it away. With every slot taken they go
+## without: the gun is still there as far as the game is concerned.
+func _show_held(i: int, data: Color) -> void:
+	if not _held_slot.has(i):
+		if _held_free.is_empty():
+			return
+		_held_slot[i] = _held_free.pop_back()
+		_held.set_instance_color(_held_slot[i], _mm.get_instance_color(i))
+	var k: int = _held_slot[i]
+	_held.set_instance_custom_data(k, data)
+	_held.set_instance_transform(k, Kit.xform(pos[i], _yaw[i], _width[i], _scale[i]))
+
+
+func _drop_held(i: int) -> void:
+	if _held_slot.has(i):
+		_held.set_instance_transform(_held_slot[i], Transform3D(Basis.from_scale(Vector3.ZERO), Vector3(0, -50, 0)))
+		_held_free.append(_held_slot[i])
+		_held_slot.erase(i)
 
 
 ## Pushes NPC i's pose and props to the shader. Call after anything that changes how it looks.
@@ -400,7 +434,12 @@ func _restyle(i: int) -> void:
 		_prev[i] = _pose[i]
 		_pose[i] = pose
 		_pose_t[i] = Kit.now()
-	_mm.set_instance_custom_data(i, Kit.custom(pose, speed, flags, _ev[i], -1 if _prev[i] == NO_POSE else _prev[i], _pose_t[i], held))
+	var data := Kit.custom(pose, speed, flags, _ev[i], -1 if _prev[i] == NO_POSE else _prev[i], _pose_t[i], held)
+	_mm.set_instance_custom_data(i, data)
+	if held != Kit.HELD_NONE:
+		_show_held(i, data)
+	else:
+		_drop_held(i)
 
 
 ## Plays a punch / recoil (attack) or a flinch on NPC i.
