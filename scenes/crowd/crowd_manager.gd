@@ -40,6 +40,14 @@ const NPC_STROLL := 16
 const STROLL_SPEED := 1.5
 const DANCE_SPEED := 1.6
 const SHELTER_SPEED := 4.6
+## Gunfire this close sends people running; a crime this close may get someone's phone out.
+const PANIC_RANGE := 45.0
+const PANIC_MAX := 40
+const CALL_RANGE := 14.0
+const CALL_CHANCE := 0.3
+const CALL_TIME := 4.0
+## How close a bike has to pass to someone to grab what they are holding.
+const SNATCH_RANGE := 3.4
 ## How many of the crowd can have something in their hand at once.
 const HELD_POOL := 64
 const NO_POSE := 255
@@ -101,6 +109,9 @@ var _changed := {}         # idx -> last state event, replayed to late joiners
 var _rob := {}      # pid -> {npc, meter, quiet, last}
 var _hostile := {}  # idx -> {target, cd, until, shooter}
 var _ko := {}       # idx -> [match time they come round, pid who did it]
+var _calls := {}    # idx -> [match time the call goes through, where, pid, severity]
+var _panic_ok := 0.0
+var _call_ok := 0.0
 var _send_t := 0.0
 
 
@@ -117,6 +128,12 @@ func setup(seed_value: int) -> void:
 	_rob.clear()
 	_hostile.clear()
 	_ko.clear()
+	_calls.clear()
+	_panic_ok = 0.0
+	_call_ok = 0.0
+	if multiplayer.is_server() and not Crime.noise.is_connected(_on_noise):
+		Crime.noise.connect(_on_noise)
+		Crime.crime.connect(_on_crime)
 	_walkers.clear()
 	near.clear()
 	_leave_ptr = 0
@@ -577,6 +594,15 @@ func _process(delta: float) -> void:
 				_hostile_step(i, pos[i].lerp(_hostile_target[i], minf(1.0, 10.0 * delta)), delta)
 
 	if server:
+		for i in _calls.keys():
+			var call: Array = _calls[i]
+			if state[i] != AMBIENT:
+				# Hung up on, one way or another.
+				_calls.erase(i)
+			elif t >= call[0]:
+				_calls.erase(i)
+				Crime.report_tip(call[1], call[2], call[3])
+				Net.game.bcast("cl_call", [i, false], self)
 		for i in _ko.keys():
 			if t >= _ko[i][0]:
 				# Comes round with a sore head and a grudge, or just legs it.
@@ -970,7 +996,7 @@ func _srv_hostile(i: int, delta: float) -> void:
 		var via := Layout.next_point(pos[i], p.global_position) - pos[i]
 		via.y = 0.0
 		if via.length() > 0.3:
-			step += via.normalized() * HOSTILE_SPEED * delta
+			step += via.normalized() * h.get("speed", HOSTILE_SPEED) * delta
 	_hostile_step(i, step, delta)
 	h.cd -= delta
 	if h.cd > 0.0:
@@ -984,6 +1010,10 @@ func _srv_hostile(i: int, delta: float) -> void:
 		Crime.report_noise(pos[i], 80.0, -1)
 		if hit:
 			g.srv_damage(h.target, 14.0, -1)
+	elif h.get("mug", false) and d < 1.8 and dy < 2.0:
+		# Not here to fight: one shove, a hand in the pocket, and away.
+		_hostile.erase(i)
+		g.threats.srv_mugged(i, h.target)
 	elif not h.shooter and d < 2.0 and dy < 2.0:
 		h.cd = 1.0
 		g.bcast("cl_fx", [pos[i] + Vector3(0, 1.3, 0), p.global_position + Vector3(0, 1.0, 0), true, DB.WHO_NPC, i, DB.WHO_PLAYER, h.target])
@@ -1008,6 +1038,130 @@ func _srv_duel_tick(i: int, h: Dictionary, delta: float) -> void:
 		srv_damage_npc(other, 35.0, -1)
 		if state[other] == DEAD and randf() < 0.5:
 			g.srv_add_drop(pos[other] + Vector3(0.8, 0, 0.5), 0, {"pistol": 1, "ammo": 6})
+
+
+## Sends NPC i after a player to take their money off them rather than to hurt them.
+func srv_mug(i: int, pid: int, speed: float) -> void:
+	if i < 0 or i >= count or state[i] != AMBIENT:
+		return
+	_hostile[i] = {"target": pid, "cd": 0.2, "until": 12.0, "shooter": false, "mug": true, "speed": speed}
+	_srv_set(i, HOSTILE)
+
+
+## Mugger i has what he came for: he and anyone else on the job with him run for it.
+func srv_scatter(i: int, from: Vector3) -> void:
+	for j in _hostile.keys():
+		if _hostile[j].get("mug", false):
+			_hostile.erase(j)
+			_srv_flee(j, from)
+	if state[i] == HOSTILE:
+		_srv_flee(i, from)
+
+
+## Gunfire: anyone near who is the running kind, runs. The ones who live by it stay put.
+func _on_noise(p: Vector3, radius: float, _pid: int) -> void:
+	if radius < 80.0 or MatchState.time < _panic_ok:
+		return
+	_panic_ok = MatchState.time + 1.5
+	var n := 0
+	for i in count:
+		if state[i] != AMBIENT or absf(pos[i].x - p.x) > PANIC_RANGE or absf(pos[i].z - p.z) > PANIC_RANGE or absf(pos[i].y - p.y) > 4.0:
+			continue
+		var d := pos[i].distance_to(p)
+		var nerve: float = DB.ARCHETYPES[arch[i]].fight
+		if d > PANIC_RANGE or nerve > 0.5 or randf() > (0.95 - nerve) * (1.0 - d / (PANIC_RANGE * 1.4)):
+			continue
+		_srv_flee(i, p)
+		n += 1
+		if n >= PANIC_MAX:
+			break
+
+
+## A crime with people about: now and then one of them gets a phone out. Unless something
+## stops them, the police hear where it happened and what you look like.
+func _on_crime(p: Vector3, pid: int, severity: int) -> void:
+	var g = Net.game
+	if MatchState.time < _call_ok or not g.players.has(pid):
+		return
+	for i in count:
+		if state[i] != AMBIENT or _lying[i] == 1 or _calls.has(i) or DB.ARCHETYPES[arch[i]].fight > 0.5:
+			continue
+		var d := pos[i].distance_to(p)
+		if d < 3.0 or d > CALL_RANGE:
+			continue
+		_call_ok = MatchState.time + 6.0
+		if randf() < CALL_CHANCE:
+			_calls[i] = [MatchState.time + CALL_TIME, p, pid, severity]
+			g.bcast("cl_call", [i, true], self)
+			g.send(pid, "cl_toast", ["Someone is calling the police!"])
+		return
+
+
+## NPC i gets their phone out to ring the police, or puts it away again.
+@rpc("authority", "call_remote", "reliable")
+func cl_call(i: int, on: bool) -> void:
+	if i < 0 or i >= count or state[i] != AMBIENT:
+		return
+	_grp[i] = -1
+	_sit[i] = 0
+	_walker[i] = 0
+	_home[i] = pos[i]
+	_idle[i] = Kit.CALL if on else Kit.STAND
+	_restyle(i)
+
+
+## Someone sitting down or busy with a phone within arm's reach of a passing bike, or -1.
+func pick_snatch(p: Vector3, fwd: Vector3) -> int:
+	var best := -1
+	var best_d := SNATCH_RANGE
+	for i in near:
+		if state[i] != AMBIENT or not (_sit[i] == 1 or _idle[i] == Kit.SELFIE or _idle[i] == Kit.PHONE or _idle[i] == Kit.CALL):
+			continue
+		var to := pos[i] - p
+		to.y = 0.0
+		var d := to.length()
+		if d < best_d and to.dot(fwd) > -0.5 * d:
+			best = i
+			best_d = d
+	return best
+
+
+## A rider reaching out as they pass. Faster is cleaner; fumble it and you may come off.
+@rpc("any_peer", "call_remote", "reliable")
+func srv_snatch(i: int) -> void:
+	var pid := Net.sender()
+	var g = Net.game
+	var p = g.players.get(pid)
+	if p == null or not p.at_large() or g.motos.bike_of(pid) < 0 or i < 0 or i >= count or state[i] != AMBIENT:
+		return
+	if pos[i].distance_to(p.global_position) > SNATCH_RANGE + 3.0:
+		return
+	var speed: float = p.ground_speed()
+	Crime.report_crime(pos[i], pid, 1)
+	if randf() > clampf(0.35 + speed / 40.0, 0.35, 0.9):
+		g.send(pid, "cl_toast", ["Fumbled it!"])
+		if randf() < 0.15:
+			g.motos.srv_release(pid)
+			g.srv_floor(pid, 1.2)
+		_srv_react(i, pid, p.global_position)
+		return
+	var msg := ""
+	if _idle[i] == Kit.SELFIE or _idle[i] == Kit.PHONE or _idle[i] == Kit.CALL or _idle[i] == Kit.SIT_PHONE:
+		g._give(p.st, "phone", 1)
+		msg = "Snatched a %s" % DB.ITEMS["phone"].name
+	elif _tier[i] == 2:
+		g._give(p.st, "chain", 1)
+		msg = "Snatched a %s" % DB.ITEMS["chain"].name
+	else:
+		var cash := int(money[i] * 0.3)
+		money[i] -= cash
+		p.st.money += cash
+		msg = "Snatched R$%d" % cash
+	g.push_state(p)
+	g.send(pid, "cl_toast", [msg])
+	g.send(pid, "cl_sound", ["cash", pos[i]])
+	_calls.erase(i)
+	_srv_flee(i, p.global_position)
 
 
 ## Makes an NPC who was minding their own business go after a player, if they are the type.

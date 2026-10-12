@@ -76,6 +76,8 @@ var net_yaw := 0.0
 var wanted_t := 0.0  # server only
 var rig: Node3D
 var target_npc := -1
+## While riding: someone close enough to grab something off as you pass, or -1.
+var snatch_npc := -1
 var robbing := false
 ## What the legs are doing (MV_*). Simulated by the owner; others get it as net_mv.
 var mv := MV_GROUND
@@ -969,6 +971,7 @@ func _local_process(delta: float) -> void:
 		_near_t = 0.1
 		g.crowd.refresh_near(global_position)
 	target_npc = g.crowd.pick_near(head, dir, ROB_RANGE) if can_fight() and mv != MV_RIDE else -1
+	snatch_npc = g.crowd.pick_snatch(global_position, -global_basis.z) if can_fight() and mv == MV_RIDE and _ride_spd > 6.0 else -1
 
 	# Meth: sniper zoom while high, shakes on the way down, twitching on overdose.
 	var aiming := captured and Input.is_action_pressed("aim")
@@ -1003,6 +1006,8 @@ func _local_process(delta: float) -> void:
 				_vm_side = -_vm_side
 		if Input.is_action_just_pressed("reload"):
 			g.to_server("srv_reload")
+		if Input.is_action_just_pressed("rob") and snatch_npc >= 0:
+			g.to_server("srv_snatch", [snatch_npc], g.crowd)
 		if Input.is_action_pressed("rob") and target_npc >= 0:
 			robbing = true
 			if _rob_t <= 0.0:

@@ -71,6 +71,8 @@ const BLOCK_MIN := 12.0
 ## Feet this far off the ground stick out above the crowd.
 const HOP_HEIGHT := 1.2
 ## st.vis: what the wanted player's HUD should say.
+## How long the police keep a description once someone has rung it in.
+const TIP_TIME := 45.0
 const VIS_NONE := 0
 const VIS_SEARCH := 1
 const VIS_SEEN := 2
@@ -96,6 +98,7 @@ var _send_t := 0.0
 var _frozen := false
 var _yaw_to := PackedFloat32Array()  # streamed facing
 var _pursuit := {}  # server: pid -> {t, budget, grace}
+var _known := {}    # server: pid -> [match time until which they have a description, severity]
 var _sirens: Array[AudioStreamPlayer3D] = []
 
 ## Events tilt the odds (server only): rain shortens how far cops see, a roar of fireworks
@@ -130,6 +133,7 @@ func _ready() -> void:
 	if multiplayer.is_server():
 		Crime.noise.connect(_on_noise)
 		Crime.crime.connect(_on_crime)
+		Crime.tip.connect(_on_tip)
 
 
 func reset() -> void:
@@ -137,6 +141,7 @@ func reset() -> void:
 	deaf_until = 0.0
 	blitz_until = 0.0
 	_pursuit.clear()
+	_known.clear()
 	cops.clear()
 	for i in N:
 		# Ten walk the calçadão, the rest the back street.
@@ -383,14 +388,22 @@ func _srv_spot(c: Dictionary) -> void:
 	for pid in g.players:
 		var pl = g.players[pid]
 		var fugitive: bool = pl.st.get("fug", false)
-		if (pl.st.heat <= 0 and not fugitive) or not pl.at_large():
+		var known: bool = _known.has(pid) and MatchState.time < _known[pid][0]
+		if (pl.st.heat <= 0 and not fugitive and not known) or not pl.at_large():
 			continue
 		var pu = _pursuit.get(pid)
 		if pu != null and MatchState.time < pu.grace:
 			continue
-		if _pursuers(pid) >= MAX_PURSUERS[clampi(maxi(pl.st.heat, 2 if fugitive else 0), 0, 3)]:
+		if _pursuers(pid) >= MAX_PURSUERS[clampi(maxi(pl.st.heat, 2 if fugitive or known else 0), 0, 3)]:
 			continue
 		if _sees(c, pl, SPOT_RANGE * (1.5 if fugitive else 1.0), FOV_PATROL):
+			if known and pl.st.heat <= 0:
+				# Matches the description somebody phoned in.
+				pl.st.heat = _known[pid][1]
+				pl.wanted_t = HEAT_STEP_TIME[pl.st.heat]
+				_known.erase(pid)
+				g.push_state(pl)
+				g.send(pid, "cl_toast", ["A cop recognised you"])
 			if fugitive and pl.st.heat < 2:
 				pl.st.heat = 2
 				pl.wanted_t = HEAT_STEP_TIME[2]
@@ -700,6 +713,21 @@ func _on_noise(p: Vector3, radius: float, _pid: int) -> void:
 			c.state = INVESTIGATE
 			c.goal = p
 			c.t = 14.0
+
+
+## Somebody rang it in: the two nearest cops with nothing on come for a look, and for a
+## while any cop who sets eyes on the culprit will know them.
+func _on_tip(p: Vector3, pid: int, severity: int) -> void:
+	_known[pid] = [MatchState.time + TIP_TIME, clampi(severity, 1, 3)]
+	var idle: Array = []
+	for c in cops:
+		if c.state == PATROL and not c.get("hold", false):
+			idle.append(c)
+	idle.sort_custom(func(a, b): return a.pos.distance_squared_to(p) < b.pos.distance_squared_to(p))
+	for k in mini(2, idle.size()):
+		idle[k].state = INVESTIGATE
+		idle[k].goal = p
+		idle[k].t = 20.0
 
 
 ## Somebody did something at p. It only matters to the cops who saw it happen.

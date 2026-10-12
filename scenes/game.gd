@@ -19,6 +19,7 @@ const Kit := preload("res://scenes/characters/char_kit.gd")
 const Layout := preload("res://scenes/world/layout.gd")
 const CombatFx := preload("res://scenes/fx/combat_fx.gd")
 const Interact := preload("res://scenes/player/interact.gd")
+const Threats := preload("res://scenes/world/threats.gd")
 const Places := preload("res://scenes/world/places.gd")
 const WeaponKit := preload("res://scenes/weapons/weapon_kit.gd")
 
@@ -42,6 +43,7 @@ var police: Node3D
 var hud: CanvasLayer
 var fx: Node3D
 var interaction: Node
+var threats: Node3D
 var local_player: CharacterBody3D
 
 var _players_root: Node3D
@@ -87,6 +89,9 @@ func _ready() -> void:
 	police = Police.new()
 	police.name = "Police"
 	add_child(police)
+	threats = Threats.new()
+	threats.name = "Threats"
+	add_child(threats)
 	_players_root = Node3D.new()
 	add_child(_players_root)
 	_drops_root = Node3D.new()
@@ -487,6 +492,57 @@ func _debug_test(what: String) -> void:
 				await get_tree().create_timer(1.3).timeout
 				await _debug_frames("act%d" % g.kind, 1, 0.05)
 			debug_result("look", true)
+		"mug":
+			# Walk up to a corner gang with cash: they whistle, run you down and take a cut,
+			# and the one who took it still has it on him.
+			var grp: Dictionary = crowd.acts.groups[crowd.acts.gangs[0]]
+			local_player.st.money = 1000
+			MatchState.time = Threats.QUIET_START + 1.0
+			police.debug_solo(Vector3(280, 0, -30), Vector3.RIGHT)
+			var mugged := false
+			var carrying := 0
+			for tries in 30:
+				local_player.global_position = grp.pos + Vector3(0, 0.2, 14)
+				threats._mug_ok.clear()
+				threats._gang_ok.clear()
+				await get_tree().create_timer(0.35).timeout
+				local_player.global_position = grp.pos + Vector3(0, 0.2, 3)
+				for k in 40:
+					await get_tree().create_timer(0.2).timeout
+					if local_player.st.money < 1000:
+						mugged = true
+						break
+					if threats._pending.is_empty() and crowd._hostile.is_empty() and k > 3:
+						break
+				if mugged:
+					break
+			for i in crowd.count:
+				if crowd.arch[i] == crowd._arch_index("malandro"):
+					carrying = maxi(carrying, crowd.money[i])
+			debug_result("mug", mugged and local_player.st.ko > 0.0 and carrying >= 350, "money %d floored %.1f mugger carries %d" % [local_player.st.money, local_player.st.ko, carrying])
+		"tip":
+			# A crime nobody in uniform saw, a bystander on the phone, then a cop who knows the face.
+			crowd.debug_clear()
+			var cop: Dictionary = police.debug_solo(Vector3(60, 0, 20), Vector3.RIGHT)
+			var i: int = crowd.debug_stand(Vector3(0, 0, 26), 0.0)
+			local_player.global_position = Vector3(0, 0.2, 20)
+			await get_tree().create_timer(0.2).timeout
+			var called := false
+			for k in 60:
+				crowd._call_ok = 0.0
+				Crime.report_crime(local_player.global_position, 1, 2)
+				if crowd._calls.has(i):
+					called = true
+					break
+			var unseen: bool = local_player.st.heat == 0
+			crowd._calls[i][0] = MatchState.time
+			await get_tree().create_timer(0.3).timeout
+			var known: bool = police._known.has(1)
+			local_player.global_position = Vector3(70, 0.2, 20)
+			cop.hold = true
+			await get_tree().create_timer(0.6).timeout
+			police._srv_spot(cop)
+			debug_result("tip", called and unseen and known and local_player.st.heat == 2, "called %s unseen %s known %s heat %d" % [called, unseen, known, local_player.st.heat])
 		"crouch":
 			local_player.global_position = Vector3(-20, 0.2, 45)
 			Input.action_press("crouch")
@@ -676,6 +732,7 @@ func _srv_start_match() -> void:
 	_till_ready.clear()
 	_bicho_round = 0
 	police.reset()
+	threats.reset()
 	balls.reset()
 	events.srv_reset()
 	var pdata: Array = []
@@ -912,6 +969,18 @@ func srv_damage(pid: int, amount: float, attacker: int, zone := 0, ko := false) 
 	return false
 
 
+## Puts a player on the floor for `seconds`: tackled, not hurt.
+func srv_floor(pid: int, seconds: float) -> void:
+	var p = players.get(pid)
+	if p == null or p.st.dead:
+		return
+	p.st.ko = maxf(p.st.ko, seconds)
+	_ko_immune[pid] = MatchState.time + seconds + DB.KO_IMMUNE
+	motos.srv_release(pid)
+	push_state(p)
+	bcast("cl_ko", [p.global_position + Vector3(0, 0.6, 0), seconds])
+
+
 ## Going through the pockets of a player who is out cold: half what they carry.
 @rpc("any_peer", "call_remote", "reliable")
 func srv_rob_player(victim: int) -> void:
@@ -1012,6 +1081,13 @@ func srv_attack(origin: Vector3, dir: Vector3) -> void:
 		if not w.melee:
 			Crime.report_noise(origin, 90.0, pid)
 			Crime.report_crime(origin, pid, 3)
+		return
+	# And the pair on the bike who just had your wallet.
+	var bike_t: float = threats.srv_strike(origin, dir, hit.t)
+	if bike_t >= 0.0:
+		bcast("cl_fx", [origin, origin + dir * bike_t, w.melee, DB.WHO_PLAYER, pid, DB.WHO_NONE, -1])
+		if not w.melee:
+			Crime.report_noise(origin, 90.0, pid)
 		return
 	var dmg: float = w.damage * (p.melee_mult() if w.melee else 1.0)
 	# So does the armoured truck, when there is one to crack.

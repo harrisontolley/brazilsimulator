@@ -19,6 +19,10 @@ var pos: Array[Vector3] = []
 var yaw: Array[float] = []
 var rider: Array[int] = []   # peer id, or 0 when parked
 
+## The bike itself, for anyone else who needs to draw one.
+var bike_mesh: ArrayMesh
+var bike_mat: ShaderMaterial
+
 var _nodes: Array[Node3D] = []
 var _engines: Array[AudioStreamPlayer3D] = []
 
@@ -42,6 +46,8 @@ func _ready() -> void:
 	for wz in [-0.78, 0.72]:
 		parts.append([_cyl(0.32, 0.32, 0.14, 12), Transform3D(Basis(Vector3.BACK, PI / 2.0), Vector3(0, 0.32, wz)), Color(0.05, 0.05, 0.06)])
 	var mesh := compose(parts)
+	bike_mesh = mesh
+	bike_mat = mat
 	for i in SPOTS.size():
 		var n := Node3D.new()
 		var mi := MeshInstance3D.new()

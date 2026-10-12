@@ -394,8 +394,10 @@ func _process(delta: float) -> void:
 			_target.text = "Out cold: hold E to go through their pockets"
 		else:
 			_target.text = "Hold E and keep QUIET to go through their bag" if g.crowd.is_lying(p.target_npc) else "Hold E and shout to rob"
+	elif p.snatch_npc >= 0:
+		_target.text = "E: SNATCH!"
 	elif p.mv == p.MV_RIDE:
-		_target.text = "W / S throttle   A / D steer   Space hop   F get off"
+		_target.text = "W / S throttle   A / D steer   Space hop   F get off   E snatch from people sitting"
 	elif p.is_crouched():
 		_target.text = "Crouched: harder to spot, hardest of all keeping still"
 	else:
