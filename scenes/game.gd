@@ -645,6 +645,33 @@ func _debug_test(what: String) -> void:
 			await get_tree().create_timer(0.3).timeout
 			var out: bool = pl.st.jail <= 0.0 and pl.st.fug and pl.st.heat == 2 and Places.room_at(pl.global_position) < 0
 			debug_result("prison", long and cut and added and alive and out and inmates > 20, "sentence ok %s work %s guard %s survives %s escaped %s inmates %d" % [long, cut, added, alive, out, inmates])
+		"settings":
+			# Change things, save, forget them, load: they come back. And the menu builds.
+			Settings._scripted = false
+			Settings.path = "user://settings_test.cfg"
+			Settings.mode = Settings.BORDERLESS
+			Settings.size = Vector2i(1280, 720)
+			Settings.fov = 95.0
+			Settings.sens = 0.004
+			Settings.volume = 0.3
+			Settings.vsync = false
+			Settings.save()
+			Settings.mode = Settings.WINDOWED
+			Settings.size = Vector2i(1600, 900)
+			Settings.fov = 75.0
+			Settings.sens = 0.0025
+			Settings.volume = 0.8
+			Settings.vsync = true
+			Settings._load()
+			var kept: bool = Settings.mode == Settings.BORDERLESS and Settings.size == Vector2i(1280, 720) and is_equal_approx(Settings.fov, 95.0) and is_equal_approx(Settings.sens, 0.004) and is_equal_approx(Settings.volume, 0.3) and not Settings.vsync
+			var quiet: bool = absf(db_to_linear(AudioServer.get_bus_volume_db(0)) - 0.3) < 0.01
+			hud.open_pause()
+			await get_tree().process_frame
+			var rows: int = hud._menu._list.get_child_count()
+			hud.close_pause()
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(Settings.path))
+			Settings._scripted = true
+			debug_result("settings", kept and quiet and rows > 12 and not hud.menu_open, "kept %s volume applied %s menu rows %d" % [kept, quiet, rows])
 		"crouch":
 			local_player.global_position = Vector3(-20, 0.2, 45)
 			Input.action_press("crouch")

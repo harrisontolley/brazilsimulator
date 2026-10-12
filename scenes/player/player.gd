@@ -59,7 +59,6 @@ const RIDE_SAND := 12.0
 const RIDE_ACCEL := 13.0
 const RIDE_BRAKE := 24.0
 const RIDE_STEER := 2.0
-const SENS := 0.0025
 const ROB_RANGE := 4.0
 const HEAD := Vector3(0, 1.3, 0)
 ## Kit characters are adult-sized; the players are kids.
@@ -347,18 +346,18 @@ func _unhandled_input(e: InputEvent) -> void:
 	var captured := Controls.playing()
 	if e is InputEventMouseMotion and captured:
 		# Scales with the aim zoom, not with the speed widening on top of it.
-		var s: float = SENS * rig.fov_target / 75.0
+		var s: float = Settings.sens * rig.fov_target / Settings.fov
 		rotate_y(-e.relative.x * s)
-		rig.pitch(-e.relative.y * s)
+		rig.pitch(e.relative.y * s * (1.0 if Settings.invert_y else -1.0))
 	elif e is InputEventMouseButton and e.pressed:
 		if e.button_index == MOUSE_BUTTON_WHEEL_UP:
 			rig.zoom(-1)
 		elif e.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			rig.zoom(1)
-		elif not captured and not Net.game.hud.shop_open:
+		elif not captured and not Net.game.hud.shop_open and not Net.game.hud.menu_open:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	elif e.is_action_pressed("ui_cancel"):
-		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		Net.game.hud.open_pause()
 
 
 func _physics_process(delta: float) -> void:
@@ -982,7 +981,7 @@ func _local_process(delta: float) -> void:
 
 	# Meth: sniper zoom while high, shakes on the way down, twitching on overdose.
 	var aiming := captured and Input.is_action_pressed("aim")
-	rig.fov_target = (20.0 if is_sniper() else 55.0) if aiming else 75.0
+	rig.fov_target = (20.0 if is_sniper() else Settings.fov * 0.73) if aiming else Settings.fov
 	match drug_phase("meth"):
 		"down": rig.shake = 0.012
 		"od": rig.shake = 0.04

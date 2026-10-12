@@ -8,7 +8,11 @@ const VIS_TEXT := ["", "\nSEARCHING - stay out of sight", "\nSPOTTED", "\nHIDDEN
 const PING_TIME := 2.5
 const PING_RADIUS := 230.0
 
+const SettingsMenu := preload("res://scenes/ui/settings_menu.gd")
+
 var shop_open := false
+## The pause menu (Esc) is up: settings, leave, quit. The match carries on behind it.
+var menu_open := false
 
 var _root: Control
 var _tint: ColorRect
@@ -26,6 +30,7 @@ var _target: Label
 var _prompt: Label
 var _mark: Label
 var _result: Label
+var _menu: Control
 var _mark_t := 0.0
 var _hold_bar: ProgressBar
 var _rob_bar: ProgressBar
@@ -89,7 +94,7 @@ func _ready() -> void:
 	_heat.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	var help := _label(tr, 13, Color(1, 1, 1, 0.65))
 	help.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	help.text = "WASD move  Shift sprint\nHold Space to hop: strafe + turn in the air for speed\nSpace in the air: double jump   at a wall: wall jump\nCtrl / C slide (jump out of it for a boost), or crouch and creep   Q dive\nScroll: first / third person\nLMB attack  RMB aim  R reload   the head is a one-tap; a fist there knocks them out\nHold E + SHOUT to rob (V = fake shout)\nHold E silently on a sunbather to pickpocket\nF use / pick up / shop / hide / take a moto   1 fists / knife   2 guns   3-5 drugs\nRun into a football to dribble, hit it to shoot\nTab scores   Esc free mouse"
+	help.text = "WASD move  Shift sprint\nHold Space to hop: strafe + turn in the air for speed\nSpace in the air: double jump   at a wall: wall jump\nCtrl / C slide (jump out of it for a boost), or crouch and creep   Q dive\nScroll: first / third person\nLMB attack  RMB aim  R reload   the head is a one-tap; a fist there knocks them out\nHold E + SHOUT to rob (V = fake shout)\nHold E silently on a sunbather to pickpocket\nF use / pick up / shop / hide / take a moto   1 fists / knife   2 guns   3-5 drugs\nRun into a football to dribble, hit it to shoot\nTab scores   Esc menu / settings   F11 fullscreen"
 
 	# Bottom centre: robbery.
 	var bc := _vbox(Control.PRESET_CENTER_BOTTOM, Vector2(0, -24))
@@ -427,8 +432,31 @@ func close_shop() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
+## Esc: the pause menu, with the settings in it.
+func open_pause() -> void:
+	if menu_open:
+		return
+	menu_open = true
+	_menu = SettingsMenu.new()
+	_menu.in_game = true
+	_menu.closed.connect(close_pause)
+	_root.add_child(_menu)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func close_pause() -> void:
+	if not menu_open:
+		return
+	menu_open = false
+	_menu.queue_free()
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
 func _unhandled_input(e: InputEvent) -> void:
-	if shop_open and (e.is_action_pressed("ui_cancel") or e.is_action_pressed("interact")):
+	if menu_open and e.is_action_pressed("ui_cancel"):
+		close_pause()
+		get_viewport().set_input_as_handled()
+	elif shop_open and (e.is_action_pressed("ui_cancel") or e.is_action_pressed("interact")):
 		close_shop()
 		get_viewport().set_input_as_handled()
 

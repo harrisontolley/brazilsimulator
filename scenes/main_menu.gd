@@ -1,8 +1,12 @@
 extends Control
 
+const SettingsMenu := preload("res://scenes/ui/settings_menu.gd")
+
 var _name: LineEdit
 var _ip: LineEdit
 var _status: Label
+var _box: VBoxContainer
+var _settings: Control
 
 
 func _ready() -> void:
@@ -20,6 +24,7 @@ func _ready() -> void:
 	box.custom_minimum_size.x = 360
 	box.add_theme_constant_override("separation", 12)
 	add_child(box)
+	_box = box
 
 	var title := Label.new()
 	title.text = "BRAZIL SIMULATOR"
@@ -30,7 +35,7 @@ func _ready() -> void:
 
 	_name = LineEdit.new()
 	_name.placeholder_text = "Name"
-	_name.text = Net.local_name
+	_name.text = Settings.player_name if Settings.player_name != "" else Net.local_name
 	box.add_child(_name)
 
 	var host_btn := Button.new()
@@ -40,13 +45,23 @@ func _ready() -> void:
 
 	_ip = LineEdit.new()
 	_ip.placeholder_text = "Host IP"
-	_ip.text = "127.0.0.1"
+	_ip.text = Settings.last_ip
 	box.add_child(_ip)
 
 	var join_btn := Button.new()
 	join_btn.text = "Join match"
 	join_btn.pressed.connect(_join)
 	box.add_child(join_btn)
+
+	var settings_btn := Button.new()
+	settings_btn.text = "Settings"
+	settings_btn.pressed.connect(_open_settings)
+	box.add_child(settings_btn)
+
+	var quit_btn := Button.new()
+	quit_btn.text = "Quit"
+	quit_btn.pressed.connect(func(): get_tree().quit())
+	box.add_child(quit_btn)
 
 	_status = Label.new()
 	_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -65,6 +80,15 @@ func _ready() -> void:
 			_join.call_deferred()
 
 
+func _open_settings() -> void:
+	_box.visible = false
+	_settings = SettingsMenu.new()
+	_settings.closed.connect(func():
+		_settings.queue_free()
+		_box.visible = true)
+	add_child(_settings)
+
+
 func _host() -> void:
 	_apply_name()
 	if not Net.host():
@@ -81,3 +105,6 @@ func _join() -> void:
 func _apply_name() -> void:
 	var n := _name.text.strip_edges()
 	Net.local_name = n if n != "" else "Kid"
+	Settings.player_name = n
+	Settings.last_ip = _ip.text.strip_edges()
+	Settings.save()
