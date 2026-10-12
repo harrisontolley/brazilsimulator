@@ -41,6 +41,11 @@ func _ready() -> void:
 	_instances(_ball(1.0, 2.0, 8), _vertex_mat(), _balls, _ball_tints)
 	_flush()
 	add_child(City.new())
+	# Batucada wherever there is a samba circle.
+	for roda in DB.RODAS:
+		var e := Sfx.emitter("samba", 1.0, 7.0, 75.0)
+		e.position = roda + Vector3(0, 1.5, 0)
+		add_child(e)
 
 
 func _environment() -> void:

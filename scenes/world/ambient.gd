@@ -251,6 +251,7 @@ func _build_sky(rng: RandomNumberGenerator) -> void:
 		blade.material_override = _mat(Color(0.15, 0.15, 0.15))
 		blade.rotation.y = k * PI / 2.0
 		_rotor.add_child(blade)
+	_heli.add_child(Sfx.emitter("heli", 6.0, 24.0, 300.0))
 	_spot = SpotLight3D.new()
 	_spot.rotation.x = -PI / 2.0
 	_spot.spot_range = 120.0

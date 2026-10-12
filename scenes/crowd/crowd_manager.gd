@@ -236,7 +236,7 @@ func _spot(rng: RandomNumberGenerator) -> Dictionary:
 	if roll < 0.56:
 		# Ambulantes working the sand with a cooler of mate and biscoito.
 		return {"p": DB.clear_of_solids(Vector3(x, 0.0, rng.randf_range(-30.0, 30.0)), 0.5), "walk": 1.0, "dir": Vector3(1.0, 0.0, rng.randf_range(-0.2, 0.2)).normalized(), "far": 90.0, "arch": "vendor"}
-	if roll < 0.6:
+	if roll < 0.585:
 		# A kickabout: both sides chasing up and down a pitch.
 		var rect: Array = Layout.PITCHES[rng.randi() % Layout.PITCHES.size()]
 		var c: Vector3 = rect[0]
@@ -244,7 +244,7 @@ func _spot(rng: RandomNumberGenerator) -> Dictionary:
 		var run := rng.randf_range(6.0, 14.0)
 		var p := c + Vector3(rng.randf_range(-1.0, 1.0) * (h.x - run * 0.5 - 1.0), 0.0, rng.randf_range(-1.0, 1.0) * (h.y - 2.5))
 		return {"p": p, "walk": 1.0, "dir": Vector3(1.0, 0.0, rng.randf_range(-0.3, 0.3)).normalized(), "far": run, "speed": rng.randf_range(2.8, 4.5), "arch": "local", "look": Kit.F_SHIRTLESS if rng.randf() < 0.5 else 0}
-	if roll < 0.615:
+	if roll < 0.595:
 		# Futevolei: two a side, facing the net.
 		var rect: Array = Layout.COURTS[rng.randi() % Layout.COURTS.size()]
 		var c: Vector3 = rect[0]

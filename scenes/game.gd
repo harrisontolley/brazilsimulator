@@ -16,6 +16,7 @@ const Crowd := preload("res://scenes/crowd/crowd_manager.gd")
 const Police := preload("res://scenes/police/police_manager.gd")
 const Hud := preload("res://scenes/ui/hud.gd")
 const Kit := preload("res://scenes/characters/char_kit.gd")
+const Layout := preload("res://scenes/world/layout.gd")
 const CombatFx := preload("res://scenes/fx/combat_fx.gd")
 
 const END_SCREEN_TIME := 15.0
@@ -104,7 +105,7 @@ func _ready() -> void:
 			_debug_showcase()
 		elif a.begins_with("--cam="):
 			_debug_cam(a.trim_prefix("--cam="))
-		elif a.begins_with("--test=") and multiplayer.is_server():
+		elif a.begins_with("--test="):
 			_debug_test(a.trim_prefix("--test="))
 		elif a.begins_with("--event=") and multiplayer.is_server():
 			events.force(a.trim_prefix("--event="))
@@ -118,8 +119,12 @@ func _exit_tree() -> void:
 
 
 func _debug_shot(path: String) -> void:
-	await get_tree().create_timer(4.0).timeout
-	print("fps ", Engine.get_frames_per_second())
+	var wait := 4.0
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--wait="):
+			wait = float(a.trim_prefix("--wait="))
+	await get_tree().create_timer(wait).timeout
+	print("fps %d  script %.1f ms  physics %.1f ms  draws %d  objects %d" % [Engine.get_frames_per_second(), Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0, Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0, Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME), Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME)])
 	get_viewport().get_texture().get_image().save_png(path)
 	get_tree().quit()
 
@@ -138,6 +143,36 @@ func _debug_test(what: String) -> void:
 			Input.action_press("move_forward")
 		"road":
 			local_player.global_position = Vector3(0, 0.2, 57.8)
+		"ball":
+			local_player.global_position = Layout.PITCHES[1][0] + Vector3(-4, 0.2, 0)
+			local_player.rotation.y = -PI / 2.0
+			Input.action_press("move_forward")
+			Input.action_press("sprint")
+		"jail":
+			srv_arrest(1)
+		"shop":
+			local_player.st.money = 5000
+			hud.open_shop(2)
+		"bicho":
+			hud.open_bicho(7)
+		"buy":
+			# Walks the money verbs end to end: food, a bet, a pistol, the till, loot to the fence.
+			local_player.st.money = 5000
+			local_player.st.hp = 40.0
+			local_player.global_position = DB.VENDORS[2].pos + Vector3(0, 0.2, -1)
+			srv_buy(2, "acai")
+			srv_buy(2, "caipirinha")
+			local_player.global_position = DB.VENDORS[1].pos + Vector3(0, 0.2, -1)
+			srv_buy(1, "pistol")
+			srv_equip("pistol")
+			local_player.global_position = DB.VENDORS[7].pos + Vector3(0, 0.2, -1)
+			srv_bet(7, 3, 200)
+			local_player.global_position = DB.VENDORS[2].pos + Vector3(0, 0.2, -1)
+			srv_till(2)
+			_give(local_player.st, "chain", 2)
+			local_player.global_position = DB.VENDORS[10].pos + Vector3(0, 0.2, -1)
+			srv_sell(10)
+			print("state ", local_player.st)
 
 
 ## Fixed camera for --shot: x,y,z,yaw,pitch in metres and degrees.

@@ -58,6 +58,7 @@ var _ev := PackedFloat32Array()    # Kit one-shot event time
 var _gun_t := PackedFloat32Array() # pistol stays drawn until this Kit time
 var _send_t := 0.0
 var _frozen := false
+var _sirens: Array[AudioStreamPlayer3D] = []
 
 ## Events tilt the odds (server only): rain shortens how far cops see, a roar of fireworks
 ## drowns out gunfire, and a blitz pins a few of them to a checkpoint.
@@ -78,6 +79,10 @@ func _ready() -> void:
 	_vyaw.resize(N)
 	_ev.resize(N)
 	_gun_t.resize(N)
+	for k in 3:
+		var s := Sfx.emitter("siren", -3.0, 7.0, 110.0, false)
+		add_child(s)
+		_sirens.append(s)
 	if multiplayer.is_server():
 		Crime.noise.connect(_on_noise)
 		Crime.crime.connect(_on_crime)
@@ -147,6 +152,19 @@ func _process(delta: float) -> void:
 				flags |= Kit.F_GUN
 		_mm.set_instance_transform(i, Kit.xform(_vpos[i], _vyaw[i], HEIGHT, HEIGHT))
 		_mm.set_instance_custom_data(i, Kit.custom(pose, speed, flags, _ev[i]))
+
+	# Sirens ride on the first few cops who are chasing someone.
+	var k := 0
+	for i in N:
+		if _state[i] == CHASE and k < _sirens.size():
+			var s := _sirens[k]
+			s.position = _vpos[i] + Vector3(0, 1.8, 0)
+			if not s.playing and s.stream != null:
+				s.play()
+			k += 1
+	for j in range(k, _sirens.size()):
+		if _sirens[j].playing:
+			_sirens[j].stop()
 
 
 ## Plays a recoil (attack) or a flinch on cop i. Firing keeps the pistol out for a while.

@@ -43,6 +43,7 @@ var _fx_t := 0.0
 var _next_t := FIRST
 var _last := -1
 var _forced := -1
+var _forced_x := INF
 var _tick := 0.0
 var _noise_t := 0.0
 var _truck_hp := 0.0
@@ -81,9 +82,12 @@ func _hide_gang() -> void:
 		_gang.set_instance_transform(j, Transform3D(Basis.from_scale(Vector3.ZERO), Vector3(0, -50, 0)))
 
 
-## Forces the named event to be the next one, a second from now (debug).
+## Forces the named event to be the next one, a second from now (debug). "name@x" also
+## pins where along the beach it happens.
 func force(event_name: String) -> void:
-	_forced = NAMES.find(event_name)
+	var bits := event_name.split("@")
+	_forced = NAMES.find(bits[0])
+	_forced_x = float(bits[1]) if bits.size() > 1 else INF
 	_next_t = MatchState.time + 1.0
 
 
@@ -131,6 +135,8 @@ func _srv_begin() -> void:
 		var spec := _srv_plan(k)
 		if spec.is_empty():
 			continue
+		if k == forced and _forced_x != INF:
+			spec.at.x = _forced_x
 		_last = k
 		g.bcast("cl_event", [k, randi() % 100000, spec.at, MatchState.time, spec.dur], self)
 		_srv_started(k)

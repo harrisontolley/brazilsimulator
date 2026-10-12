@@ -513,6 +513,9 @@ func _baile() -> void:
 	for side in [-12.0, 12.0]:
 		_box(c + Vector3(side, 2.2, -2.0), Vector3(0.1, 4.4, 0.1), DARK)
 	_sign("BAILE", c + Vector3(0, 5.0, 2.7), 300, Color(1.0, 0.3, 0.85), PI)
+	var beat := Sfx.emitter("funk", 5.0, 10.0, 120.0)
+	beat.position = c + Vector3(0, 2.5, 2.0)
+	add_child(beat)
 
 
 ## A caged concrete five-a-side pitch up the hill.

@@ -20,6 +20,7 @@ var yaw: Array[float] = []
 var rider: Array[int] = []   # peer id, or 0 when parked
 
 var _nodes: Array[Node3D] = []
+var _engines: Array[AudioStreamPlayer3D] = []
 
 
 func _ready() -> void:
@@ -48,6 +49,9 @@ func _ready() -> void:
 		mi.material_override = mat
 		mi.set_instance_shader_parameter("paint", PAINTS[i % PAINTS.size()])
 		n.add_child(mi)
+		var engine := Sfx.emitter("engine", 0.0, 6.0, 80.0, false)
+		n.add_child(engine)
+		_engines.append(engine)
 		add_child(n)
 		_nodes.append(n)
 		pos.append(Vector3.ZERO)
@@ -69,11 +73,18 @@ func _process(delta: float) -> void:
 	for i in _nodes.size():
 		var n := _nodes[i]
 		var pl = g.players.get(rider[i]) if g != null and rider[i] != 0 else null
+		var engine := _engines[i]
 		if pl == null:
 			# Parked: propped over on its stand.
 			n.position = pos[i]
 			n.rotation = Vector3(0, yaw[i], 0.22)
+			if engine.playing:
+				engine.stop()
 			continue
+		var speed: float = pl.global_position.distance_to(pos[i]) / maxf(delta, 0.001)
+		if not engine.playing and engine.stream != null:
+			engine.play()
+		engine.pitch_scale = lerpf(engine.pitch_scale, 0.7 + minf(speed, 30.0) / 13.0, minf(1.0, 6.0 * delta))
 		pos[i] = pl.global_position
 		yaw[i] = pl.rotation.y
 		n.position = pos[i]
