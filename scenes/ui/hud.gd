@@ -9,6 +9,10 @@ const PING_TIME := 2.5
 const PING_RADIUS := 230.0
 
 const SettingsMenu := preload("res://scenes/ui/settings_menu.gd")
+const DrugKit := preload("res://scenes/items/drug_kit.gd")
+
+const PHASE_TEXT := {"high": "HIGH", "down": "COMEDOWN", "od": "OVERDOSE"}
+const SLOT_PX := 56
 
 var shop_open := false
 ## The pause menu (Esc) is up: settings, leave, quit. The match carries on behind it.
@@ -20,7 +24,15 @@ var _blur: ColorRect
 var _hp: ProgressBar
 var _money: Label
 var _weapon: Label
-var _drugs: Label
+var _trip: ColorRect
+var _icons := {}        # item id -> the texture of its photograph
+var _bar_name: Label
+var _hotbar: HBoxContainer
+var _slots := {}        # drug id -> {panel, count, tol}
+var _slot_ids: Array = []
+var _slot_styles: Array = []
+var _beat_t := 0.0
+var _siren_t := 0.0
 var _effects: Label
 var _clock: Label
 var _crowd: Label
@@ -66,6 +78,18 @@ func _ready() -> void:
 	_blur.material = blur_mat
 	_blur.visible = false
 	_root.add_child(_blur)
+	_trip = ColorRect.new()
+	_trip.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var trip_mat := ShaderMaterial.new()
+	trip_mat.shader = load("res://shaders/trip.gdshader")
+	_trip.material = trip_mat
+	_trip.visible = false
+	_root.add_child(_trip)
+	# Each drug is photographed once, off to one side, and the picture kept.
+	for item in DB.DRUGS:
+		var studio := DrugKit.icon_viewport(item)
+		add_child(studio)
+		_icons[item] = studio.get_texture()
 	_tint = ColorRect.new()
 	_tint.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_tint.color = Color(0, 0, 0, 0)
@@ -78,7 +102,6 @@ func _ready() -> void:
 	tl.add_child(_hp)
 	_money = _label(tl, 26, Color(0.4, 1.0, 0.45))
 	_weapon = _label(tl, 18)
-	_drugs = _label(tl, 16)
 	_effects = _label(tl, 16, Color(1.0, 0.75, 0.3))
 	_loot = _label(tl, 16, Color(0.85, 0.7, 1.0))
 
@@ -94,10 +117,16 @@ func _ready() -> void:
 	_heat.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	var help := _label(tr, 13, Color(1, 1, 1, 0.65))
 	help.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	help.text = "WASD move  Shift sprint\nHold Space to hop: strafe + turn in the air for speed\nSpace in the air: double jump   at a wall: wall jump\nCtrl / C slide (jump out of it for a boost), or crouch and creep   Q dive\nScroll: first / third person\nLMB attack  RMB aim  R reload   the head is a one-tap; a fist there knocks them out\nHold E + SHOUT to rob (V = fake shout)\nHold E silently on a sunbather to pickpocket\nF use / pick up / shop / hide / take a moto   1 fists / knife   2 guns   3-5 drugs\nRun into a football to dribble, hit it to shoot\nTab scores   Esc menu / settings   F11 fullscreen"
+	help.text = "WASD move  Shift sprint\nHold Space to hop: strafe + turn in the air for speed\nSpace in the air: double jump   at a wall: wall jump\nCtrl / C slide (jump out of it for a boost), or crouch and creep   Q dive\nScroll: first / third person\nLMB attack  RMB aim  R reload   the head is a one-tap; a fist there knocks them out\nHold E + SHOUT to rob (V = fake shout)\nHold E silently on a sunbather to pickpocket\nF use / pick up / shop / hide / take a moto   1 fists / knife   2 guns\nZ / X pick a drug   G take it\nRun into a football to dribble, hit it to shoot\nTab scores   Esc menu / settings   F11 fullscreen"
 
 	# Bottom centre: robbery.
 	var bc := _vbox(Control.PRESET_CENTER_BOTTOM, Vector2(0, -24))
+	# The drugs in your pockets: Z / X move along the row, G takes the one lit up.
+	_bar_name = _label(bc, 16, Color(1.0, 0.9, 0.5))
+	_hotbar = HBoxContainer.new()
+	_hotbar.alignment = BoxContainer.ALIGNMENT_CENTER
+	_hotbar.add_theme_constant_override("separation", 6)
+	bc.add_child(_hotbar)
 	_speed = _label(bc, 22)
 	_target = _label(bc, 18)
 	_prompt = _label(bc, 20, Color(0.75, 1.0, 0.8))
@@ -112,6 +141,9 @@ func _ready() -> void:
 	_mic_bar.max_value = 1.0
 	bc.add_child(_mic_bar)
 	_label(bc, 12, Color(1, 1, 1, 0.6)).text = "MIC"
+	# The hotbar can be wider than the meters; they keep their own width under it.
+	for b in [_hold_bar, _rob_bar, _mic_bar]:
+		b.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 
 	var cross := _label(_vbox(Control.PRESET_CENTER, Vector2.ZERO), 22)
 	cross.text = "+"
@@ -254,6 +286,9 @@ func open_shop(vi: int) -> void:
 		var def = DB.ITEMS[item]
 		var b := Button.new()
 		b.text = "%s   R$%d" % [def.name, Net.game.price_at(v, item)]
+		if _icons.has(item):
+			b.icon = _icons[item]
+			b.add_theme_constant_override("icon_max_width", 32)
 		if def.type == "food":
 			b.text += "   (+%d hp)" % int(def.heal)
 		b.pressed.connect(func(): Net.game.to_server("srv_buy", [vi, item]))
@@ -479,19 +514,11 @@ func _process(delta: float) -> void:
 	_mark_t -= delta
 	_mark.visible = _mark_t > 0.0
 
-	var lines: Array = []
+	_update_hotbar(p)
 	var fx: Array = []
-	for d in DB.DRUGS:
-		var n: int = st.inv.get(d, 0)
-		var tol: float = st.tol.get(d, 0.0)
-		if n > 0 or tol > 0.01:
-			lines.append("[%s] %s x%d   tolerance %d%%" % [DB.ITEMS[d].key.right(1).to_int() + 2, DB.ITEMS[d].name, n, int(tol * 100.0)])
-		var phase: String = p.drug_phase(d)
-		if phase != "":
-			fx.append("%s: %s %ds" % [DB.ITEMS[d].name, {"high": "HIGH", "down": "COMEDOWN", "od": "OVERDOSE"}[phase], ceili(st.drugs[d].t)])
-	if p.is_drunk():
-		fx.append("Caipirinha: TIPSY %ds" % ceili(st.drugs["caipirinha"].t))
-	_drugs.text = "\n".join(lines)
+	for d in st.drugs:
+		var word: String = "TIPSY" if DB.DRINKS.has(d) else ("PUMPED" if d == "ferro" else PHASE_TEXT[st.drugs[d].phase])
+		fx.append("%s: %s %ds" % [DB.ITEMS[d].name, word, ceili(st.drugs[d].t)])
 	_effects.text = "\n".join(fx)
 	var loot: Array = []
 	for item in DB.LOOT:
@@ -520,7 +547,7 @@ func _process(delta: float) -> void:
 	_speed.text = "%.1f m/s" % spd
 	_speed.add_theme_color_override("font_color", Color.WHITE.lerp(Color(1.0, 0.55, 0.15), clampf((spd - p.SPRINT) / 8.0, 0.0, 1.0)))
 
-	_mic_bar.value = Mic.loudness * p.mic_mult()
+	_mic_bar.value = p.mic_level()
 	_rob_show -= delta
 	_rob_bar.visible = _rob_show > 0.0
 	_rob_bar.value = _rob_meter
@@ -566,31 +593,119 @@ func _ranked() -> Array:
 	return rows
 
 
+## One slot per drug carried: its picture, how many, and how close the next one is to too many.
+func _update_hotbar(p) -> void:
+	var st: Dictionary = p.st
+	var held: Array = p.drugs_held()
+	if held != _slot_ids:
+		_slot_ids = held
+		for c in _hotbar.get_children():
+			c.queue_free()
+		_slots.clear()
+		for d in held:
+			var panel := PanelContainer.new()
+			panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			var box := VBoxContainer.new()
+			box.add_theme_constant_override("separation", 1)
+			panel.add_child(box)
+			var pic := TextureRect.new()
+			pic.texture = _icons.get(d)
+			pic.custom_minimum_size = Vector2(SLOT_PX, SLOT_PX)
+			pic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			pic.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			box.add_child(pic)
+			var count := Label.new()
+			count.add_theme_font_size_override("font_size", 13)
+			count.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			box.add_child(count)
+			var tol := _bar(Color(1.0, 0.35, 0.2))
+			tol.custom_minimum_size = Vector2(SLOT_PX, 4)
+			tol.max_value = 1.0
+			box.add_child(tol)
+			_hotbar.add_child(panel)
+			_ignore_mouse(panel)
+			_slots[d] = {"panel": panel, "count": count, "tol": tol}
+	for d in _slots:
+		var e: Dictionary = _slots[d]
+		var on: bool = d == p.drug_sel
+		e.count.text = "x%d" % st.inv.get(d, 0)
+		e.tol.value = st.tol.get(d, 0.0)
+		e.panel.add_theme_stylebox_override("panel", _slot_style(on))
+	if held.has(p.drug_sel):
+		var tol_now: float = st.tol.get(p.drug_sel, 0.0)
+		_bar_name.text = "%s   [G]%s" % [DB.ITEMS[p.drug_sel].name, "   one more is too many" if tol_now + DB.TOLERANCE_PER_DOSE > 1.0 else ""]
+	else:
+		_bar_name.text = ""
+	_hotbar.visible = not held.is_empty()
+
+
+func _slot_style(on: bool) -> StyleBoxFlat:
+	if _slot_styles.is_empty():
+		for lit in [false, true]:
+			var frame := StyleBoxFlat.new()
+			frame.bg_color = Color(0, 0, 0, 0.55 if lit else 0.35)
+			frame.set_border_width_all(3 if lit else 1)
+			frame.border_color = Color(1.0, 0.85, 0.3) if lit else Color(1, 1, 1, 0.25)
+			frame.set_corner_radius_all(6)
+			frame.set_content_margin_all(4)
+			_slot_styles.append(frame)
+	return _slot_styles[1 if on else 0]
+
+
+## What is in the blood does to the picture: tints laid over each other, the worst blur, and
+## for the ones that really bend it, colours that turn and a view that sways.
 func _drug_screen(p, delta: float) -> void:
 	var tint := Color(0, 0, 0, 0)
 	var blur := 0.0
+	var hue := 0.0
+	var sat := 1.0
+	var wobble := 0.0
+	var dying := false
 	var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.012)
-	match p.drug_phase("cocaine"):
-		"high": tint = Color(1, 1, 1, 0.06)
-		"down": tint = Color(0.2, 0.2, 0.3, 0.3)
-		"od": tint = Color(0.9, 0.0, 0.0, 0.15 + 0.3 * pulse)
-	match p.drug_phase("weed"):
-		"high":
-			tint = Color(0.2, 0.7, 0.2, 0.1)
-			blur = 0.8
-		"od":
-			tint = Color(0.1, 0.5, 0.1, 0.3)
-			blur = 3.0
+	for d in p.st.drugs:
+		var def: Dictionary = DB.ITEMS[d]
+		var phase: String = p.st.drugs[d].phase
+		var look: Array = def.get("screen", {}).get(phase, [])
+		if not look.is_empty():
+			var c: Color = look[0]
+			if phase == "od":
+				c.a *= 0.5 + 0.5 * pulse
+			# One tint over another, as two sheets of coloured glass would be.
+			var a := c.a + tint.a * (1.0 - c.a)
+			if a > 0.0:
+				tint = Color((c.r * c.a + tint.r * tint.a * (1.0 - c.a)) / a, (c.g * c.a + tint.g * tint.a * (1.0 - c.a)) / a, (c.b * c.a + tint.b * tint.a * (1.0 - c.a)) / a, a)
+			blur = maxf(blur, look[1])
+		var bend: Array = def.get("trip", {}).get(phase, [])
+		if not bend.is_empty():
+			hue += bend[0]
+			sat = maxf(sat, bend[1]) if bend[1] >= 1.0 else minf(sat, bend[1])
+			wobble = maxf(wobble, bend[2])
+		dying = dying or (phase == "od" and def.get("od_dmg", 0.0) > 0.0)
 	if p.drug_phase("meth") == "od":
-		tint = Color(0.5, 0.3, 0.9, 0.2)
-		# Paranoia: noises that are not there.
+		# Paranoia: noises that are not there, and police who are not coming.
 		_fake_ping_t -= delta
 		if _fake_ping_t <= 0.0:
 			_fake_ping_t = randf_range(0.6, 2.0)
 			add_ping(p.global_position + Vector3(randf_range(-30, 30), 0, randf_range(-30, 30)))
+		_siren_t -= delta
+		if _siren_t <= 0.0:
+			_siren_t = randf_range(3.0, 6.0)
+			var a := randf() * TAU
+			Sfx.play("whistle", p.global_position + Vector3(cos(a) * 25.0, 1.0, sin(a) * 25.0), 2.0)
+			toast(["POLÍCIA! PARADO!", "They know.", "Was that a siren?", "Behind you."][randi() % 4])
+	if dying:
+		# Your own heart, louder than it should be.
+		_beat_t -= delta
+		if _beat_t <= 0.0:
+			_beat_t = 0.55
+			Sfx.play("heartbeat", p.global_position + Vector3(0, 1.2, 0), 6.0)
 	_tint.color = tint
 	_blur.visible = blur > 0.0
 	_blur.material.set_shader_parameter("amount", blur)
+	_trip.visible = hue != 0.0 or sat != 1.0 or wobble > 0.0
+	_trip.material.set_shader_parameter("hue", hue * Time.get_ticks_msec() * 0.001)
+	_trip.material.set_shader_parameter("sat", sat)
+	_trip.material.set_shader_parameter("wobble", wobble)
 
 
 func _update_pings(p, delta: float) -> void:

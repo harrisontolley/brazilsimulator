@@ -141,6 +141,8 @@ static var _mat: ShaderMaterial
 static var _line: ShaderMaterial
 static var _mats: Array[ShaderMaterial] = []  # everything that needs the clock
 static var _cheer_until := 0.0
+## What the local player is seeing that is not there (shader `trip`): 1 big heads, 2 all cops.
+static var trip := 0.0
 
 static var _v := PackedVector3Array()
 static var _n := PackedVector3Array()
@@ -162,6 +164,7 @@ static func tick() -> void:
 		for m in _mats:
 			m.set_shader_parameter("now", t)
 			m.set_shader_parameter("cheer", k)
+			m.set_shader_parameter("trip", trip)
 
 
 ## Makes everyone standing about celebrate for `seconds`.

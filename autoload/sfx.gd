@@ -148,6 +148,10 @@ func _build() -> void:
 	made["ko"] = _wav(_ko(), false)
 	made["dry"] = _wav(_dry(), false)
 	made["reload"] = _wav(_reload(), false)
+	made["giggle"] = _wav(_giggle(), false)
+	made["sniff"] = _wav(_sniff(), false)
+	made["retch"] = _wav(_retch(), false)
+	made["heartbeat"] = _wav(_heartbeat(), false)
 	for k in BABBLE:
 		made["babble%d" % k] = _wav(_syllable(k), false)
 	_adopt.call_deferred(made)
@@ -397,6 +401,47 @@ func _reload() -> PackedFloat32Array:
 		_hiss(f, rng, at, 0.012, 0.8, 0.6)
 		_tone(f, at, 900.0, 500.0, 0.015, 0.5)
 	_tone(f, 0.8, 300.0, 200.0, 0.03, 0.6)
+	return f
+
+
+## Lança-perfume: a run of helium ha-ha-has, climbing.
+func _giggle() -> PackedFloat32Array:
+	var f := _buf(1.3)
+	for k in 9:
+		var hz := 620.0 + k * 45.0 + (k % 2) * 80.0
+		_tone(f, k * 0.12, hz, hz * 0.8, 0.025, 0.7)
+		_tone(f, k * 0.12, hz * 2.0, hz * 1.6, 0.02, 0.25)
+	return f
+
+
+## A long pull up one nostril.
+func _sniff() -> PackedFloat32Array:
+	var f := _buf(0.6)
+	var rng := RandomNumberGenerator.new()
+	var y := 0.0
+	for i in f.size():
+		var t := float(i) / RATE
+		y += (0.15 + 0.6 * t) * (rng.randf_range(-1.0, 1.0) - y)
+		f[i] = y * minf(1.0, t / 0.05) * exp(-maxf(0.0, t - 0.35) * 14.0)
+	return f
+
+
+## Stomach on its way up.
+func _retch() -> PackedFloat32Array:
+	var f := _buf(1.0)
+	var rng := RandomNumberGenerator.new()
+	_tone(f, 0.0, 180.0, 90.0, 0.09, 0.9)
+	_tone(f, 0.02, 360.0, 150.0, 0.07, 0.4)
+	_hiss(f, rng, 0.25, 0.1, 0.9, 0.12)
+	_hiss(f, rng, 0.3, 0.05, 0.5, 0.5)
+	return f
+
+
+## Two thumps, the way a chest sounds from the inside.
+func _heartbeat() -> PackedFloat32Array:
+	var f := _buf(0.6)
+	_tone(f, 0.0, 70.0, 45.0, 0.04, 1.0)
+	_tone(f, 0.18, 60.0, 40.0, 0.05, 0.8)
 	return f
 
 

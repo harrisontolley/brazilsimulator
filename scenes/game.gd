@@ -24,6 +24,7 @@ const Casino := preload("res://scenes/world/casino.gd")
 const Prison := preload("res://scenes/world/prison.gd")
 const Places := preload("res://scenes/world/places.gd")
 const WeaponKit := preload("res://scenes/weapons/weapon_kit.gd")
+const DrugKit := preload("res://scenes/items/drug_kit.gd")
 
 const END_SCREEN_TIME := 15.0
 const PICKUP_RANGE := 2.6
@@ -66,6 +67,10 @@ var _reload := {}       # pid -> [weapon, seconds left]
 var _ko_immune := {}    # pid -> match time until which they cannot be knocked out again
 var _robbed := {}       # pid -> match time until which their pockets are already turned out
 var _bicho_round := 0
+var _larica := {}       # pid -> match time they may next be sold a snack they did not ask for
+var _mirages: Array = []  # things on the sand only someone on doce can see
+var _mirage_t := 0.0
+var _party_t := 0.0
 
 
 func _ready() -> void:
@@ -645,6 +650,138 @@ func _debug_test(what: String) -> void:
 			await get_tree().create_timer(0.3).timeout
 			var out: bool = pl.st.jail <= 0.0 and pl.st.fug and pl.st.heat == 2 and Places.room_at(pl.global_position) < 0
 			debug_result("prison", long and cut and added and alive and out and inmates > 20, "sentence ok %s work %s guard %s survives %s escaped %s inmates %d" % [long, cut, added, alive, out, inmates])
+		"drugs":
+			# Every drug gets you high, three in a row is one too many, and each overdose ends
+			# the way it should: a bed and a bill, lighter pockets, somewhere else, or the morgue.
+			var pl := local_player
+			var bad: Array = []
+			for d in DB.DRUGS:
+				pl.st = Player.fresh_state()
+				_give(pl.st, d, 3)
+				srv_use(d)
+				if pl.drug_phase(d) != "high":
+					bad.append(d + " no high")
+				srv_use(d)
+				srv_use(d)
+				if pl.drug_phase(d) != "od" or pl.st.inv.has(d):
+					bad.append(d + " no od")
+				if (pl.st.ko > 0.0) != DB.ITEMS[d].has("od_floor"):
+					bad.append(d + " floor")
+			# A moment in each state, so everything that reads it (legs, camera, screen) runs.
+			for d in DB.DRUGS:
+				for phase in ["high", "down", "od"]:
+					pl.st = Player.fresh_state()
+					pl.st.drugs[d] = {"phase": phase, "t": 5.0}
+					await get_tree().create_timer(0.12).timeout
+			pl.st = Player.fresh_state()
+			await get_tree().create_timer(0.3).timeout
+			var dose := func(d: String, n: int, money: int) -> void:
+				pl.st = Player.fresh_state()
+				pl.st.money = money
+				_give(pl.st, d, n)
+				for k in n:
+					srv_use(d)
+			dose.call("cocaine", 1, 0)
+			var coke: bool = is_equal_approx(pl.speed_mult(), 1.6) and is_equal_approx(pl.melee_mult(), 2.0)
+			dose.call("lanca", 1, 0)
+			var floaty: bool = is_equal_approx(pl.jump_mult(), 1.8) and pl.gravity_mult() < 0.5
+			dose.call("ketamine", 1, 0)
+			var numb: bool = is_equal_approx(pl.damage_taken_mult(), 0.3)
+			dose.call("rivotril", 1, 0)
+			var calm: bool = pl.cool_mult() > 2.0 and pl.seen_mult() < 1.0
+			pl.st = Player.fresh_state()
+			pl.st.drugs["cerveja"] = {"phase": "high", "t": 5.0}
+			var beer: bool = pl.is_drunk()
+			# Cocaine: the heart stops, and the chemist starts it again for a price.
+			dose.call("cocaine", 3, 1000)
+			pl.st.hp = 2.0
+			_srv_od_tick(pl)
+			await get_tree().create_timer(0.2).timeout
+			var room := Places.room_at(pl.global_position)
+			var bed: bool = not pl.st.dead and pl.st.hp == 50.0 and pl.st.money == 1000 - DB.HOSPITAL_BILL and room >= 0 and Places.rooms[room].kind == "farmacia" and pl.st.drugs.is_empty()
+			# Lança: out like a light, and somebody helps themselves.
+			pl.global_position = Vector3(-20, 0.2, 20)
+			dose.call("lanca", 3, 1000)
+			var out: bool = pl.st.ko > 0.0
+			pl.st.drugs["lanca"].t = 0.01
+			await get_tree().create_timer(0.3).timeout
+			var took := false
+			for id in drops:
+				took = took or drops[id].money == 300
+			var robbed: bool = out and pl.st.money == 700 and took
+			# Weed: at a kiosk the munchies do the shopping.
+			dose.call("weed", 3, 100)
+			pl.global_position = DB.VENDORS[2].pos + Vector3(0, 0.2, -1)
+			srv_larica()
+			var larica: bool = pl.st.money < 100
+			# Doce: it ends somewhere else, flat out.
+			dose.call("doce", 3, 0)
+			var from: Vector3 = pl.global_position
+			pl.st.drugs["doce"].t = 0.01
+			await get_tree().create_timer(0.3).timeout
+			var moved: bool = pl.st.ko > 0.0 and pl.global_position.distance_to(from) > 10.0 and pl.st.drugs.is_empty()
+			# Guarana is groceries, as far as a checkpoint cares; bomba is not, and it kills.
+			var legal: bool = DB.ITEMS.guarana.get("legal", false) and not DB.ITEMS.bomba.get("legal", false)
+			pl.st = Player.fresh_state()
+			dose.call("bomba", 3, 0)
+			pl.st.hp = 3.0
+			_srv_od_tick(pl)
+			var dead: bool = pl.st.dead
+			debug_result("drugs", bad.is_empty() and coke and floaty and numb and calm and beer and bed and robbed and larica and moved and legal and dead, "each %s coke %s lanca %s ket %s rivotril %s beer %s hospital %s robbed %s larica %s moved %s legal %s dies %s" % [bad, coke, floaty, numb, calm, beer, bed, robbed, larica, moved, legal, dead])
+		"drugshot":
+			# Every drug lying on the sand, then all of them in the pockets for the hotbar.
+			var at := Vector3(-20, 0.0, 28)
+			var ids: Array = DB.DRUGS + ["ammo"]
+			for id in drops.keys():
+				cl_drop_remove(id)
+			for k in ids.size():
+				srv_add_drop(at + Vector3((k % 6 - 2.5) * 1.5, 0, (k / 6) * 1.8), 0, {ids[k]: 1})
+			srv_add_drop(at + Vector3(6.5, 0, 0.9), 250, {"bala": 2, "pistol": 1})
+			local_player.global_position = at + Vector3(0, 0.2, 14)
+			local_player.rotation.y = 0.0
+			crowd.visible = false
+			var cam := Camera3D.new()
+			cam.fov = 38.0
+			add_child(cam)
+			cam.look_at_from_position(at + Vector3(0.8, 3.2, 8.5), at + Vector3(0.8, 0.3, 0.9))
+			cam.current = true
+			hud.visible = false
+			await get_tree().create_timer(0.6).timeout
+			await _debug_frames("drops", 2, 0.5)
+			cam.fov = 20.0
+			cam.look_at_from_position(at + Vector3(-1.5, 2.2, 6.5), at + Vector3(-1.5, 0.4, 0.9))
+			await _debug_frames("drops_left", 1, 0.05)
+			cam.look_at_from_position(at + Vector3(2.2, 2.2, 6.5), at + Vector3(2.2, 0.4, 0.9))
+			await _debug_frames("drops_right", 1, 0.05)
+			cam.current = false
+			local_player.rig.cam.current = true
+			hud.visible = true
+			for d in DB.DRUGS:
+				_give(local_player.st, d, 2)
+			local_player.st.tol["bala"] = 0.7
+			local_player.drug_sel = "bala"
+			await get_tree().create_timer(0.5).timeout
+			await _debug_frames("hotbar", 1, 0.05)
+			local_player.st.money = 5000
+			hud.open_shop(0)
+			await get_tree().create_timer(0.3).timeout
+			await _debug_frames("shop", 1, 0.05)
+			hud.close_shop()
+			# What the heavier ones do to the view, among people, and the bed it can end in.
+			crowd.visible = true
+			local_player.global_position = Vector3(38, 0.2, 43)
+			local_player.rotation.y = -PI / 2.0
+			local_player.rig.zoom(2)
+			for look in [["doce", "high"], ["doce", "od"], ["bala", "high"], ["bomba", "high"], ["ayahuasca", "od"], ["ketamine", "od"]]:
+				local_player.st.drugs = {look[0]: {"phase": look[1], "t": 30.0}}
+				await get_tree().create_timer(2.0).timeout
+				await _debug_frames("%s_%s" % [look[0], look[1]], 1, 0.05)
+			local_player.st.drugs = {}
+			local_player.global_position = DB.HOSPITAL_POS
+			local_player.rotation.y = PI
+			await get_tree().create_timer(1.5).timeout
+			await _debug_frames("clinic", 1, 0.05)
+			debug_result("drugshot", true)
 		"settings":
 			# Change things, save, forget them, load: they come back. And the menu builds.
 			Settings._scripted = false
@@ -885,7 +1022,7 @@ func _srv_start_match() -> void:
 		pdata.append([id, p.pname, DB.spawn_point(), Player.fresh_state()])
 	bcast("cl_match_start", [MatchState.seed_value, MatchState.duration, pdata])
 	# Loose drugs and ammo scattered on the sand.
-	var loot := ["cocaine", "weed", "meth", "ammo"]
+	var loot: Array = DB.DRUGS + ["ammo", "ammo", "ammo"]
 	for i in PICKUP_COUNT:
 		var item: String = loot[randi() % loot.size()]
 		srv_add_drop(DB.spawn_point(), 0, {item: 6 if item == "ammo" else 1})
@@ -909,6 +1046,7 @@ func _process(delta: float) -> void:
 		var turn: Node3D = drops[id].turn
 		turn.rotation.y = spin * 1.6 + id
 		turn.position.y = 0.3 + sin(spin * 2.5 + id) * 0.08
+	_trip(delta)
 	if multiplayer.is_server():
 		_srv_process(delta)
 
@@ -965,6 +1103,7 @@ func _srv_process(delta: float) -> void:
 func _srv_tick_player(p: CharacterBody3D, delta: float, od_tick: bool) -> void:
 	var st: Dictionary = p.st
 	var dirty := false
+	var ended: Array = []  # overdoses that have just run their course
 	for d in st.drugs.keys():
 		var e = st.drugs[d]
 		e.t -= delta
@@ -974,6 +1113,8 @@ func _srv_tick_player(p: CharacterBody3D, delta: float, od_tick: bool) -> void:
 				st.drugs[d] = {"phase": "down", "t": comedown}
 			else:
 				st.drugs.erase(d)
+				if e.phase == "od":
+					ended.append(d)
 			dirty = true
 	for d in st.tol:
 		st.tol[d] = maxf(0.0, st.tol[d] - DB.TOLERANCE_DECAY * delta)
@@ -1008,9 +1149,170 @@ func _srv_tick_player(p: CharacterBody3D, delta: float, od_tick: bool) -> void:
 			srv_teleport(p.id, DB.spawn_point())
 	if dirty:
 		push_state(p)
-	# Cocaine overdose: heart gives out.
-	if od_tick and p.drug_phase("cocaine") == "od":
-		srv_damage(p.id, 3.0, -1)
+	for d in ended:
+		# Whoever rides one out on their own feet has no need of a bed.
+		if DB.ITEMS[d].get("od_end", "") != "hospital":
+			_srv_od_end(p, d)
+	if od_tick and not st.dead:
+		_srv_od_tick(p)
+
+
+## Half a second of every overdose this player is in the middle of.
+func _srv_od_tick(p: CharacterBody3D) -> void:
+	for d in p.st.drugs.keys():
+		if not p.st.drugs.has(d) or p.st.drugs[d].phase != "od":
+			continue
+		var def: Dictionary = DB.ITEMS[d]
+		var dmg: float = def.get("od_dmg", 0.0)
+		# Bala cooks you from the inside, and the sea is the only thing cold enough.
+		if d == "bala" and p.in_sea():
+			dmg = 0.0
+		if d == "ayahuasca" and randf() < 0.4:
+			bcast("cl_vomit", [p.id])
+		if d == "cocaine" and randf() < 0.5:
+			bcast("cl_nosebleed", [p.id])
+		if dmg <= 0.0:
+			continue
+		if p.st.hp - dmg <= 0.0 and def.get("od_end", "") == "hospital":
+			_srv_od_end(p, d)
+			return
+		srv_damage(p.id, dmg / p.damage_taken_mult(), -1)
+		if p.st.dead:
+			return
+
+
+## How overdose `d` finishes for whoever is still alive at the end of it (`od_end` in DB.ITEMS):
+## in a clinic bed with a bill, on the floor with lighter pockets, somewhere they have no memory
+## of going, or just flat on their back for a bit.
+func _srv_od_end(p: CharacterBody3D, d: String) -> void:
+	var st: Dictionary = p.st
+	if st.dead:
+		return
+	var def: Dictionary = DB.ITEMS[d]
+	var kind: String = def.get("od_end", "")
+	# Inside, the only place an overdose ends is the floor of wherever you already are.
+	if st.jail > 0.0 and (kind == "hospital" or kind == "random"):
+		kind = "ko"
+	match kind:
+		"hospital":
+			var bill: int = mini(st.money, DB.HOSPITAL_BILL)
+			st.money -= bill
+			st.hp = 50.0
+			st.drugs.clear()
+			st.hide = -1
+			police.release_chase(p.id)
+			srv_floor(p.id, 2.0)
+			srv_teleport(p.id, DB.HOSPITAL_POS)
+			send(p.id, "cl_toast", ["You wake up on a drip in the back of the FARMÁCIA.  The bill: R$%d" % bill])
+			bcast("cl_toast", ["%s overdosed and got carted off to the chemist" % p.pname])
+		"robbed":
+			var cash: int = int(st.money * DB.OD_ROBBED)
+			st.money -= cash
+			push_state(p)
+			if cash > 0:
+				srv_add_drop(p.global_position + Vector3(randf_range(-1.5, 1.5), 0, randf_range(-1.5, 1.5)), cash, {})
+			send(p.id, "cl_toast", ["You come round. Your pockets are R$%d lighter." % cash])
+		"random":
+			st.drugs.clear()
+			var where := randi() % 3
+			if where == 0:
+				st.jail = 30.0
+				police.release_chase(p.id)
+				push_state(p)
+				srv_teleport(p.id, DB.PRISON_POS + Vector3(randf_range(-4, 4), 0, randf_range(-4, 4)))
+				send(p.id, "cl_toast", ["You wake up in the drunk tank. Nobody will say how you got here."])
+			else:
+				push_state(p)
+				var spot: Vector3 = DB.WAKE_SPOTS[where - 1]
+				# Whatever is highest there: a roof, if there is one.
+				var roof := get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(Vector3(spot.x, 90.0, spot.z), Vector3(spot.x, 0.0, spot.z), 1))
+				if not roof.is_empty():
+					spot.y = roof.position.y + 0.3
+				srv_teleport(p.id, spot)
+				send(p.id, "cl_toast", ["You wake up... here. Where are your shoes?"])
+			srv_floor(p.id, 2.5)
+		"ko":
+			srv_floor(p.id, def.get("od_ko", 3.0))
+
+
+## Larica: someone too stoned to argue is at a kiosk, and the kiosk is happy to keep serving.
+@rpc("any_peer", "call_remote", "reliable")
+func srv_larica() -> void:
+	var p = players.get(Net.sender())
+	if p == null or not p.can_fight() or p.drug_phase("weed") != "od" or MatchState.time < _larica.get(p.id, 0.0):
+		return
+	_larica[p.id] = MatchState.time + 1.2
+	for v in DB.VENDORS:
+		if v.stock == DB.FOOD and p.global_position.distance_to(v.pos) < VENDOR_RANGE + 1.5:
+			var item: String = ["coco", "espetinho", "acai"][randi() % 3]
+			var price := price_at(v, item)
+			if p.st.money < price:
+				send(p.id, "cl_toast", ["Out of money. Still hungry."])
+				return
+			p.st.money -= price
+			p.st.hp = minf(100.0, p.st.hp + DB.ITEMS[item].heal)
+			push_state(p)
+			send(p.id, "cl_toast", ["Larica: one more %s  (R$%d)" % [DB.ITEMS[item].name, price]])
+			send(p.id, "cl_sound", ["cash", v.pos])
+			return
+
+
+## Someone's stomach turning itself out, for everyone nearby to enjoy.
+@rpc("authority", "call_remote", "unreliable")
+func cl_vomit(pid: int) -> void:
+	var p = players.get(pid)
+	if p != null:
+		var mouth: Vector3 = p.global_position + Vector3(0, 1.0, 0) - p.global_basis.z * 0.3
+		fx.spew(mouth, -p.global_basis.z, Color(0.45, 0.6, 0.15))
+		Sfx.play("retch", mouth, 2.0)
+
+
+@rpc("authority", "call_remote", "unreliable")
+func cl_nosebleed(pid: int) -> void:
+	var p = players.get(pid)
+	if p != null:
+		fx.spew(p.global_position + Vector3(0, 1.15, 0) - p.global_basis.z * 0.25, Vector3.DOWN, Color(0.8, 0.05, 0.05), 4)
+
+
+## What the local player's own head is doing to the world: who looks like what, who is
+## dancing, and what is lying on the sand that is not really there.
+func _trip(delta: float) -> void:
+	var p = local_player
+	if p == null:
+		return
+	var doce: String = p.drug_phase("doce")
+	Kit.trip = move_toward(Kit.trip, 2.0 if doce == "od" else (1.0 if doce == "high" else 0.0), 1.5 * delta)
+
+	# Bala: whoever is standing near someone on it catches the mood.
+	_party_t -= delta
+	if _party_t <= 0.0:
+		_party_t = 0.4
+		var spots: Array = []
+		for pid in players:
+			if players[pid].is_loved():
+				spots.append(players[pid].global_position)
+		crowd.set_party(spots)
+
+	# Doce: loot that was never there.
+	_mirage_t -= delta
+	if doce != "" and _mirage_t <= 0.0 and _mirages.size() < 6:
+		_mirage_t = randf_range(1.5, 4.0)
+		var a := randf() * TAU
+		var node := Node3D.new()
+		node.position = Vector3(p.global_position.x + cos(a) * randf_range(6.0, 16.0), p.global_position.y, p.global_position.z + sin(a) * randf_range(6.0, 16.0))
+		var model := DrugKit.node(DB.DRUGS[randi() % DB.DRUGS.size()])
+		model.scale = Vector3.ONE * randf_range(1.5, 4.0)
+		model.position.y = 0.5
+		node.add_child(model)
+		_drops_root.add_child(node)
+		_mirages.append(node)
+	for node in _mirages.duplicate():
+		node.rotation.y += delta * 2.0
+		if doce == "" or node.position.distance_to(p.global_position) < 2.2:
+			if doce != "":
+				hud.toast("It was never there.")
+			_mirages.erase(node)
+			node.queue_free()
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
@@ -1073,6 +1375,12 @@ func cl_teleport(pos: Vector3) -> void:
 	if local_player != null:
 		local_player.global_position = pos
 		local_player.velocity = Vector3.ZERO
+
+
+@rpc("authority", "call_remote", "reliable")
+func cl_knock(v: Vector3) -> void:
+	if local_player != null and not local_player.st.dead:
+		local_player.knock(v)
 
 
 @rpc("authority", "call_remote", "reliable")
@@ -1189,6 +1497,10 @@ func srv_attack(origin: Vector3, dir: Vector3) -> void:
 	var p = players.get(pid)
 	if p == null or not p.can_fight() or dir.length_squared() < 0.5:
 		return
+	if p.is_raging() and p.st.equipped != "fists":
+		# Too far gone for anything with moving parts.
+		p.st.equipped = "fists"
+		push_state(p)
 	var w = DB.ITEMS[p.st.equipped]
 	var now := Time.get_ticks_msec()
 	if now - _last_attack.get(pid, 0) < w.cooldown * 1000.0 - 60.0:
@@ -1260,6 +1572,9 @@ func srv_attack(origin: Vector3, dir: Vector3) -> void:
 		DB.WHO_PLAYER:
 			if srv_damage(hit.id, dmg, pid, hit.zone, ko):
 				res |= DB.FX_KO
+			if w.melee and p.drug_phase("bomba") != "" and p.drug_phase("bomba") != "down":
+				# A fist with a needle behind it: whoever it lands on leaves the ground.
+				send(hit.id, "cl_knock", [dir * 9.0 + Vector3(0, 6.0, 0)])
 		DB.WHO_COP:
 			if police.srv_damage_cop(hit.id, dmg, pid, hit.zone, ko):
 				res |= DB.FX_KO
@@ -1452,24 +1767,40 @@ func cl_drop_add(id: int, pos: Vector3, money: int, items: Dictionary) -> void:
 	root.position = pos
 	var turn := Node3D.new()
 	root.add_child(turn)
-	var color := Color(0.25, 0.8, 0.35) if money > 0 else Color(0.85, 0.3, 0.8)
-	turn.add_child(_drop_part(Vector3(0.55, 0.22, 0.3) if money > 0 else Vector3(0.42, 0.36, 0.42), color))
-	if money > 0:
-		turn.add_child(_drop_part(Vector3(0.12, 0.24, 0.32), Color(1.0, 0.85, 0.3)))
-	# A weapon lies on top where it can be seen for what it is.
-	for item in items:
-		if DB.ITEMS.has(item) and DB.ITEMS[item].get("held", 0) > 0:
-			var gun := WeaponKit.node(DB.ITEMS[item].held)
-			gun.scale = Vector3.ONE * 1.8
-			gun.position = Vector3(0, 0.38, 0)
-			gun.rotation = Vector3(0, PI / 2.0, 1.2)
-			turn.add_child(gun)
-			break
+	# A lone drug or box of rounds lies there as itself, with nothing under it.
+	var only: String = items.keys()[0] if money == 0 and items.size() == 1 else ""
+	if DrugKit.has(only):
+		var model := DrugKit.node(only)
+		model.scale = Vector3.ONE * 1.6
+		model.position.y = 0.2
+		turn.add_child(model)
+	else:
+		var color := Color(0.25, 0.8, 0.35) if money > 0 else Color(0.85, 0.3, 0.8)
+		turn.add_child(_drop_part(Vector3(0.55, 0.22, 0.3) if money > 0 else Vector3(0.42, 0.36, 0.42), color))
+		if money > 0:
+			turn.add_child(_drop_part(Vector3(0.12, 0.24, 0.32), Color(1.0, 0.85, 0.3)))
+		# A weapon lies on top where it can be seen for what it is; failing that, a drug does.
+		var top := 0.38
+		for item in items:
+			if DB.ITEMS.has(item) and DB.ITEMS[item].get("held", 0) > 0:
+				var gun := WeaponKit.node(DB.ITEMS[item].held)
+				gun.scale = Vector3.ONE * 1.8
+				gun.position = Vector3(0, top, 0)
+				gun.rotation = Vector3(0, PI / 2.0, 1.2)
+				turn.add_child(gun)
+				top += 0.3
+				break
+		for item in items:
+			if DrugKit.has(item):
+				var model := DrugKit.node(item)
+				model.position = Vector3(0, top + 0.12, 0)
+				turn.add_child(model)
+				break
 	var parts: Array = []
 	if money > 0:
 		parts.append("R$%d" % money)
 	for item in items:
-		parts.append("%s x%d" % [item, items[item]])
+		parts.append("%s x%d" % [DB.ITEMS[item].name if DB.ITEMS.has(item) and item != "ammo" else item, items[item]])
 	var label := Label3D.new()
 	label.text = ", ".join(parts)
 	label.font_size = 40
@@ -1772,7 +2103,7 @@ func srv_sell(vi: int) -> void:
 @rpc("any_peer", "call_remote", "reliable")
 func srv_equip(item: String) -> void:
 	var p = players.get(Net.sender())
-	if p != null and p.can_act() and p.st.inv.has(item) and DB.ITEMS.has(item) and DB.ITEMS[item].type == "weapon":
+	if p != null and p.can_act() and not p.is_raging() and p.st.inv.has(item) and DB.ITEMS.has(item) and DB.ITEMS[item].type == "weapon":
 		p.st.equipped = item
 		push_state(p)
 
@@ -1788,8 +2119,14 @@ func srv_use(item: String) -> void:
 	# Each dose stacks tolerance; past 1.0 the hit becomes an overdose instead.
 	var tol: float = p.st.tol.get(item, 0.0) + DB.TOLERANCE_PER_DOSE
 	p.st.tol[item] = tol
+	var def: Dictionary = DB.ITEMS[item]
 	if tol > 1.0:
-		p.st.drugs[item] = {"phase": "od", "t": DB.ITEMS[item].od}
+		p.st.drugs[item] = {"phase": "od", "t": def.od}
+		send(p.id, "cl_toast", ["%s: OVERDOSE" % def.name])
+		if def.has("od_floor"):
+			srv_floor(p.id, def.od_floor)
 	else:
-		p.st.drugs[item] = {"phase": "high", "t": DB.ITEMS[item].duration}
+		p.st.drugs[item] = {"phase": "high", "t": def.duration}
 	push_state(p)
+	if def.has("sound"):
+		bcast("cl_sound", [def.sound, p.global_position + Vector3(0, 1.2, 0)])

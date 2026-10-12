@@ -16,11 +16,14 @@ var roll_target := 0.0
 var height_target := 1.3
 ## One-off sink on landing that springs back by itself.
 var dip := 0.0
+## Where the view sits away from the head, in the body's own axes: out of it, mostly.
+var offset := Vector3.ZERO
 
 var _arm: SpringArm3D
 var _step := 0
 var _t := 0.0
 var _roll := 0.0
+var _height := 1.3
 var _recoil := Vector2.ZERO
 
 
@@ -61,7 +64,8 @@ func first_person() -> bool:
 func _process(delta: float) -> void:
 	_arm.spring_length = lerpf(_arm.spring_length, STEPS[_step], minf(1.0, 12.0 * delta))
 	cam.fov = lerpf(cam.fov, fov_target + fov_boost, minf(1.0, 10.0 * delta))
-	position.y = lerpf(position.y, height_target, minf(1.0, 14.0 * delta))
+	_height = lerpf(_height, height_target, minf(1.0, 14.0 * delta))
+	position = Vector3(offset.x, _height + offset.y, offset.z)
 	_roll = lerpf(_roll, roll_target, minf(1.0, 9.0 * delta))
 	_t += delta
 	kick = move_toward(kick, 0.0, 0.25 * delta)

@@ -84,6 +84,28 @@ func confetti(at: Vector3, pieces := 28, spread := 3.0) -> void:
 		tw.tween_callback(mi.queue_free)
 
 
+## Something wet leaving a body in a hurry: an arc of blobs from `at` along `dir`.
+func spew(at: Vector3, dir: Vector3, color: Color, blobs := 10) -> void:
+	var bit := SphereMesh.new()
+	bit.radius = 0.07
+	bit.height = 0.14
+	bit.radial_segments = 6
+	bit.rings = 3
+	for k in blobs:
+		var mi := _node(bit, color.lightened(randf() * 0.2))
+		mi.position = at
+		var out := dir * randf_range(0.6, 1.6) + Vector3(randf_range(-0.3, 0.3), randf_range(0.0, 0.4), randf_range(-0.3, 0.3))
+		var land := at + out * 1.2
+		land.y = maxf(at.y - 1.1, 0.05)
+		var tw := create_tween()
+		tw.tween_interval(k * 0.03)
+		tw.tween_property(mi, "position", at + out * 0.6 + Vector3(0, 0.15, 0), 0.15)
+		tw.tween_property(mi, "position", land, 0.3).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+		tw.tween_property(mi, "scale", Vector3(2.0, 0.2, 2.0), 0.1)
+		tw.tween_interval(1.5)
+		tw.tween_callback(mi.queue_free)
+
+
 ## A firework shell bursting at `at`.
 func firework(at: Vector3, color: Color) -> void:
 	_burst(at, 9.0, color)

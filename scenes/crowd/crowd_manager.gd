@@ -62,6 +62,9 @@ var money := PackedInt32Array()
 var hp := PackedFloat32Array()
 ## NPC indices close to the local player, refreshed at 10 Hz.
 var near := PackedInt32Array()
+
+const PARTY_RANGE := 10.0
+var _party := {}           # idx -> true while dancing along with someone on bala
 ## What the ambient crowd is up to in groups: tables, ball games, gangs (see activities.gd).
 var acts: Node3D
 
@@ -473,6 +476,8 @@ func _restyle(i: int) -> void:
 			elif _walker[i] == 1:
 				pose = Kit.RUN if _w_spd[i] > 2.5 else Kit.WALK
 				speed = _w_spd[i]
+			elif _party.has(i):
+				pose = Kit.DANCE
 			else:
 				pose = _idle[i]
 				speed = float(_gest[i])
@@ -676,6 +681,23 @@ func _nearest_player(p: Vector3) -> Vector3:
 
 
 # --- queries ---
+
+## Bala is catching: anyone idling within a few metres of one of `spots` starts to dance.
+func set_party(spots: Array) -> void:
+	var now := {}
+	for at in spots:
+		for i in count:
+			if state[i] == AMBIENT and absf(pos[i].x - at.x) < PARTY_RANGE and absf(pos[i].z - at.z) < PARTY_RANGE and absf(pos[i].y - at.y) < 3.0:
+				now[i] = true
+	for i in _party.keys():
+		if not now.has(i):
+			_party.erase(i)
+			_restyle(i)
+	for i in now:
+		if not _party.has(i):
+			_party[i] = true
+			_restyle(i)
+
 
 func refresh_near(p: Vector3) -> void:
 	near.clear()
@@ -989,7 +1011,9 @@ func _srv_flee(i: int, threat: Vector3) -> void:
 
 func _srv_react(i: int, pid: int, threat: Vector3) -> void:
 	var a = DB.ARCHETYPES[arch[i]]
-	if randf() < a.fight:
+	var who = Net.game.players.get(pid)
+	# Nobody can stay angry at someone that happy.
+	if randf() < a.fight and not (who != null and who.is_loved()):
 		_hostile[i] = {"target": pid, "cd": 0.8, "until": 20.0, "shooter": randf() < a.shoot}
 		_srv_set(i, HOSTILE)
 	else:

@@ -10,6 +10,8 @@
 // which can smooth and interrupt transitions in ways a stateless shader cannot.
 
 uniform float now = 0.0;
+// How far gone whoever is watching is: up to 1 swells every head, past 1.5 everyone is a cop.
+uniform float trip = 0.0;
 // 0..1 while the whole beach is celebrating: anyone idle throws their arms up.
 uniform float cheer = 0.0;
 uniform bool rigged = false;
@@ -531,6 +533,7 @@ void char_vertex(inout vec3 p, inout vec3 n, float propf, float partf, vec4 cd, 
 	}
 	if (part == PART_HEAD) {
 		vec3 neck = vec3(0.0, 1.4, 0.0);
+		p = neck + (p - neck) * (1.0 + 0.9 * min(trip, 1.0) * (0.75 + 0.25 * sin(now * 2.0 + seed * 40.0)));
 		ry(p, n, neck, q.head.y);
 		rx(p, n, neck, -q.head.x);
 	}

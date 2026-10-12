@@ -101,6 +101,11 @@ void vertex() {
 		top = skin;
 	}
 	vec3 bottom = jail ? top : (suit ? top * 0.75 : bottom_tone(hash(seed, 78.2)));
+	if (trip > 1.5) {
+		// A bad trip: they are all police.
+		top = vec3(0.12, 0.22, 0.55);
+		bottom = vec3(0.06, 0.08, 0.16);
+	}
 
 	vec3 col = vec3(1.0, 0.0, 1.0);
 	v_emit = 0.0;

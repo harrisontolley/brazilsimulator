@@ -65,6 +65,11 @@ const HEAD := Vector3(0, 1.3, 0)
 const BODY_SCALE := 0.78
 const VM_RIGHT := Vector3(0.3, -0.3, -0.75)
 const VM_LEFT := Vector3(-0.3, -0.32, -0.7)
+## Ayahuasca: how fast the wandering eye flies, and how far from the body it may go.
+const SPIRIT_SPEED := 14.0
+const SPIRIT_REACH := 70.0
+## How much bigger a body on bomba stands.
+const BULK := 1.25
 
 var id := 0
 var pname := "Kid"
@@ -78,6 +83,8 @@ var target_npc := -1
 ## While riding: someone close enough to grab something off as you pass, or -1.
 var snatch_npc := -1
 var robbing := false
+## The drug the hotbar has picked out: what G takes.
+var drug_sel := ""
 ## What the legs are doing (MV_*). Simulated by the owner; others get it as net_mv.
 var mv := MV_GROUND
 ## Replicated mv in the low three bits; bit 3 set while wall running with the wall on the right,
@@ -149,6 +156,9 @@ var _rob_t := 0.0
 var _attack_t := 0.0
 var _voice: AudioStreamPlayer3D
 var _voice_rate := 0
+# Where the eyes have wandered off to while the body stays behind, in world axes from the head.
+var _fly := Vector3.ZERO
+var _forced_t := 0.0
 
 
 static func fresh_state() -> Dictionary:
@@ -246,32 +256,60 @@ func drug_phase(drug: String) -> String:
 	return st.drugs.get(drug, {}).get("phase", "")
 
 
-func speed_mult() -> float:
+## Every active drug's say on `stat` (see the `fx` tables in DB.ITEMS), multiplied together.
+func _fx(stat: String) -> float:
 	var m := 1.0
-	match drug_phase("cocaine"):
-		"high": m *= 1.6
-		"down": m *= 0.45
-		"od": m *= 0.8
-	match drug_phase("weed"):
-		"high": m *= 0.75
-		"od": m *= 0.35
+	for d in st.drugs:
+		m *= DB.ITEMS[d].get("fx", {}).get(st.drugs[d].phase, {}).get(stat, 1.0)
 	return m
 
 
+## The same for the stats that pile up rather than multiply: camera shake and sway.
+func _fx_sum(stat: String) -> float:
+	var v := 0.0
+	for d in st.drugs:
+		v += DB.ITEMS[d].get("fx", {}).get(st.drugs[d].phase, {}).get(stat, 0.0)
+	return v
+
+
+func speed_mult() -> float:
+	return _fx("speed")
+
+
 func melee_mult() -> float:
-	var iron := 1.3 if drug_phase("ferro") == "high" else 1.0
-	match drug_phase("cocaine"):
-		"high": return 2.0 * iron
-		"down": return 0.6 * iron
-	return iron
+	return _fx("melee")
 
 
 func damage_taken_mult() -> float:
-	return (0.5 if drug_phase("weed") == "high" else 1.0) * (0.85 if is_drunk() else 1.0)
+	return _fx("taken")
+
+
+func jump_mult() -> float:
+	return _fx("jump")
+
+
+func gravity_mult() -> float:
+	return _fx("grav")
+
+
+func recoil_mult() -> float:
+	return _fx("recoil")
+
+
+## How fast the police lose interest, and how far off one can pick this player out.
+func cool_mult() -> float:
+	return _fx("cool")
+
+
+func seen_mult() -> float:
+	return _fx("seen")
 
 
 func is_drunk() -> bool:
-	return drug_phase("caipirinha") == "high"
+	for d in DB.DRINKS:
+		if drug_phase(d) == "high":
+			return true
+	return false
 
 
 ## Dutch courage: a drink makes the shouting land harder.
@@ -283,8 +321,52 @@ func is_sniper() -> bool:
 	return drug_phase("meth") == "high"
 
 
+## Cocaine past the limit: cannot shut up. The mic reads as shouting whatever comes out of it.
+func is_gabbling() -> bool:
+	return drug_phase("cocaine") == "od"
+
+
 func mic_mult() -> float:
-	return 0.5 if drug_phase("weed") == "od" else 1.0
+	return _fx("mic")
+
+
+## What the mic is worth right now, drugs and all.
+func mic_level() -> float:
+	return maxf(Mic.loudness, 0.7) if is_gabbling() else Mic.loudness * mic_mult()
+
+
+## Out of the body on ayahuasca: the eyes go wandering and the legs stay put.
+func is_spirit() -> bool:
+	return drug_phase("ayahuasca") != ""
+
+
+## Roid rage: swinging at whatever is nearest, and in no state to work a gun.
+func is_raging() -> bool:
+	return drug_phase("bomba") == "od"
+
+
+## A bad trip: left is right and forward is back.
+func is_inverted() -> bool:
+	return drug_phase("doce") == "od"
+
+
+## Loved up: nobody near feels like a fight, and everybody feels like dancing.
+func is_loved() -> bool:
+	return drug_phase("bala") == "high"
+
+
+## Standing in the sea, which is the one thing that cools an overheating body down.
+func in_sea() -> bool:
+	return global_position.z < Layout.SHORE_Z
+
+
+## The drugs in this player's pockets, in hotbar order.
+func drugs_held() -> Array:
+	var out: Array = []
+	for d in DB.DRUGS:
+		if st.inv.get(d, 0) > 0:
+			out.append(d)
+	return out
 
 
 func can_act() -> bool:
@@ -347,8 +429,9 @@ func _unhandled_input(e: InputEvent) -> void:
 	if e is InputEventMouseMotion and captured:
 		# Scales with the aim zoom, not with the speed widening on top of it.
 		var s: float = Settings.sens * rig.fov_target / Settings.fov
-		rotate_y(-e.relative.x * s)
-		rig.pitch(e.relative.y * s * (1.0 if Settings.invert_y else -1.0))
+		var flip := -1.0 if is_inverted() else 1.0
+		rotate_y(-e.relative.x * s * flip)
+		rig.pitch(e.relative.y * s * (1.0 if Settings.invert_y else -1.0) * flip)
 	elif e is InputEventMouseButton and e.pressed:
 		if e.button_index == MOUSE_BUTTON_WHEEL_UP:
 			rig.zoom(-1)
@@ -365,17 +448,28 @@ func _physics_process(delta: float) -> void:
 		return
 	var active := Controls.playing() and can_act()
 	var wish := Vector3.ZERO
-	if active:
-		var iv := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
-		wish = global_basis * Vector3(iv.x, 0, iv.y)
-		wish.y = 0.0
-		wish = wish.normalized()
+	var iv := Input.get_vector("move_left", "move_right", "move_forward", "move_back") if active else Vector2.ZERO
+	if is_inverted():
+		iv = -iv
+	if is_spirit():
+		# The keys move the eyes; the legs are not listening.
+		_spirit(iv, delta)
+		iv = Vector2.ZERO
+		active = false
+	else:
+		_fly = _fly.lerp(Vector3.ZERO, minf(1.0, 6.0 * delta))
+	wish = global_basis * Vector3(iv.x, 0, iv.y)
+	wish.y = 0.0
+	wish = wish.normalized()
+	var forced := _forced_wish(delta) if can_act() else Vector3.ZERO
+	if forced != Vector3.ZERO:
+		wish = forced
 	var jump_held := active and Input.is_action_pressed("jump")
 	# Edge taken here, not from is_action_just_pressed: one press must never read as two taps.
 	var jump_tap := jump_held and not _jump_was
 	_jump_was = jump_held
 	var crouch := active and Input.is_action_pressed("crouch")
-	var top := (SPRINT if Input.is_action_pressed("sprint") else WALK) * speed_mult()
+	var top := (SPRINT if Input.is_action_pressed("sprint") or drug_phase("guarana") == "od" else WALK) * speed_mult()
 	_buffer_t = JUMP_BUFFER if jump_tap else _buffer_t - delta
 	_slide_cd -= delta
 	_dive_cd -= delta
@@ -472,7 +566,7 @@ func _physics_process(delta: float) -> void:
 		MV_AIR:
 			if _crouched:
 				_set_crouch(false)
-			velocity.y -= GRAVITY * delta
+			velocity.y -= GRAVITY * gravity_mult() * delta
 			if _buffer_t > 0.0 and _coyote_t > 0.0:
 				_jump()
 			elif jump_tap and _can_wall() and not _same_wall(get_wall_normal()):
@@ -550,6 +644,68 @@ func _in_pit(wish: Vector3, jump_tap: bool, delta: float) -> void:
 		velocity = out * 4.5 + Vector3(0, JUMP * 1.15, 0)
 		_hop(CharRig.HOP)
 		mv = MV_AIR
+
+
+# --- drugs that take the wheel ---
+
+## Where an overdose is walking this body whether its owner likes it or not, or zero.
+func _forced_wish(delta: float) -> Vector3:
+	var fwd := -global_basis.z
+	fwd.y = 0.0
+	fwd = fwd.normalized()
+	if drug_phase("guarana") == "od":
+		# Legs with a mind of their own: flat out, straight ahead. Steering is all that is left.
+		return fwd
+	if drug_phase("bala") == "od":
+		# Cannot stop dancing: two steps one way, two steps the other.
+		return global_basis.x * signf(sin(Kit.now() * 5.0))
+	if drug_phase("weed") == "od":
+		# Larica. The nearest kiosk, and everything on its menu.
+		var best := Vector3.ZERO
+		var best_d := 1e9
+		for v in DB.VENDORS:
+			if v.stock == DB.FOOD and global_position.distance_to(v.pos) < best_d:
+				best_d = global_position.distance_to(v.pos)
+				best = v.pos
+		_forced_t -= delta
+		if best_d < 3.5:
+			if _forced_t <= 0.0:
+				_forced_t = 1.5
+				Net.game.to_server("srv_larica")
+			return Vector3.ZERO
+		var to := best - global_position
+		to.y = 0.0
+		return to.normalized()
+	if is_raging():
+		# Going for whoever is nearest.
+		var crowd = Net.game.crowd
+		var near := -1
+		var near_d := 8.0
+		for i in crowd.near:
+			var d: float = crowd.pos[i].distance_to(global_position)
+			if d < near_d and not crowd.is_out(i):
+				near_d = d
+				near = i
+		if near >= 0:
+			var to: Vector3 = crowd.pos[near] - global_position
+			to.y = 0.0
+			rotation.y = lerp_angle(rotation.y, atan2(-to.x, -to.z), minf(1.0, 6.0 * delta))
+			return to.normalized() if near_d > 1.6 else Vector3.ZERO
+	return Vector3.ZERO
+
+
+## Ayahuasca: the view drifts free of the head. High, the keys fly it about; overdosed, it is
+## shut out and can only hang there watching the body be sick.
+func _spirit(iv: Vector2, delta: float) -> void:
+	if drug_phase("ayahuasca") == "od":
+		_fly = _fly.lerp(global_basis * Vector3(0.0, 2.5, 4.0), minf(1.0, 2.0 * delta))
+		return
+	var b: Basis = rig.cam.global_basis
+	var up := (1.0 if Input.is_action_pressed("jump") else 0.0) - (1.0 if Input.is_action_pressed("crouch") else 0.0)
+	_fly += (b.x * iv.x + b.z * iv.y + Vector3.UP * up) * SPIRIT_SPEED * delta
+	_fly = _fly.limit_length(SPIRIT_REACH)
+	# Not through the floor.
+	_fly.y = maxf(_fly.y, 0.3 - global_position.y - HEAD.y)
 
 
 # --- riding ---
@@ -686,7 +842,7 @@ func _boost(amount: float) -> void:
 
 
 func _jump() -> void:
-	velocity.y = JUMP + maxf(_ramp_vy, 0.0)
+	velocity.y = JUMP * jump_mult() + maxf(_ramp_vy, 0.0)
 	_ramp_vy = 0.0
 	_buffer_t = 0.0
 	_coyote_t = 0.0
@@ -700,7 +856,7 @@ func _double_jump(wish: Vector3) -> void:
 	_air_jumps -= 1
 	_buffer_t = 0.0
 	_hop(CharRig.DOUBLE)
-	velocity.y = DOUBLE_JUMP
+	velocity.y = DOUBLE_JUMP * jump_mult()
 	if wish != Vector3.ZERO:
 		var s := maxf(hspeed(), WALK)
 		var h := (Vector3(velocity.x, 0.0, velocity.z).lerp(wish * s, 0.5)).normalized() * s
@@ -815,7 +971,7 @@ func _process(delta: float) -> void:
 		for d in st.tol:
 			st.tol[d] = maxf(0.0, st.tol[d] - DB.TOLERANCE_DECAY * delta)
 	if is_local:
-		_vis.visible = (st.dead or not rig.first_person()) and st.get("hide", -1) < 0
+		_vis.visible = (st.dead or not rig.first_person() or _fly.length() > 0.5) and st.get("hide", -1) < 0
 		_local_process(delta)
 	else:
 		_vis.visible = st.get("hide", -1) < 0
@@ -875,6 +1031,9 @@ func _animate(delta: float) -> void:
 	elif m == MV_GROUND:
 		roll = _bank * 0.5
 	_vis.rotation.z = lerp_angle(_vis.rotation.z, roll, minf(1.0, 10.0 * delta))
+	# Bomba shows: everyone can see who has been at the needle.
+	var bulk := BULK if drug_phase("bomba") in ["high", "od"] else 1.0
+	_vis.scale = _vis.scale.lerp(Vector3(bulk, 1.0 + (bulk - 1.0) * 0.4, bulk), minf(1.0, 3.0 * delta))
 	# Anyone standing in a hole is that much shorter.
 	var deep: float = Places.depth_at(global_position) if (_pit >= 0 or not is_local) and global_position.y < 0.6 else 0.0
 	_sink = lerpf(_sink, deep, minf(1.0, 9.0 * delta))
@@ -924,7 +1083,7 @@ func muzzle() -> Vector3:
 
 ## The gun bucks: the view jumps and only mostly comes back.
 func recoil() -> void:
-	var k: float = DB.ITEMS[st.equipped].get("recoil", 0.0)
+	var k: float = DB.ITEMS[st.equipped].get("recoil", 0.0) * recoil_mult()
 	rig.recoil(k, randf_range(-0.4, 0.4) * k)
 	_vm_t = Kit.now()
 
@@ -979,13 +1138,14 @@ func _local_process(delta: float) -> void:
 	target_npc = g.crowd.pick_near(head, dir, ROB_RANGE) if can_fight() and mv != MV_RIDE else -1
 	snatch_npc = g.crowd.pick_snatch(global_position, -global_basis.z) if can_fight() and mv == MV_RIDE and _ride_spd > 6.0 else -1
 
-	# Meth: sniper zoom while high, shakes on the way down, twitching on overdose.
+	# Meth: sniper zoom while high. Whatever else is in the blood shakes or sways the view.
 	var aiming := captured and Input.is_action_pressed("aim")
 	rig.fov_target = (20.0 if is_sniper() else Settings.fov * 0.73) if aiming else Settings.fov
-	match drug_phase("meth"):
-		"down": rig.shake = 0.012
-		"od": rig.shake = 0.04
-		_: rig.shake = 0.0
+	rig.shake = _fx_sum("shake")
+	# Ketamine past the limit: the view lifts out of the body lying on the floor.
+	if drug_phase("ketamine") == "od":
+		_fly = _fly.lerp(Vector3(0.0, 9.0, 0.0), minf(1.0, 0.25 * delta))
+	rig.offset = global_basis.inverse() * _fly
 
 	# Speed reads through the camera: wider view, a lean off the wall, a low head in a slide.
 	rig.fov_boost = 0.0 if aiming else clampf((hspeed() - SPRINT) * 1.6, 0.0, 22.0)
@@ -995,14 +1155,13 @@ func _local_process(delta: float) -> void:
 		MV_SLIDE: rig.roll_target = 0.05
 		MV_RIDE: rig.roll_target = _ride_steer * 0.5
 		_: rig.roll_target = clampf(-velocity.dot(global_basis.x) * 0.004, -0.05, 0.05)
-	if is_drunk():
-		rig.roll_target += sin(Kit.now() * 1.3) * 0.07
+	rig.roll_target += sin(Kit.now() * 1.3) * _fx_sum("sway")
 
 	_attack_t -= delta
 	_rob_t -= delta
 	robbing = false
 	if captured and can_fight():
-		if Input.is_action_pressed("attack") and _attack_t <= 0.0:
+		if (Input.is_action_pressed("attack") or is_raging()) and _attack_t <= 0.0:
 			_attack_t = DB.ITEMS[st.equipped].cooldown
 			# The point on the line of sight level with the head: where the blow starts from.
 			var cam: Vector3 = rig.cam.global_position
@@ -1018,14 +1177,19 @@ func _local_process(delta: float) -> void:
 			robbing = true
 			if _rob_t <= 0.0:
 				_rob_t = 0.1
-				g.to_server("srv_rob", [target_npc, Mic.loudness * mic_mult()], g.crowd)
+				g.to_server("srv_rob", [target_npc, mic_level()], g.crowd)
 		if Input.is_action_just_pressed("weapon_1"):
 			g.to_server("srv_equip", [_next_weapon(DB.MELEE)])
 		if Input.is_action_just_pressed("weapon_2"):
 			g.to_server("srv_equip", [_next_weapon(DB.GUNS)])
-		for d in DB.DRUGS:
-			if Input.is_action_just_pressed(DB.ITEMS[d].key):
-				g.to_server("srv_use", [d])
+		var held := drugs_held()
+		if not held.has(drug_sel):
+			drug_sel = held[0] if not held.is_empty() else ""
+		elif Input.is_action_just_pressed("drug_next") or Input.is_action_just_pressed("drug_prev"):
+			var step := 1 if Input.is_action_just_pressed("drug_next") else -1
+			drug_sel = held[posmod(held.find(drug_sel) + step, held.size())]
+		if drug_sel != "" and Input.is_action_just_pressed("drug_use"):
+			g.to_server("srv_use", [drug_sel])
 
 	_send_t -= delta
 	if _send_t <= 0.0 and not multiplayer.is_server():

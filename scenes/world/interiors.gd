@@ -249,8 +249,22 @@ func _farmacia(lot: Dictionary, room: int) -> void:
 	_glow(Vector3(cx, 2.8, z0 + 11.2), Vector3(0.25, 0.9, 0.06), Color(0.1, 0.8, 0.3))
 	for k in 3:
 		_block(Vector3(lot.x0 + 1.0, 0.25, z0 + 2.5 + k * 1.0), Vector3(0.5, 0.5, 0.5), Color(0.25, 0.5, 0.8))
-	# The stock room behind is not for customers.
+	# The room behind is the nearest thing the neighbourhood has to a hospital: two beds, a
+	# drip, and a bill. Anyone who overdoses wakes up here (DB.HOSPITAL_POS).
 	_wall_with(z0 + 13.0, lot.x0, lot.x1, [[lot.x1 - 2.0, DOOR_W, 0.0, DOOR_H]], PLASTER)
+	for bx in [lot.x0 + 2.0, lot.x0 + 5.6]:
+		var bz := z0 + 20.0
+		_block(Vector3(bx, 0.3, bz), Vector3(1.1, 0.6, 2.3), STEEL)
+		_box(Vector3(bx, 0.68, bz), Vector3(1.0, 0.16, 2.2), Color(0.95, 0.96, 1.0))
+		_box(Vector3(bx, 0.8, bz + 0.85), Vector3(0.7, 0.14, 0.4), Color(0.8, 0.88, 1.0))
+		_box(Vector3(bx, 0.78, bz - 0.4), Vector3(1.04, 0.06, 1.2), Color(0.3, 0.65, 0.55))
+		# The drip stand, bag and all.
+		_box(Vector3(bx + 0.75, 0.95, bz + 0.9), Vector3(0.05, 1.9, 0.05), STEEL)
+		_box(Vector3(bx + 0.75, 0.03, bz + 0.9), Vector3(0.4, 0.05, 0.4), STEEL)
+		_box(Vector3(bx + 0.75, 1.88, bz + 0.9), Vector3(0.3, 0.04, 0.04), STEEL)
+		_box(Vector3(bx + 0.63, 1.65, bz + 0.9), Vector3(0.16, 0.3, 0.06), Color(0.85, 0.95, 1.0))
+	_glow(Vector3(cx, 2.6, z1 - 0.25), Vector3(1.0, 0.3, 0.06), Color(0.9, 0.1, 0.1))
+	_glow(Vector3(cx, 2.6, z1 - 0.25), Vector3(0.3, 1.0, 0.06), Color(0.9, 0.1, 0.1))
 	_cupboard(Vector3(lot.x0 + 1.2, 0, z1 - 1.0), room, Vector3.FORWARD)
 	for k in 2:
 		Places.add_spot(Vector3(cx - 2.5 + k * 3.0, 0, z0 + 7.6), Kit.face(Vector3.BACK), [Kit.STAND, Kit.PHONE], "", room)

@@ -448,7 +448,7 @@ func _srv_heat(delta: float) -> void:
 		if seen:
 			pl.wanted_t = HEAT_STEP_TIME[heat]
 		else:
-			pl.wanted_t -= delta * (HIDDEN_COOL if tucked else 1.0)
+			pl.wanted_t -= delta * (HIDDEN_COOL if tucked else 1.0) * pl.cool_mult()
 		var vis := VIS_SEEN if seen else (VIS_HIDDEN if tucked else VIS_SEARCH)
 		if pl.wanted_t <= 0.0:
 			pl.st.heat = heat - 1
@@ -509,7 +509,7 @@ func _sees(c: Dictionary, pl, max_range: float, fov: float) -> bool:
 			max_range *= STILL_MULT if spd < 0.5 else CROUCH_MULT
 		elif spd > 6.0:
 			max_range *= SPRINT_MULT
-		max_range *= Places.cover_at(p, crouched)
+		max_range *= Places.cover_at(p, crouched) * pl.seen_mult()
 	if not _witness(c, p, max_range, fov if d > close else PI, 0.45 if crouched else 0.9):
 		return false
 	if not hidden:
@@ -549,7 +549,7 @@ func _srv_blitz_check() -> void:
 			continue
 		var dirty: bool = pl.st.inv.has("pistol")
 		for item in DB.DRUGS + DB.LOOT:
-			dirty = dirty or pl.st.inv.get(item, 0) > 0
+			dirty = dirty or (pl.st.inv.get(item, 0) > 0 and not DB.ITEMS[item].get("legal", false))
 		if not dirty:
 			continue
 		for c in cops:

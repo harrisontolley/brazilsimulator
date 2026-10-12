@@ -12,28 +12,90 @@ const ITEMS := {
 	"revolver": {"name": "Três-oitão", "type": "weapon", "melee": false, "damage": 55.0, "range": 70.0, "cooldown": 0.6, "spread": 0.02, "intimidation": 2.8, "price": 900, "held": 3, "mag": 6, "reload": 2.2, "recoil": 0.065, "head_kill": 1.0},
 	"smg": {"name": "Submetralhadora", "type": "weapon", "melee": false, "damage": 16.0, "range": 45.0, "cooldown": 0.09, "spread": 0.06, "intimidation": 3.0, "price": 1500, "held": 4, "mag": 30, "reload": 2.0, "recoil": 0.016, "head_kill": 0.45},
 	"ammo": {"name": "Ammo x12", "type": "ammo", "amount": 12, "price": 60},
-	"cocaine": {"name": "Cocaine", "type": "drug", "key": "drug_1", "duration": 25.0, "comedown": 20.0, "od": 12.0, "price": 150},
-	"weed": {"name": "Weed", "type": "drug", "key": "drug_2", "duration": 45.0, "comedown": 0.0, "od": 20.0, "price": 60},
-	"meth": {"name": "Meth", "type": "drug", "key": "drug_3", "duration": 40.0, "comedown": 15.0, "od": 20.0, "price": 120},
+	# Drugs. `fx` is what each phase does to the body: multipliers on speed, melee damage dealt,
+	# damage `taken`, mic loudness, jump height, gravity (`grav`), gun `recoil`, how fast heat
+	# cools (`cool`) and how far off a cop picks you out (`seen`); `shake` and `sway` are added
+	# to the camera. `screen` is [tint, blur] and `trip` is [hue speed, saturation, wobble].
+	# An overdose lasts `od` seconds, costs `od_dmg` hp every half second, puts you on the floor
+	# for `od_floor` as it starts, and ends in `od_end` (see Game._srv_od_end). `legal` ones are
+	# nothing a cop at a checkpoint cares about.
+	"cocaine": {"name": "Cocaine", "type": "drug", "duration": 25.0, "comedown": 20.0, "od": 12.0, "price": 150,
+		"fx": {"high": {"speed": 1.6, "melee": 2.0}, "down": {"speed": 0.45, "melee": 0.6}, "od": {"speed": 0.8, "shake": 0.02}},
+		"screen": {"high": [Color(1, 1, 1, 0.06), 0.0], "down": [Color(0.2, 0.2, 0.3, 0.3), 0.0], "od": [Color(0.9, 0.0, 0.0, 0.3), 0.0]},
+		"od_dmg": 3.0, "od_end": "hospital", "sound": "sniff"},
+	"weed": {"name": "Weed", "type": "drug", "duration": 45.0, "comedown": 0.0, "od": 20.0, "price": 60,
+		"fx": {"high": {"speed": 0.75, "taken": 0.5}, "od": {"speed": 0.6, "mic": 0.5}},
+		"screen": {"high": [Color(0.2, 0.7, 0.2, 0.1), 0.8], "od": [Color(0.1, 0.5, 0.1, 0.3), 3.0]},
+		"od_end": "ko", "od_ko": 5.0},
+	"meth": {"name": "Meth", "type": "drug", "duration": 40.0, "comedown": 15.0, "od": 20.0, "price": 120,
+		"fx": {"down": {"shake": 0.012}, "od": {"shake": 0.04}},
+		"screen": {"od": [Color(0.5, 0.3, 0.9, 0.2), 0.0]},
+		"od_dmg": 1.5},
+	"lanca": {"name": "Lança-perfume", "type": "drug", "duration": 10.0, "comedown": 0.0, "od": 6.0, "price": 40,
+		"fx": {"high": {"jump": 1.8, "grav": 0.45}},
+		"screen": {"high": [Color(1.0, 0.9, 0.4, 0.08), 0.5], "od": [Color(0, 0, 0, 0.75), 2.0]},
+		"od_floor": 6.0, "od_end": "robbed", "sound": "giggle"},
+	"bala": {"name": "Bala", "type": "drug", "duration": 40.0, "comedown": 15.0, "od": 25.0, "price": 90,
+		"fx": {"high": {"melee": 0.5}, "down": {"speed": 0.8}, "od": {"speed": 0.8}},
+		"screen": {"high": [Color(1.0, 0.4, 0.8, 0.06), 0.0], "down": [Color(0.2, 0.2, 0.3, 0.2), 0.0], "od": [Color(1.0, 0.3, 0.0, 0.25), 0.0]},
+		"trip": {"high": [0.0, 1.7, 0.0], "od": [0.0, 2.2, 0.4]},
+		"od_dmg": 2.0, "od_end": "hospital"},
+	"doce": {"name": "Doce", "type": "drug", "duration": 45.0, "comedown": 0.0, "od": 25.0, "price": 110,
+		"fx": {},
+		"trip": {"high": [0.25, 1.4, 0.6], "od": [0.9, 1.6, 1.0]},
+		"od_end": "random"},
+	"ayahuasca": {"name": "Ayahuasca", "type": "drug", "duration": 20.0, "comedown": 0.0, "od": 15.0, "price": 130,
+		"fx": {},
+		"screen": {"high": [Color(0.4, 0.2, 0.7, 0.12), 0.0], "od": [Color(0.4, 0.5, 0.1, 0.25), 1.0]},
+		"trip": {"high": [0.0, 1.3, 0.3], "od": [0.0, 0.7, 0.8]},
+		"sound": "retch"},
+	"bomba": {"name": "Bomba", "type": "drug", "duration": 35.0, "comedown": 15.0, "od": 15.0, "price": 200,
+		"fx": {"high": {"melee": 2.5}, "down": {"melee": 0.7, "speed": 0.85}, "od": {"melee": 2.5, "speed": 1.2, "shake": 0.02}},
+		"screen": {"high": [Color(1.0, 0.3, 0.1, 0.05), 0.0], "od": [Color(0.9, 0.0, 0.0, 0.3), 0.0]},
+		"od_dmg": 4.0},
+	"rivotril": {"name": "Rivotril", "type": "drug", "duration": 40.0, "comedown": 0.0, "od": 10.0, "price": 70, "legal": true,
+		"fx": {"high": {"cool": 2.5, "seen": 0.7, "recoil": 0.5}},
+		"screen": {"high": [Color(0.3, 0.5, 0.9, 0.08), 0.3], "od": [Color(0, 0, 0, 0.85), 2.0]},
+		"od_floor": 10.0},
+	"ketamine": {"name": "Ketamine", "type": "drug", "duration": 30.0, "comedown": 10.0, "od": 12.0, "price": 100,
+		"fx": {"high": {"taken": 0.3, "speed": 0.6, "sway": 0.1}, "down": {"sway": 0.05}, "od": {"sway": 0.15}},
+		"screen": {"high": [Color(0.6, 0.6, 0.7, 0.1), 0.6], "od": [Color(0.7, 0.7, 0.8, 0.3), 2.5]},
+		"od_floor": 12.0, "od_end": "robbed"},
+	"guarana": {"name": "Guaraná em pó", "type": "drug", "duration": 30.0, "comedown": 0.0, "od": 15.0, "price": 20, "legal": true,
+		"fx": {"high": {"speed": 1.25, "jump": 1.2}, "od": {"speed": 1.5, "shake": 0.03}},
+		"screen": {"od": [Color(1.0, 0.8, 0.0, 0.15), 0.0]},
+		"od_end": "ko", "od_ko": 3.0},
 	# Eaten on the spot. `buff` ones also leave you tipsy for `duration`.
 	"coco": {"name": "Água de coco", "type": "food", "heal": 25.0, "price": 15},
 	"espetinho": {"name": "Espetinho", "type": "food", "heal": 40.0, "price": 25},
 	"acai": {"name": "Açaí", "type": "food", "heal": 70.0, "price": 40},
-	"caipirinha": {"name": "Caipirinha", "type": "food", "heal": 10.0, "buff": true, "duration": 45.0, "comedown": 0.0, "od": 0.0, "price": 25},
+	"caipirinha": {"name": "Caipirinha", "type": "food", "heal": 10.0, "buff": true, "duration": 45.0, "comedown": 0.0, "od": 0.0, "price": 25,
+		"fx": {"high": {"taken": 0.85, "sway": 0.07}}},
 	# Contraband: what a spoon and a rope are for is between you and the wall.
 	"colher": {"name": "Colher", "type": "tool", "price": 40},
 	"corda": {"name": "Corda", "type": "tool", "price": 90},
 	# Not for sale: an hour on the weights.
-	"ferro": {"name": "Ferro", "type": "buff", "comedown": 0.0},
+	"ferro": {"name": "Ferro", "type": "buff", "comedown": 0.0, "fx": {"high": {"melee": 1.3}}},
 	"curativo": {"name": "Curativo", "type": "food", "heal": 60.0, "price": 35},
-	"cerveja": {"name": "Cerveja", "type": "food", "heal": 8.0, "buff": true, "duration": 30.0, "comedown": 0.0, "od": 0.0, "price": 12},
+	"cerveja": {"name": "Cerveja", "type": "food", "heal": 8.0, "buff": true, "duration": 30.0, "comedown": 0.0, "od": 0.0, "price": 12,
+		"fx": {"high": {"taken": 0.9, "sway": 0.05}}},
 	# Taken off the people you rob. Worth nothing until a fence buys it; lost if arrested.
 	"phone": {"name": "Celular", "type": "loot", "price": 120},
 	"watch": {"name": "Relógio", "type": "loot", "price": 180},
 	"camera": {"name": "Câmera", "type": "loot", "price": 220},
 	"chain": {"name": "Cordão de ouro", "type": "loot", "price": 450},
 }
-const DRUGS := ["cocaine", "weed", "meth"]
+## In the order they sit along the hotbar.
+const DRUGS := ["cocaine", "weed", "meth", "lanca", "bala", "doce", "ayahuasca", "bomba", "rivotril", "ketamine", "guarana"]
+## What a drink is: anything here leaves you tipsy.
+const DRINKS := ["caipirinha", "cerveja"]
+## The bed in the back of the chemist's where an overdose wakes up, and what it costs.
+const HOSPITAL_POS := Vector3(103.8, 0.2, 93.0)
+const HOSPITAL_BILL := 300
+## How much of their cash someone who passes out in the street wakes up without.
+const OD_ROBBED := 0.3
+## Where a bad trip may leave you: a rooftop on the avenue, or up to the waist in the sea.
+const WAKE_SPOTS := [Vector3(60.0, 0.2, 86.0), Vector3(-40.0, 0.2, -44.0)]
 ## What the two weapon keys cycle through.
 const MELEE := ["fists", "knife", "estoque"]
 const GUNS := ["pistol", "revolver", "smg"]
@@ -70,12 +132,12 @@ const WHO_PLAYER := 1
 const WHO_COP := 2
 const WHO_NPC := 3
 
-const FOOD := ["coco", "espetinho", "acai", "caipirinha"]
+const FOOD := ["coco", "espetinho", "acai", "caipirinha", "guarana"]
 const LOOT := ["phone", "watch", "camera", "chain"]
 ## kind: "shop" sells `stock` (at `discount`), "bicho" takes bets, "fence" buys loot.
 ## `till` shops keep cash that can be taken at gunpoint.
 const VENDORS := [
-	{"name": "DEALER", "kind": "shop", "pos": Vector3(-60, 0, 47), "stock": ["cocaine", "weed", "meth"], "color": Color(0.2, 0.7, 0.3)},
+	{"name": "DEALER", "kind": "shop", "pos": Vector3(-60, 0, 47), "stock": ["cocaine", "weed", "meth", "lanca", "bala", "doce", "ketamine"], "color": Color(0.2, 0.7, 0.3)},
 	{"name": "ARMS", "kind": "shop", "pos": Vector3(80, 0, 47), "stock": ["knife", "pistol", "revolver", "smg", "ammo"], "color": Color(0.25, 0.25, 0.3)},
 	{"name": "QUIOSQUE 1", "kind": "shop", "till": true, "pos": Vector3(-240, 0, 47), "stock": FOOD, "color": Color(0.9, 0.3, 0.2)},
 	{"name": "QUIOSQUE 2", "kind": "shop", "till": true, "pos": Vector3(-150, 0, 47), "stock": FOOD, "color": Color(0.95, 0.6, 0.1)},
@@ -84,14 +146,14 @@ const VENDORS := [
 	{"name": "QUIOSQUE 5", "kind": "shop", "till": true, "pos": Vector3(250, 0, 47), "stock": FOOD, "color": Color(0.95, 0.6, 0.1)},
 	{"name": "JOGO DO BICHO", "kind": "bicho", "pos": Vector3(130, 0, 47), "stock": [], "color": Color(0.85, 0.75, 0.1)},
 	{"name": "JOGO DO BICHO", "kind": "bicho", "pos": Vector3(-70, 0, 107.0), "stock": [], "color": Color(0.85, 0.75, 0.1)},
-	{"name": "BOCA", "kind": "shop", "discount": 0.7, "pos": BOCA_POS, "stock": ["cocaine", "weed", "meth"], "color": Color(0.2, 0.7, 0.3)},
+	{"name": "BOCA", "kind": "shop", "discount": 0.7, "pos": BOCA_POS, "stock": ["cocaine", "weed", "meth", "lanca", "bala", "doce", "ketamine", "ayahuasca"], "color": Color(0.2, 0.7, 0.3)},
 	{"name": "RECEPTADOR", "kind": "fence", "pos": Vector3(212, 6.2, 146.5), "stock": [], "color": Color(0.5, 0.3, 0.6)},
 	# Behind a counter indoors (see scenes/world/interiors.gd for the rooms).
 	{"name": "BOTECO DO ZÉ", "kind": "shop", "indoor": true, "till": true, "pos": Vector3(-123.2, 0, 79.5), "stock": ["cerveja", "caipirinha", "espetinho"], "color": Color(0.75, 0.12, 0.1)},
-	{"name": "MERCADINHO", "kind": "shop", "indoor": true, "till": true, "pos": Vector3(52, 0, 75.1), "stock": ["coco", "acai", "ammo"], "color": Color(0.1, 0.45, 0.75)},
-	{"name": "FARMÁCIA", "kind": "shop", "indoor": true, "till": true, "pos": Vector3(107, 0, 80.9), "stock": ["curativo"], "color": Color(0.1, 0.6, 0.3)},
+	{"name": "MERCADINHO", "kind": "shop", "indoor": true, "till": true, "pos": Vector3(52, 0, 75.1), "stock": ["coco", "acai", "guarana", "ammo"], "color": Color(0.1, 0.45, 0.75)},
+	{"name": "FARMÁCIA", "kind": "shop", "indoor": true, "till": true, "pos": Vector3(107, 0, 80.9), "stock": ["curativo", "rivotril", "bomba"], "color": Color(0.1, 0.6, 0.3)},
 	{"name": "BAR DO PORTUGUÊS", "kind": "shop", "indoor": true, "till": true, "pos": Vector3(103.8, 0, 117.5), "stock": ["cerveja", "caipirinha", "espetinho"], "color": Color(0.1, 0.4, 0.2)},
-	{"name": "CONTRABANDO", "kind": "shop", "indoor": true, "jail": true, "pos": Vector3(-6, 0, 127.4), "stock": ["estoque", "colher", "corda", "cocaine", "weed"], "color": Color(0.3, 0.3, 0.3)},
+	{"name": "CONTRABANDO", "kind": "shop", "indoor": true, "jail": true, "pos": Vector3(-6, 0, 127.4), "stock": ["estoque", "colher", "corda", "cocaine", "weed", "rivotril"], "color": Color(0.3, 0.3, 0.3)},
 	{"name": "BICHO DO BINGO", "kind": "bicho", "indoor": true, "pos": Vector3(-14, 0, 89.4), "stock": [], "color": Color(0.85, 0.6, 0.1)},
 ]
 
