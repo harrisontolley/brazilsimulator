@@ -29,9 +29,12 @@ var _boat_home: Array = []
 var _skis: MultiMesh
 var _surf: MultiMesh
 var _heads: MultiMesh
+var _paddlers: MultiMesh
+var _paddle_home: Array = []
+var _kayaks: MultiMesh
+var _kayak_home: Array = []
+var _launches: MultiMesh
 var _head_home: Array = []
-var _dogs: MultiMesh
-var _dog_home: Array = []
 var _volley: MultiMesh
 var _clouds: MultiMesh
 var _cloud_home: Array = []
@@ -43,6 +46,7 @@ var _gondola: Node3D
 var _ship: Node3D
 var _gliders: Array = []
 var _day_t := 0.0
+var _under := false
 
 
 func _ready() -> void:
@@ -51,7 +55,6 @@ func _ready() -> void:
 	_build_birds(rng)
 	_build_kites(rng)
 	_build_sea(rng)
-	_build_dogs(rng)
 	_build_sky(rng)
 	_apply_day()
 
@@ -86,7 +89,7 @@ func _build_kites(rng: RandomNumberGenerator) -> void:
 		xf.append(Transform3D())
 		tint.append(Color.from_hsv(rng.randf(), 0.8, 1.0))
 	_kites = _free_multi(mesh, xf, tint)
-	_strings = _free_multi(_box_mesh(Vector3(0.02, 0.02, 1.0)), xf, [])
+	_strings = _free_multi(_box_mesh(Vector3(0.02, 0.02, 1.0)), xf, [], false)
 	_strings.get_meta("node").material_override = _mat(Color(0.9, 0.9, 0.9))
 
 
@@ -102,7 +105,11 @@ func _build_sea(rng: RandomNumberGenerator) -> void:
 	var xf: Array = []
 	var tint: Array = []
 	for i in 14:
-		_boat_home.append([Vector3(rng.randf_range(-420, 420), 0.35, rng.randf_range(-260, -95)), rng.randf() * TAU, rng.randf_range(0.8, 1.6)])
+		var home := Vector3(rng.randf_range(-420, 420), 0.35, rng.randf_range(-260, -95))
+		# Nobody anchors on top of the yacht.
+		if home.distance_to(Layout.YACHT_POS) < 60.0:
+			home.x -= 120.0
+		_boat_home.append([home, rng.randf() * TAU, rng.randf_range(0.8, 1.6)])
 		xf.append(Transform3D())
 		tint.append(Color.from_hsv(rng.randf(), rng.randf_range(0.3, 0.8), 0.9))
 	_boats = _free_multi(hull, xf, tint)
@@ -131,11 +138,64 @@ func _build_sea(rng: RandomNumberGenerator) -> void:
 		tint.append(Color.from_hsv(rng.randf(), 0.5, 1.0))
 	_surf = _free_multi(board, xf, tint)
 
+	# Stand-up paddlers out past the swimmers, kayaks beyond them, and a speedboat full of
+	# people with nowhere to be.
+	var skin := Color(0.78, 0.55, 0.38)
+	var paddler := compose([
+		part(Vector3(0, 0.06, 0), Vector3(0.75, 0.1, 3.2), Color.WHITE),
+		part(Vector3(0, 0.55, 0.1), Vector3(0.22, 0.9, 0.2), skin),
+		part(Vector3(0, 1.2, 0.1), Vector3(0.34, 0.5, 0.22), Color.WHITE),
+		part(Vector3(0, 1.6, 0.1), Vector3(0.24, 0.24, 0.24), skin),
+		part(Vector3(0.3, 0.9, -0.3), Vector3(0.05, 2.0, 0.05), Color(0.2, 0.2, 0.2), Vector3(0.35, 0, 0.1)),
+		part(Vector3(0.33, 0.0, -0.62), Vector3(0.2, 0.4, 0.04), Color(0.2, 0.2, 0.2), Vector3(0.35, 0, 0.1)),
+	])
+	xf.clear()
+	tint.clear()
+	for i in 10:
+		_paddle_home.append([Vector3(rng.randf_range(-280, 280), 0, rng.randf_range(-105.0, -62.0)), rng.randf() * TAU, rng.randf_range(0.5, 1.1)])
+		xf.append(Transform3D())
+		tint.append(Color.from_hsv(rng.randf(), 0.7, 1.0))
+	_paddlers = _free_multi(paddler, xf, tint)
+	var kayak := compose([
+		part(Vector3(0, 0.12, 0), Vector3(0.6, 0.28, 3.6), Color.WHITE),
+		part(Vector3(0, 0.14, -1.9), Vector3(0.3, 0.2, 0.6), Color.WHITE),
+		part(Vector3(0, 0.14, 1.9), Vector3(0.3, 0.2, 0.6), Color.WHITE),
+		part(Vector3(0, 0.55, 0.1), Vector3(0.36, 0.6, 0.24), Color(0.95, 0.5, 0.1)),
+		part(Vector3(0, 1.0, 0.1), Vector3(0.24, 0.24, 0.24), skin),
+		part(Vector3(0, 0.62, -0.25), Vector3(2.2, 0.05, 0.05), Color(0.2, 0.2, 0.2), Vector3(0, 0, 0.3)),
+	])
+	xf.clear()
+	tint.clear()
+	for i in 7:
+		_kayak_home.append([Vector3(rng.randf_range(-270, 270), 0, rng.randf_range(-190.0, -110.0)), rng.randf() * TAU, rng.randf_range(1.2, 2.0)])
+		if _kayak_home[i][0].distance_to(Layout.YACHT_POS) < 70.0:
+			_kayak_home[i][0].x -= 130.0
+		xf.append(Transform3D())
+		tint.append(Color.from_hsv(rng.randf(), 0.75, 0.95))
+	_kayaks = _free_multi(kayak, xf, tint)
+	var launch := compose([
+		part(Vector3(0, 0.45, 0), Vector3(2.4, 0.9, 6.5), Color.WHITE),
+		part(Vector3(0, 0.5, -3.6), Vector3(1.7, 0.8, 1.6), Color.WHITE, Vector3(0.3, 0, 0)),
+		part(Vector3(0, 1.15, -1.2), Vector3(2.0, 0.6, 0.1), Color(0.1, 0.15, 0.2), Vector3(-0.5, 0, 0)),
+		part(Vector3(0, 0.95, 1.5), Vector3(2.2, 0.12, 2.6), Color(0.9, 0.85, 0.75)),
+		part(Vector3(-0.6, 1.5, 0.6), Vector3(0.3, 1.0, 0.3), skin),
+		part(Vector3(0.5, 1.5, 1.4), Vector3(0.3, 1.0, 0.3), Color(0.55, 0.38, 0.26)),
+		part(Vector3(-0.3, 1.5, 2.2), Vector3(0.3, 1.0, 0.3), skin),
+		part(Vector3(0.6, 1.45, -0.4), Vector3(0.3, 0.9, 0.3), Color(0.9, 0.7, 0.55)),
+		part(Vector3(0, 0.6, 3.4), Vector3(0.8, 0.9, 0.5), Color(0.15, 0.15, 0.17)),
+	])
+	xf.clear()
+	tint.clear()
+	for i in 2:
+		xf.append(Transform3D())
+		tint.append([Color(0.95, 0.3, 0.2), Color(0.15, 0.4, 0.8)][i])
+	_launches = _free_multi(launch, xf, tint)
+
 	# Heads of the people who went for a swim.
 	xf.clear()
 	tint.clear()
 	for i in 90:
-		_head_home.append(Vector3(rng.randf_range(-290, 290), 0.25, rng.randf_range(-58.0, -41.0)))
+		_head_home.append(Vector3(rng.randf_range(-290, 290), 0.25, rng.randf_range(-72.0, -52.0)))
 		xf.append(Transform3D())
 		tint.append([Color(0.96, 0.76, 0.6), Color(0.66, 0.45, 0.3), Color(0.45, 0.3, 0.2), Color(0.85, 0.62, 0.44)][i % 4])
 	_heads = _free_multi(_ball(0.2, -1.0, 6), xf, tint)
@@ -171,34 +231,12 @@ func _build_sea(rng: RandomNumberGenerator) -> void:
 	_ship.add_child(tanker)
 
 
-func _build_dogs(rng: RandomNumberGenerator) -> void:
-	# Vira-lata caramelo: the stray every beach has a pack of.
-	var tan := Color(0.8, 0.56, 0.28)
-	var parts: Array = [
-		part(Vector3(0, 0.42, 0), Vector3(0.26, 0.26, 0.75), tan),
-		part(Vector3(0, 0.6, -0.48), Vector3(0.24, 0.24, 0.3), tan),
-		part(Vector3(0, 0.55, -0.68), Vector3(0.13, 0.12, 0.16), tan.darkened(0.35)),
-		part(Vector3(0, 0.6, 0.45), Vector3(0.06, 0.06, 0.32), tan, Vector3(0.7, 0, 0)),
-	]
-	for sx in [-0.1, 0.1]:
-		parts.append(part(Vector3(sx, 0.76, -0.42), Vector3(0.07, 0.14, 0.05), tan.darkened(0.3)))
-		for sz in [-0.28, 0.28]:
-			parts.append(part(Vector3(sx, 0.15, sz), Vector3(0.08, 0.3, 0.08), tan))
-	var xf: Array = []
-	var tint: Array = []
-	for i in 18:
-		_dog_home.append([Vector3(rng.randf_range(-280, 280), 0.0, rng.randf_range(-24, 30)), rng.randf_range(6.0, 16.0), rng.randf() * TAU, rng.randf_range(0.25, 0.5)])
-		xf.append(Transform3D())
-		tint.append(Color(1, 1, 1).darkened(rng.randf() * 0.45))
-	_dogs = _free_multi(compose(parts), xf, tint)
-
-
 func _build_sky(rng: RandomNumberGenerator) -> void:
 	var xf: Array = []
 	for i in 16:
 		_cloud_home.append([Vector3(rng.randf_range(-1400, 1400), rng.randf_range(260, 420), rng.randf_range(-900, 700)), Vector3(rng.randf_range(90, 220), rng.randf_range(18, 34), rng.randf_range(60, 120))])
 		xf.append(Transform3D())
-	_clouds = _free_multi(_ball(1.0, 2.0, 10), xf, [])
+	_clouds = _free_multi(_ball(1.0, 2.0, 10), xf, [], false)
 	var cm := _mat(Color(1, 1, 1, 0.85))
 	cm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	cm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -279,11 +317,13 @@ func _build_sky(rng: RandomNumberGenerator) -> void:
 		_gliders.append(g)
 
 
-## A MultiMesh whose instances roam the whole map, so it is never culled.
-func _free_multi(mesh: Mesh, xf: Array, tint: Array) -> MultiMesh:
+## A MultiMesh whose instances roam the whole map, so it is never culled. `shadows`: whether
+## it is near enough the ground for its shadow to be worth drawing.
+func _free_multi(mesh: Mesh, xf: Array, tint: Array, shadows := true) -> MultiMesh:
 	var mmi := _instances(mesh, _vertex_mat(), xf, tint)
 	mmi.custom_aabb = AABB(Vector3(-1500, -5, -1200), Vector3(3000, 500, 2000))
-	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	if not shadows:
+		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	mmi.multimesh.set_meta("node", mmi)
 	return mmi.multimesh
 
@@ -292,7 +332,7 @@ func _process(delta: float) -> void:
 	var t := MatchState.time
 	_day_t -= delta
 	var ev = Net.game.events if Net.game != null else null
-	if _day_t <= 0.0 or (ev != null and (ev.storm > 0.0 or ev.flash > 0.0)):
+	if _day_t <= 0.0 or (ev != null and (ev.storm > 0.0 or ev.flash > 0.0)) or Layout.cam_under != _under:
 		_day_t = 0.5
 		_apply_day()
 
@@ -320,15 +360,18 @@ func _process(delta: float) -> void:
 		var h: Array = _boat_home[i]
 		var home: Vector3 = h[0]
 		var ph: float = h[1]
-		var p := home + Vector3(sin(t * 0.05 + ph) * 12.0, sin(t * 1.1 + ph) * 0.12, cos(t * 0.04 + ph) * 8.0)
-		var b := Basis(Vector3.UP, ph + sin(t * 0.06 + ph) * 0.4) * Basis(Vector3.RIGHT, sin(t * 0.9 + ph) * 0.06) * Basis.from_scale(Vector3.ONE * h[2])
+		var p := home + Vector3(sin(t * 0.05 + ph) * 12.0, 0.0, cos(t * 0.04 + ph) * 8.0)
+		p.y = Layout.wave_y(p.x, p.z) + 0.05
+		var lean := Layout.wave_slope(p.x, p.z)
+		var b := Basis(Vector3.UP, ph + sin(t * 0.06 + ph) * 0.4) * Basis(Vector3.RIGHT, lean.y * 0.6) * Basis(Vector3.BACK, lean.x * 0.6) * Basis.from_scale(Vector3.ONE * h[2])
 		_boats.set_instance_transform(i, Transform3D(b, p))
 
 	for i in 4:
 		# Jet skis carve long figure eights just beyond the swimmers.
 		var a := t * 0.22 + i * 1.7
-		var p := Vector3(-200.0 + i * 130.0 + sin(a) * 90.0, 0.3 + absf(sin(t * 3.0 + i)) * 0.15, -85.0 + sin(a * 2.0) * 22.0)
-		var v := Vector3(cos(a) * 90.0, 0, cos(a * 2.0) * 44.0)
+		var p := Vector3(-200.0 + i * 130.0 + sin(a) * 90.0, 0.0, -330.0 + sin(a * 2.0) * 45.0)
+		p.y = Layout.wave_y(p.x, p.z) + absf(sin(t * 3.0 + i)) * 0.12
+		var v := Vector3(cos(a) * 90.0, 0, cos(a * 2.0) * 90.0)
 		_skis.set_instance_transform(i, Transform3D(Basis(Vector3.UP, atan2(-v.z, v.x)) * Basis(Vector3.BACK, 0.12), p))
 
 	for i in 12:
@@ -336,29 +379,36 @@ func _process(delta: float) -> void:
 		var ph := i * 1.9
 		var u := fposmod(t * 0.08 + ph * 0.13, 1.0)
 		var ride := smoothstep(0.6, 1.0, u)
-		var p := Vector3(-270.0 + i * 49.0 + sin(ph) * 14.0 + ride * 14.0, 0.25 + sin(t * 1.4 + ph) * 0.1, lerpf(-78.0, -44.0, ride))
+		var p := Vector3(-270.0 + i * 49.0 + sin(ph) * 14.0 + ride * 14.0, 0.0, lerpf(-78.0, -46.0, ride))
+		p.y = Layout.wave_y(p.x, p.z) - 0.02
 		_surf.set_instance_transform(i, Transform3D(Basis(Vector3.UP, 0.4 + ride * 0.5), p))
 
 	for i in _head_home.size():
 		var home: Vector3 = _head_home[i]
-		_heads.set_instance_transform(i, Transform3D(Basis(), home + Vector3(sin(t * 0.3 + i) * 1.5, sin(t * 1.5 + i * 0.7) * 0.1, cos(t * 0.25 + i) * 1.0)))
+		var hp := home + Vector3(sin(t * 0.3 + i) * 1.5, 0.0, cos(t * 0.25 + i) * 1.0)
+		hp.y = Layout.wave_y(hp.x, hp.z) + 0.02
+		_heads.set_instance_transform(i, Transform3D(Basis(), hp))
+
+	# Paddlers and kayaks go up and down the coast and turn round; the stroke is a lean.
+	for i in _paddle_home.size():
+		_drift(_paddlers, i, _paddle_home[i], t, 30.0, 0.1)
+	for i in _kayak_home.size():
+		_drift(_kayaks, i, _kayak_home[i], t, 55.0, 0.04)
+	for i in 2:
+		# The speedboats cut wide circles, heeling into them.
+		var a := t * (0.11 if i == 0 else -0.085) + i * 2.0
+		var c := Vector3(-150.0 + i * 370.0, 0, -300.0 + i * 60.0)
+		var r := 70.0 + i * 25.0
+		var p := c + Vector3(cos(a) * r, 0, sin(a) * r)
+		p.y = Layout.wave_y(p.x, p.z) - 0.1
+		var way := Vector3(-sin(a), 0, cos(a)) * (1.0 if i == 0 else -1.0)
+		_launches.set_instance_transform(i, Transform3D(Basis(Vector3.UP, atan2(-way.x, -way.z)) * Basis(Vector3.RIGHT, 0.08) * Basis(Vector3.BACK, 0.18 if i == 0 else -0.18), p))
 
 	for i in Layout.COURTS.size():
 		var c: Vector3 = Layout.COURTS[i][0]
 		var u := fposmod(t * 0.55 + i * 0.37, 2.0)
 		var k := u if u < 1.0 else 2.0 - u
 		_volley.set_instance_transform(i, Transform3D(Basis(), c + Vector3(lerpf(-5.0, 5.0, k), 1.2 + sin(fposmod(u, 1.0) * PI) * 3.2, sin(i + floorf(t * 0.55)) * 1.5)))
-
-	for i in _dog_home.size():
-		var h: Array = _dog_home[i]
-		var home: Vector3 = h[0]
-		var r: float = h[1]
-		var ph: float = h[2]
-		var w: float = h[3]
-		var a := t * w + ph
-		var p := home + Vector3(cos(a) * r, absf(sin(t * 9.0 + ph)) * 0.08, sin(a * 2.0) * r * 0.5)
-		var v := Vector3(-sin(a) * r, 0, cos(a * 2.0) * r)
-		_dogs.set_instance_transform(i, Transform3D(Basis(Vector3.UP, atan2(-v.x, -v.z)), p))
 
 	for i in _cloud_home.size():
 		var h: Array = _cloud_home[i]
@@ -378,6 +428,17 @@ func _process(delta: float) -> void:
 		g.position = Vector3(120.0 + i * 60.0 - u * 260.0 + cos(a) * 40.0, lerpf(190.0, 30.0, u), lerpf(250.0, -20.0, u) + sin(a) * 40.0)
 		g.rotation = Vector3(0.1, -a, 0.3)
 	_fly_heli(t, delta)
+
+
+## Someone paddling to and fro along the coast: `reach` each way from home, bobbing on the
+## swell and leaning with each stroke.
+func _drift(mm: MultiMesh, i: int, h: Array, t: float, reach: float, sway: float) -> void:
+	var home: Vector3 = h[0]
+	var a: float = t * 0.02 * h[2] + h[1]
+	var p := home + Vector3(sin(a) * reach, 0, sin(a * 2.3 + h[1]) * 6.0)
+	p.y = Layout.wave_y(p.x, p.z) - 0.03
+	var yaw := (-PI / 2.0 if cos(a) > 0.0 else PI / 2.0) + cos(a * 2.3 + h[1]) * 0.2
+	mm.set_instance_transform(i, Transform3D(Basis(Vector3.UP, yaw) * Basis(Vector3.BACK, sin(t * 1.6 * h[2] + h[1]) * sway), p))
 
 
 ## The helicopter circles the coast until somebody is wanted badly enough to follow.
@@ -442,5 +503,10 @@ func _apply_day() -> void:
 	world.env.fog_density = lerpf(0.0004, 0.007, storm)
 	world.env.ambient_light_energy += flash * 0.8
 	var night := lerpf(a[8], b[8], u)
+	# With the eyes under water there is no seeing far, and what light there is is green.
+	_under = Layout.cam_under
+	if _under:
+		world.env.fog_density = 0.055
+		world.env.fog_light_color = Color(0.04, 0.34, 0.42) * (1.0 - 0.75 * night) * (1.0 - 0.5 * storm)
 	for m in night_mats:
 		m.set_shader_parameter("night", night)

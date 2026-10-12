@@ -23,6 +23,8 @@ const int S_CASH = 14;
 const int S_STRIPE = 15;
 const int S_SACK = 16;
 const int S_WATCH = 17;
+const int S_VCOL = 18;
+const int S_SWIM = 19;
 
 const int F_SHORTS = 1 << 12;
 const int F_TANK = 1 << 13;
@@ -80,11 +82,13 @@ vec3 bottom_tone(float h) {
 void vertex() {
 	int slot = int(UV2.y + 0.5);
 	int flags = int(INSTANCE_CUSTOM.z + 0.5);
-	float seed = COLOR.a;
+	int build = int(floor(COLOR.a + 0.0001));
+	float seed = fract(COLOR.a);
+	int part = int(UV2.x + 0.5);
 	v_y = VERTEX.y;
 	float dead_k;
 	float hit_k;
-	char_vertex(VERTEX, NORMAL, UV.x, UV2.x, INSTANCE_CUSTOM, seed, dead_k, hit_k);
+	char_vertex(VERTEX, NORMAL, UV.x, UV2.x, INSTANCE_CUSTOM, COLOR.a, dead_k, hit_k);
 
 	bool jail = (flags & F_JAIL) != 0;
 	bool suit = (flags & F_SUIT) != 0;
@@ -100,6 +104,11 @@ void vertex() {
 		top = skin;
 	}
 	vec3 bottom = jail ? top : (suit ? top * 0.75 : bottom_tone(hash(seed, 78.2)));
+	if (trip > 1.5) {
+		// A bad trip: they are all police.
+		top = vec3(0.12, 0.22, 0.55);
+		bottom = vec3(0.06, 0.08, 0.16);
+	}
 
 	vec3 col = vec3(1.0, 0.0, 1.0);
 	v_emit = 0.0;
@@ -111,9 +120,15 @@ void vertex() {
 		v_stripe = float(jail);
 	} else if (slot == S_BOTTOM) {
 		col = bottom;
+		if (build == BUILD_WOMAN && !jail) {
+			// A bikini: the hips in its colour, the legs bare.
+			col = part == PART_TORSO ? COLOR.rgb : skin;
+		}
 		v_stripe = float(jail);
+	} else if (slot == S_SWIM) {
+		col = COLOR.rgb;
 	} else if (slot == S_HAIR) {
-		col = hair_tone(hash(seed, 37.7));
+		col = build == BUILD_BIG ? vec3(0.8, 0.8, 0.78) : hair_tone(hash(seed, 37.7));
 	} else if (slot == S_SHOE) {
 		col = suit ? vec3(0.06) : (hash(seed, 51.3) < 0.5 ? vec3(0.92, 0.92, 0.88) : vec3(0.45, 0.3, 0.2));
 	} else if (slot == S_GOLD) {
@@ -153,6 +168,10 @@ void vertex() {
 		col = vec3(0.75, 0.62, 0.42);
 	} else if (slot == S_WATCH) {
 		col = (flags & F_GOLDWATCH) != 0 ? vec3(1.0, 0.78, 0.1) : vec3(0.8, 0.82, 0.86);
+	} else if (slot == S_VCOL) {
+		// Seven bits a channel, packed into UV.y by the weapon kit.
+		int packed = int(UV.y + 0.5);
+		col = vec3(float(packed & 127), float((packed >> 7) & 127), float((packed >> 14) & 127)) / 127.0;
 	}
 
 	col = lin(col);

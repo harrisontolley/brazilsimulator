@@ -15,6 +15,9 @@ const GRAFFITI := ["RIO 40°", "PAZ", "FAVELA VIVE", "SAUDADE", "É NÓIS", "AMO
 ## Stretches of favela terrace left clear of houses, as [terrace, x from, x to].
 const YARDS := [[2, 52.0, 80.0], [4, -62.0, -30.0], [3, -124.0, -116.0], [1, 208.0, 216.0]]
 
+const Places := preload("res://scenes/world/places.gd")
+const Interiors := preload("res://scenes/world/interiors.gd")
+
 var _rng := RandomNumberGenerator.new()
 var _tanks: Array = []
 var _dishes: Array = []
@@ -27,9 +30,9 @@ func _ready() -> void:
 	_rng.seed = 4242
 	_init_kit()
 	_streets()
+	_cacambas()
 	_row_a()
 	_row_b()
-	_delegacia()
 	_favela()
 	_far_favela()
 	_instances(_cyl(0.8, 0.8, 1.3, 10), _mat(Color(0.15, 0.42, 0.8), 0.5), _tanks)
@@ -37,6 +40,7 @@ func _ready() -> void:
 	_instances(_cyl(0.32, 0.32, 0.22, 10), _mat(Color(0.06, 0.06, 0.07)), _wheels)
 	_instances(_ball(0.12, -1.0, 6), _vertex_mat(), _fruit, _fruit_tints)
 	_flush()
+	add_child(Interiors.new())
 
 
 func _streets() -> void:
@@ -91,7 +95,7 @@ func _streets() -> void:
 		var x := -290.0 + i * 20.0 + _rng.randf_range(-3, 3)
 		if _near_cross(x, 7.0) or absf(x) < 13.0:
 			continue
-		if _rng.randf() < 0.55:
+		if _rng.randf() < 0.55 and Layout.lot_over(1, x - 3.0, x + 3.0).is_empty():
 			_car(Vector3(x, 0, 109.9), _rng.randf_range(-0.04, 0.04), CAR_TINTS[_rng.randi() % CAR_TINTS.size()])
 	var px := -298.0
 	var prev := Vector3.ZERO
@@ -167,9 +171,33 @@ func _car(p: Vector3, yaw: float, tint: Color) -> void:
 	_box(p + b * Vector3(2.06, 0.7, 0), Vector3(0.04, 0.16, 1.5), Color(1.0, 0.95, 0.8), rot)
 	_box(p + b * Vector3(-2.06, 0.7, 0), Vector3(0.04, 0.16, 1.5), Color(0.8, 0.1, 0.1), rot)
 	_collider(p + Vector3(0, 0.75, 0), Vector3(4.1, 1.5, 1.8), rot)
+	# Room to wriggle under, for anyone with a reason to.
+	Places.add_hide(p + Vector3(0, 0.2, -1.5), "carro", p + Vector3(0, 0.2, -1.8))
 	for wx in [-1.3, 1.3]:
 		for wz in [-0.85, 0.85]:
 			_wheels.append(Transform3D(b * Basis(Vector3.RIGHT, PI / 2.0), p + b * Vector3(wx, 0.32, wz)))
+
+
+## Skips along the back wall of the front row: somewhere to climb into until it blows over.
+func _cacambas() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 6161
+	var green := Color(0.16, 0.38, 0.24)
+	for i in 16:
+		var x := -285.0 + i * 37.0 + rng.randf_range(-6.0, 6.0)
+		if _near_cross(x, 8.0) or (x > -110.0 and x < -66.0) or (x > 144.0 and x < 184.0):
+			continue
+		# Not across somebody's back door.
+		var lot := Layout.lot_over(0, x - 2.0, x + 2.0)
+		if lot.has("back") and absf(lot.back - x) < 3.5:
+			continue
+		var p := Vector3(x, 0, 100.3)
+		_block(p + Vector3(0, 0.65, 0), Vector3(2.4, 1.3, 1.3), green if i % 3 != 0 else Color(0.2, 0.3, 0.55))
+		_box(p + Vector3(0, 1.36, 0.15), Vector3(2.5, 0.08, 1.1), DARK, Vector3(0.12, 0, 0))
+		_box(p + Vector3(0, 0.75, 0.66), Vector3(1.4, 0.3, 0.02), Color(0.95, 0.95, 0.9))
+		for wx in [-0.95, 0.95]:
+			_box(p + Vector3(wx, 0.08, 0.5), Vector3(0.2, 0.16, 0.2), DARK)
+		Places.add_hide(p + Vector3(0, 0.2, 1.5), "cacamba", p + Vector3(0, 0.2, 1.8))
 
 
 ## Market stall: a striped awning over crates of fruit.
@@ -211,6 +239,14 @@ func _row_a() -> void:
 			var w := minf(_rng.randf_range(14.0, 24.0), hi - x)
 			if hi - x - w < 12.0:
 				w = hi - x
+			# Some plots belong to buildings with insides (see interiors.gd).
+			var lot := Layout.lot_over(0, x, x + w)
+			if not lot.is_empty():
+				if x < lot.x0 - 0.1:
+					w = lot.x0 - x
+				else:
+					x = lot.x1
+					continue
 			var low := _rng.randf() < 0.38
 			var h := 3.5 * _rng.randi_range(2, 5) if low else _rng.randf_range(24.0, 58.0)
 			var tint := _wall_tint()
@@ -255,12 +291,12 @@ func _row_b() -> void:
 			var w := minf(_rng.randf_range(10.0, 18.0), hi - x)
 			if hi - x - w < 9.0:
 				w = hi - x
-			# The delegacia takes the plot in the middle.
-			if x < 9.0 and x + w > -9.0:
-				if x < -9.0:
-					w = -9.0 - x
+			var lot := Layout.lot_over(1, x, x + w)
+			if not lot.is_empty():
+				if x < lot.x0 - 0.1:
+					w = lot.x0 - x
 				else:
-					x = 9.0
+					x = lot.x1
 					continue
 			var h := 3.5 * _rng.randi_range(1, 4)
 			var tint := _wall_tint()
@@ -347,37 +383,6 @@ func _graffiti(p: Vector3, yaw: float) -> void:
 	l.rotation.z = _rng.randf_range(-0.12, 0.12)
 
 
-## Police station with the lock-up yard behind it. Nobody gets in or out over the walls.
-func _delegacia() -> void:
-	var c := DB.PRISON_POS
-	var grey := Color(0.4, 0.4, 0.42)
-	_plane(Vector3(c.x, 0.03, c.z), Vector2(16, 16), _mat(Color(0.55, 0.55, 0.55)))
-	_block(Vector3(c.x, 3.5, 112.0), Vector3(18, 7, 2), Color(0.9, 0.9, 0.92))
-	_block(Vector3(c.x, 3, 130.0), Vector3(18, 6, 2), grey)
-	_block(Vector3(c.x - 8.5, 3, c.z), Vector3(1, 6, 16), grey)
-	_block(Vector3(c.x + 8.5, 3, c.z), Vector3(1, 6, 16), grey)
-	_collider(Vector3(c.x, 6.4, c.z), Vector3(18, 0.6, 20))
-	for k in 17:
-		_box(Vector3(c.x - 8.0 + k, 6.05, c.z), Vector3(0.12, 0.12, 16), Color(0.2, 0.2, 0.22))
-	for k in 5:
-		_box(Vector3(c.x, 6.1, c.z - 8.0 + k * 4.0), Vector3(16, 0.16, 0.16), Color(0.2, 0.2, 0.22))
-	# Front: blue band, door, lamp and the patrol cars outside.
-	_box(Vector3(c.x, 5.0, 110.95), Vector3(18, 1.2, 0.1), Color(0.1, 0.2, 0.6))
-	_box(Vector3(c.x, 1.2, 110.95), Vector3(1.6, 2.4, 0.1), Color(0.15, 0.2, 0.3))
-	_glow(Vector3(c.x - 2.0, 3.2, 110.8), Vector3(0.4, 0.4, 0.3), Color(0.2, 0.4, 1.0))
-	_glow(Vector3(c.x + 2.0, 3.2, 110.8), Vector3(0.4, 0.4, 0.3), Color(0.2, 0.4, 1.0))
-	_sign("DELEGACIA", Vector3(c.x, 5.0, 110.88), 200, Color.WHITE, PI)
-	for cx in [-5.5, 5.5]:
-		_police_car(Vector3(c.x + cx, 0, 109.8))
-
-
-func _police_car(p: Vector3) -> void:
-	_car(p, 0.0, Color(0.95, 0.95, 0.95))
-	_box(p + Vector3(0, 0.62, 0), Vector3(1.4, 0.72, 1.82), Color(0.1, 0.2, 0.6))
-	_glow(p + Vector3(-0.2, 1.58, -0.35), Vector3(0.3, 0.14, 0.4), Color(0.9, 0.1, 0.1))
-	_glow(p + Vector3(-0.2, 1.58, 0.35), Vector3(0.3, 0.14, 0.4), Color(0.15, 0.3, 1.0))
-
-
 # --- favela ---
 
 func _house_tint() -> Color:
@@ -405,6 +410,8 @@ func _favela() -> void:
 		_box(Vector3(0, y * 0.5, z0 + deep * 0.5), Vector3(1040, y, deep), earth.darkened(0.04 * (i % 2)))
 		if i < Layout.TERRACES:
 			_collider(Vector3(0, y * 0.5, z0 + deep * 0.5), Vector3(1040, y, deep))
+			# Nobody in the crowd steps off the front of a terrace.
+			Nav.add_box(Vector3(0, y - Layout.TERRACE_H + 1.0, z0 - 0.25), Vector3(1040, 1.0, 0.3))
 		# Retaining wall trim.
 		_box(Vector3(0, y - 0.1, z0 - 0.06), Vector3(1040, 0.2, 0.14), earth.lightened(0.2))
 		_houses(i, z0, y)
@@ -414,7 +421,7 @@ func _favela() -> void:
 	_baile()
 	_campinho()
 	for v in DB.VENDORS:
-		if v.pos.z > Layout.ROAD_Z:
+		if v.pos.z > Layout.ROAD_Z and not v.get("indoor", false):
 			_vendor_stall(v)
 
 

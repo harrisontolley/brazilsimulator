@@ -16,11 +16,17 @@ var roll_target := 0.0
 var height_target := 1.3
 ## One-off sink on landing that springs back by itself.
 var dip := 0.0
+## Where the view sits away from the head, in the body's own axes: out of it, mostly.
+var offset := Vector3.ZERO
+## Eye to a scope: the view goes to the head whatever distance it was following at.
+var scoped := false
 
 var _arm: SpringArm3D
 var _step := 0
 var _t := 0.0
 var _roll := 0.0
+var _height := 1.3
+var _recoil := Vector2.ZERO
 
 
 func _ready() -> void:
@@ -47,17 +53,25 @@ func pitch(amount: float) -> void:
 	rotation.x = clampf(rotation.x + amount, -1.45, 1.45)
 
 
+## Kicks the view up by `up` radians and sideways by `side`; most of it settles back.
+func recoil(up: float, side: float) -> void:
+	rotation.x = clampf(rotation.x + up * 0.4, -1.45, 1.45)
+	_recoil += Vector2(up * 0.6, side)
+
+
 func first_person() -> bool:
 	return _arm.spring_length < 0.5
 
 
 func _process(delta: float) -> void:
-	_arm.spring_length = lerpf(_arm.spring_length, STEPS[_step], minf(1.0, 12.0 * delta))
+	_arm.spring_length = lerpf(_arm.spring_length, 0.0 if scoped else STEPS[_step], minf(1.0, (30.0 if scoped else 12.0) * delta))
 	cam.fov = lerpf(cam.fov, fov_target + fov_boost, minf(1.0, 10.0 * delta))
-	position.y = lerpf(position.y, height_target, minf(1.0, 14.0 * delta))
+	_height = lerpf(_height, height_target, minf(1.0, 14.0 * delta))
+	position = Vector3(offset.x, _height + offset.y, offset.z)
 	_roll = lerpf(_roll, roll_target, minf(1.0, 9.0 * delta))
 	_t += delta
 	kick = move_toward(kick, 0.0, 0.25 * delta)
 	dip = move_toward(dip, 0.0, 1.1 * delta)
 	cam.position.y = lerpf(cam.position.y, -dip, minf(1.0, 25.0 * delta))
-	cam.rotation = Vector3(sin(_t * 13.0) + sin(_t * 7.3) * 0.5, cos(_t * 11.0) + sin(_t * 5.1) * 0.5, 0.0) * (shake + kick) + Vector3(0.0, 0.0, _roll)
+	_recoil = _recoil.lerp(Vector2.ZERO, minf(1.0, 9.0 * delta))
+	cam.rotation = Vector3(sin(_t * 13.0) + sin(_t * 7.3) * 0.5, cos(_t * 11.0) + sin(_t * 5.1) * 0.5, 0.0) * (shake + kick) + Vector3(_recoil.x, _recoil.y, _roll)

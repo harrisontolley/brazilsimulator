@@ -12,3 +12,11 @@ func report_noise(pos: Vector3, radius: float, pid: int) -> void:
 
 func report_crime(pos: Vector3, pid: int, severity: int) -> void:
 	crime.emit(pos, pid, severity)
+
+
+## Somebody who saw it has rung the police: cops come to look, and will know the face.
+signal tip(pos: Vector3, pid: int, severity: int)
+
+
+func report_tip(pos: Vector3, pid: int, severity: int) -> void:
+	tip.emit(pos, pid, severity)

@@ -2,6 +2,8 @@ extends "res://scenes/world/world_kit.gd"
 ## Procedural stylised Rio: sea (-z), sand, wave promenade, and the backdrop of hills.
 ## The avenida and everything inland of it is built by city.gd.
 
+const Places := preload("res://scenes/world/places.gd")
+const Kit := preload("res://scenes/characters/char_kit.gd")
 const City := preload("res://scenes/world/city.gd")
 
 const SAND := Color(0.86, 0.74, 0.5)
@@ -9,10 +11,19 @@ const LENGTH := 620.0
 const PROP_TINTS := [Color(0.95, 0.35, 0.25), Color(0.2, 0.6, 0.9), Color(0.98, 0.8, 0.2), Color(0.25, 0.75, 0.5), Color(0.9, 0.45, 0.75)]
 const WHITE := Color(0.95, 0.95, 0.92)
 const STEEL := Color(0.75, 0.76, 0.78)
+## The sea sheet: cells across, how far the fine middle of it reaches, and how far it goes.
+const SEA_CELLS := 200
+const SEA_NEAR := 80.0
+const SEA_REACH := 1600.0
 
 var sun: DirectionalLight3D
 var env: Environment
 var sky_mat: ProceduralSkyMaterial
+## The sea's two materials, plain and fancy, for anything that has to tell them something.
+## (Shared between matches, like the rest of the kit's materials.)
+static var sea_mats: Array[ShaderMaterial] = []
+
+var _sea_mi: MeshInstance3D
 
 var _rng := RandomNumberGenerator.new()
 var _cones: Array = []       # parasol canopies: transforms
@@ -25,6 +36,7 @@ var _ball_tints: Array = []
 func _ready() -> void:
 	_rng.seed = 1502
 	DB.solids.clear()
+	Nav.begin()
 	_init_kit()
 	_environment()
 	_ground()
@@ -36,6 +48,8 @@ func _ready() -> void:
 	_postos()
 	_pitches()
 	_parkour()
+	_cover()
+	_pracas()
 	_instances(_cyl(0.0, 1.5, 0.55, 10), _vertex_mat(), _cones, _cone_tints)
 	_instances(_cyl(0.04, 0.04, 2.2, 5), _mat(Color(0.9, 0.9, 0.9)), _poles)
 	_instances(_ball(1.0, 2.0, 8), _vertex_mat(), _balls, _ball_tints)
@@ -76,38 +90,35 @@ func _environment() -> void:
 	sun = DirectionalLight3D.new()
 	sun.light_color = Color(1.0, 0.95, 0.85)
 	sun.light_energy = 1.0
-	sun.shadow_enabled = true
-	sun.directional_shadow_max_distance = 140.0
 	add_child(sun)
+	Settings.shade(sun, env)
 	# High over the sea and a little toward Sugarloaf, so the seafront is lit.
 	sun.look_at_from_position(Vector3(-0.45, 0.8, -0.5) * 100.0, Vector3.ZERO)
 
 
 func _ground() -> void:
-	_collider(Vector3(0, -0.5, 60), Vector3(800, 1, 360))
+	# Dry land is one flat slab; from the shore the bed falls away in ramps.
+	_collider(Vector3(0, -0.5, 101), Vector3(800, 1, 278))
+	for k in range(1, Layout.SEABED.size()):
+		var a := Layout.SEABED[k - 1]
+		var b := Layout.SEABED[k]
+		var run := Vector2(a.x - b.x, a.y - b.y)
+		var tilt := -atan2(run.y, run.x)
+		var up := Vector3(0, cos(tilt), sin(tilt))
+		_collider(Vector3(0, (a.y + b.y) * 0.5, (a.x + b.x) * 0.5) - up * 0.5, Vector3(840, 1, run.length() + 0.2), Vector3(tilt, 0, 0))
 	# Invisible limits: beach ends, deep water and the top of the favela.
-	_collider(Vector3(-306, 60, 50), Vector3(2, 120, 300))
-	_collider(Vector3(306, 60, 50), Vector3(2, 120, 300))
-	_collider(Vector3(0, 10, -82), Vector3(700, 20, 2))
+	_collider(Vector3(-306, 50, -135), Vector3(2, 140, 670))
+	_collider(Vector3(306, 50, -135), Vector3(2, 140, 670))
+	_collider(Vector3(0, 20, Layout.SEA_EDGE_Z - 1.0), Vector3(700, 80, 2))
 	_collider(Vector3(0, 60, Layout.BACK_Z + 1.0), Vector3(700, 120, 2))
 
 	var sand := ShaderMaterial.new()
 	sand.shader = load("res://shaders/sand.gdshader")
 	sand.set_shader_parameter("dry", SAND)
-	_plane(Vector3(0, 0, 0), Vector2(LENGTH + 400, 90), sand)
-
-	var sea_mat := ShaderMaterial.new()
-	sea_mat.shader = load("res://shaders/sea.gdshader")
-	var sea := PlaneMesh.new()
-	sea.size = Vector2(3000, 1500)
-	sea.subdivide_width = 160
-	sea.subdivide_depth = 80
-	sea.material = sea_mat
-	var sea_mi := MeshInstance3D.new()
-	sea_mi.mesh = sea
-	sea_mi.position = Vector3(0, 0.3, -38 - 750)
-	sea_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(sea_mi)
+	sand.set_shader_parameter("shore_z", Layout.SHORE_Z)
+	_plane(Vector3(0, 0, (Layout.SHORE_Z + 45.0) * 0.5), Vector2(LENGTH + 400, 45.0 - Layout.SHORE_Z), sand)
+	_seabed()
+	_sea()
 
 	var prom := ShaderMaterial.new()
 	prom.shader = load("res://shaders/promenade.gdshader")
@@ -121,6 +132,104 @@ func _ground() -> void:
 	_box(Vector3(0, 0.03, 51.3), Vector3(LENGTH + 400, 0.04, 1.4), Color(0.7, 0.2, 0.16))
 	_box(Vector3(0, 0.04, 50.55), Vector3(LENGTH + 400, 0.04, 0.1), WHITE)
 	_box(Vector3(0, 0.08, 52.1), Vector3(LENGTH + 400, 0.16, 0.3), Color(0.75, 0.75, 0.75))
+
+
+## The sand carried on under the water, out to where nobody can see the bottom.
+func _seabed() -> void:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var pts: Array[Vector2] = Layout.SEABED.duplicate()
+	pts.append(Vector2(-1600, Layout.SEABED[Layout.SEABED.size() - 1].y))
+	for k in range(1, pts.size()):
+		var a := pts[k - 1]
+		var b := pts[k]
+		var n := Vector3(0, a.x - b.x, a.y - b.y).normalized()
+		st.set_normal(n)
+		for v in [Vector3(-1500, a.y, a.x), Vector3(1500, b.y, b.x), Vector3(1500, a.y, a.x), Vector3(-1500, a.y, a.x), Vector3(-1500, b.y, b.x), Vector3(1500, b.y, b.x)]:
+			st.add_vertex(v)
+	var mat := ShaderMaterial.new()
+	mat.shader = load("res://shaders/seabed.gdshader")
+	mat.set_shader_parameter("dry", SAND)
+	mat.set_shader_parameter("shore_z", Layout.SHORE_Z)
+	mat.set_shader_parameter("sea_y", Layout.SEA_Y)
+	var mi := MeshInstance3D.new()
+	mi.mesh = st.commit()
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(mi)
+
+
+## The sea: one sheet that follows the camera, fine underfoot and coarse at the horizon.
+func _sea() -> void:
+	var half := SEA_CELLS / 2
+	var v := PackedVector3Array()
+	var uv := PackedVector2Array()
+	var idx := PackedInt32Array()
+	for j in SEA_CELLS + 1:
+		for i in SEA_CELLS + 1:
+			var a := float(i - half) / half
+			var b := float(j - half) / half
+			v.append(Vector3(_sea_reach(a), 0, _sea_reach(b)))
+			# How wide the mesh is here, so the shader can leave out waves too short to draw.
+			uv.append(Vector2(maxf(_sea_step(a), _sea_step(b)), 0))
+	for j in SEA_CELLS:
+		for i in SEA_CELLS:
+			var k := j * (SEA_CELLS + 1) + i
+			idx.append_array([k, k + 1, k + SEA_CELLS + 2, k, k + SEA_CELLS + 2, k + SEA_CELLS + 1])
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = v
+	arrays[Mesh.ARRAY_TEX_UV] = uv
+	arrays[Mesh.ARRAY_INDEX] = idx
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	mesh.custom_aabb = AABB(Vector3(-SEA_REACH, -4, -SEA_REACH), Vector3(SEA_REACH * 2.0, 8, SEA_REACH * 2.0))
+	for path in ["res://shaders/sea_low.gdshader", "res://shaders/sea.gdshader"] if sea_mats.is_empty() else []:
+		var m := ShaderMaterial.new()
+		m.shader = load(path)
+		m.render_priority = -1
+		Layout.sea_params(m)
+		night_mats.append(m)
+		sea_mats.append(m)
+	_sea_mi = MeshInstance3D.new()
+	_sea_mi.mesh = mesh
+	_sea_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_sea_mi.position.y = Layout.SEA_Y
+	add_child(_sea_mi)
+	_sea_quality()
+	Settings.changed.connect(_sea_quality)
+
+
+## Distance from the middle of the sea sheet of the mesh line a fraction `u` of the way out.
+static func _sea_reach(u: float) -> float:
+	return signf(u) * (SEA_NEAR * absf(u) + (SEA_REACH - SEA_NEAR) * pow(absf(u), 4.0))
+
+
+static func _sea_step(u: float) -> float:
+	return (SEA_NEAR + 4.0 * (SEA_REACH - SEA_NEAR) * pow(absf(u), 3.0)) / (SEA_CELLS / 2)
+
+
+func _sea_quality() -> void:
+	_sea_mi.material_override = sea_mats[1 if Settings.water >= Settings.WATER_HIGH else 0]
+
+
+func _process(delta: float) -> void:
+	# The waves keep time with the match, so everyone's sea is the same sea; once the match
+	# is over they just carry on.
+	if MatchState.running and not MatchState.ended:
+		Layout.sea_t = MatchState.time
+	else:
+		Layout.sea_t += delta
+	var ev = Net.game.events if Net.game != null else null
+	Layout.sea_storm = ev.storm if ev != null else 0.0
+	var cam := get_viewport().get_camera_3d()
+	if cam != null:
+		var at := cam.global_position
+		_sea_mi.position = Vector3(snappedf(at.x, 2.0), Layout.SEA_Y, snappedf(at.z, 2.0))
+		Layout.cam_under = at.z < Layout.WATER_Z and at.y < Layout.wave_y(at.x, at.z)
+	for m in sea_mats:
+		m.set_shader_parameter("sea_time", Layout.sea_t)
+		m.set_shader_parameter("sea_storm", Layout.sea_storm)
 
 
 func _hills() -> void:
@@ -195,6 +304,10 @@ func _decor() -> void:
 		_box(at + Vector3(-1.3, 0.35, 1.0), Vector3(1.0, 0.7, 0.6), Color(0.2, 0.5, 0.85))
 		_box(at + Vector3(2.3, 2.2, 2.3), Vector3(0.05, 4.4, 0.05), STEEL)
 		_flag(at + Vector3(2.3, 4.0, 2.3))
+		# Shade nobody looks twice into, and a canopy the helicopter cannot see through.
+		_collider(at + Vector3(0, 2.45, 0), Vector3(4.6, 0.1, 4.6))
+		Places.add_cover(AABB(at - Vector3(2.3, 0.5, 2.3), Vector3(4.6, 3.0, 4.6)), 0.6, false)
+		Places.add_hide(at + Vector3(-1.3, 0.2, 0.2), "barraca", at + Vector3(-1.3, 0.2, -0.6))
 		x += rng.randf_range(34.0, 46.0)
 
 
@@ -280,11 +393,80 @@ func _kiosk(p: Vector3, roof: Color, text: String) -> void:
 		var t := p + Vector3(side, 0, -4.2)
 		_box(t + Vector3(0, 0.72, 0), Vector3(0.9, 0.06, 0.9), Color(0.95, 0.95, 0.95))
 		_box(t + Vector3(0, 0.36, 0), Vector3(0.1, 0.72, 0.1), STEEL)
+		var table := Places.new_table()
 		for s in 4:
 			var off := Vector3(cos(s * PI * 0.5 + 0.6), 0, sin(s * PI * 0.5 + 0.6)) * 0.85
 			_box(t + off + Vector3(0, 0.23, 0), Vector3(0.36, 0.46, 0.36), roof.lightened(0.2))
+			Places.add_seat(t + off, Kit.face(-off), -1, table)
 		_parasol(t, roof.lightened(0.15))
 	_sign(text, p + Vector3(0, 3.7, 0), 96, Color.WHITE, 0.0, true)
+	Places.add_hide(p + Vector3(0, 0.2, 1.9), "quiosque", p + Vector3(0, 0.2, 2.3))
+
+
+## Concrete tables with four stools along the calçadão: for dominoes, a beer, an argument.
+func _pracas() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 5381
+	var grey := Color(0.74, 0.73, 0.7)
+	for i in 14:
+		var at := Vector3(-275.0 + i * 42.0 + rng.randf_range(-6.0, 6.0), 0, 44.6)
+		var busy := false
+		for v in DB.VENDORS:
+			busy = busy or (v.pos.z < Layout.ROAD_Z and absf(v.pos.x - at.x) < 7.0)
+		for roda in DB.RODAS:
+			busy = busy or absf(roda.x - at.x) < 9.0
+		if busy:
+			continue
+		_solid(at + Vector3(0, 0.36, 0), Vector3(0.9, 0.72, 0.9), grey)
+		_box(at + Vector3(0, 0.75, 0), Vector3(1.15, 0.07, 1.15), grey.lightened(0.15))
+		# A chequer board set into the top.
+		for k in 16:
+			if (k / 4 + k % 4) % 2 == 0:
+				_box(at + Vector3(-0.3 + (k % 4) * 0.2, 0.79, -0.3 + (k / 4) * 0.2), Vector3(0.2, 0.01, 0.2), Color(0.2, 0.2, 0.22))
+		var table := Places.new_table()
+		for s in 4:
+			var off := Vector3(cos(s * PI * 0.5), 0, sin(s * PI * 0.5)) * 0.95
+			_box(at + off + Vector3(0, 0.23, 0), Vector3(0.4, 0.46, 0.4), grey.darkened(0.1))
+			Places.add_seat(at + off, Kit.face(-off), -1, table)
+
+
+## Things to duck behind on the open sand: striped windbreaks, upturned fishing boats to
+## crawl under, and the scrub along the top of the beach.
+func _cover() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 8128
+	var n := 0
+	while n < 16:
+		var p := Vector3(rng.randf_range(-285, 285), 0, rng.randf_range(-22, 26))
+		if Layout.on_play_area(p, 3.0):
+			continue
+		n += 1
+		var yaw := rng.randf_range(-0.5, 0.5)
+		var tint: Color = PROP_TINTS[rng.randi() % PROP_TINTS.size()]
+		_solid(p + Vector3(0, 0.6, 0), Vector3(3.2, 1.2, 0.08), Color(0.97, 0.97, 0.94), Vector3(0, yaw, 0))
+		for k in 4:
+			_box(p + Basis(Vector3.UP, yaw) * Vector3(-1.2 + k * 0.8, 0.6, 0), Vector3(0.4, 1.2, 0.1), tint, Vector3(0, yaw, 0))
+		for side in [-1.6, 1.6]:
+			_box(p + Basis(Vector3.UP, yaw) * Vector3(side, 0.75, 0), Vector3(0.06, 1.5, 0.06), WOOD, Vector3(0, yaw, 0))
+	for i in 10:
+		var p := Vector3(-270.0 + i * 60.0 + rng.randf_range(-12, 12), 0, rng.randf_range(-29, -24))
+		var yaw := rng.randf_range(-0.6, 0.6)
+		var hull := Color.from_hsv(rng.randf(), 0.55, 0.85)
+		_solid(p + Vector3(0, 0.4, 0), Vector3(3.8, 0.8, 1.3), hull, Vector3(0, yaw, 0))
+		_box(p + Vector3(0, 0.84, 0), Vector3(3.9, 0.1, 0.16), hull.darkened(0.4), Vector3(0, yaw, 0))
+		_box(p + Vector3(0, 0.25, 0), Vector3(3.84, 0.14, 1.34), Color(0.95, 0.95, 0.92), Vector3(0, yaw, 0))
+		Places.add_hide(p + Vector3(0, 0.2, 1.4), "barco", p + Vector3(0, 0.2, 1.7))
+	# Restinga scrub: no good standing up in, plenty crouched.
+	for i in 22:
+		var p := Vector3(-290.0 + i * 27.0 + rng.randf_range(-8, 8), 0, rng.randf_range(30.5, 37.5))
+		if Layout.on_play_area(p, 3.0):
+			continue
+		var w := rng.randf_range(3.0, 5.5)
+		var d := rng.randf_range(2.0, 3.2)
+		for k in 7:
+			var g := Color(0.16, 0.42 + rng.randf() * 0.14, 0.18)
+			_box(p + Vector3(rng.randf_range(-0.5, 0.5) * w, 0.45, rng.randf_range(-0.5, 0.5) * d), Vector3(rng.randf_range(1.0, 1.7), rng.randf_range(0.7, 1.1), rng.randf_range(1.0, 1.6)), g, Vector3(0, rng.randf() * PI, 0))
+		Places.add_cover(AABB(p - Vector3(w * 0.5 + 0.4, 0.5, d * 0.5 + 0.4), Vector3(w + 0.8, 2.5, d + 0.8)), 0.4, true)
 
 
 ## Benches, bins, lamps, pay phones, showers and an outdoor gym along the calçadão.

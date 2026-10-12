@@ -5,6 +5,7 @@ extends Node3D
 ## the map into one MultiMesh. Call _flush once everything is placed.
 
 const Layout := preload("res://scenes/world/layout.gd")
+const Nav := preload("res://scenes/world/nav.gd")
 
 const CHUNK := 150.0
 const WOOD := Color(0.62, 0.45, 0.28)
@@ -95,6 +96,7 @@ func _collider(p: Vector3, size: Vector3, rot := Vector3.ZERO) -> void:
 	cs.position = p
 	cs.rotation = rot
 	_static.add_child(cs)
+	Nav.add_box(p, size, rot)
 
 
 # --- everything else ---
