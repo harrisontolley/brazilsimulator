@@ -14,6 +14,7 @@ const Balls := preload("res://scenes/world/balls.gd")
 const Motos := preload("res://scenes/world/motos.gd")
 const Crowd := preload("res://scenes/crowd/crowd_manager.gd")
 const Police := preload("res://scenes/police/police_manager.gd")
+const Dogs := preload("res://scenes/crowd/dog_manager.gd")
 const Hud := preload("res://scenes/ui/hud.gd")
 const Kit := preload("res://scenes/characters/char_kit.gd")
 const Layout := preload("res://scenes/world/layout.gd")
@@ -45,6 +46,7 @@ var balls: Node3D
 var events: Node3D
 var crowd: Node3D
 var police: Node3D
+var dogs: Node3D
 var hud: CanvasLayer
 var fx: Node3D
 var interaction: Node
@@ -100,6 +102,9 @@ func _ready() -> void:
 	police = Police.new()
 	police.name = "Police"
 	add_child(police)
+	dogs = Dogs.new()
+	dogs.name = "Dogs"
+	add_child(dogs)
 	threats = Threats.new()
 	threats.name = "Threats"
 	add_child(threats)
@@ -955,6 +960,7 @@ func cl_match_start(seed_value: int, duration: float, pdata: Array) -> void:
 	MatchState.ended = false
 	MatchState.running = true
 	crowd.setup(seed_value)
+	dogs.setup(seed_value, crowd)
 	traffic.setup(seed_value)
 	motos.reset()
 	if local_player != null:
@@ -1585,6 +1591,9 @@ func srv_attack(origin: Vector3, dir: Vector3) -> void:
 		DB.WHO_NPC:
 			if crowd.srv_damage_npc(hit.id, dmg, pid, hit.zone, ko):
 				res |= DB.FX_KO
+		DB.WHO_DOG:
+			if dogs.srv_damage(hit.id, dmg, pid):
+				res |= DB.FX_KILL
 	bcast("cl_fx", [origin, origin + dir * hit.t, w.melee, DB.WHO_PLAYER, pid, hit.type, hit.id, res])
 	if p.st.jail > 0.0 and w.melee and hit.type != DB.WHO_NONE:
 		prison.srv_fight(p, origin + dir * hit.t, res & DB.FX_KO != 0)
@@ -1628,6 +1637,9 @@ func _ray_hit(o: Vector3, d: Vector3, max_t: float, grow: float, exclude: int) -
 	var n: Array = crowd.ray_pick(o, d, best.t, grow)
 	if n[0] >= 0:
 		best = {"type": DB.WHO_NPC, "id": n[0], "t": n[1], "zone": n[2]}
+	var dog: Array = dogs.ray_pick(o, d, best.t, grow)
+	if dog[0] >= 0:
+		best = {"type": DB.WHO_DOG, "id": dog[0], "t": dog[1], "zone": DB.ZONE_BODY}
 	return best
 
 
@@ -1673,7 +1685,7 @@ func cl_fx(from: Vector3, to: Vector3, melee: bool, src_type: int, src_id: int, 
 		Sfx.play("shot", from, 4.0)
 	elif hit_type != DB.WHO_NONE:
 		Sfx.play("punch", to)
-	if hit_type != DB.WHO_NONE and hit_type != DB.WHO_PLAYER and res & DB.FX_KILL == 0:
+	if hit_type != DB.WHO_NONE and hit_type != DB.WHO_PLAYER and hit_type != DB.WHO_DOG and res & DB.FX_KILL == 0:
 		Sfx.play("grunt", to, -3.0, 0.8 + (hit_id * 7 % 50) * 0.01)
 	if res & DB.FX_HEAD:
 		fx.headshot(to, not melee)
@@ -1700,6 +1712,7 @@ func _fx_actor(type: int, id: int, attack: bool) -> void:
 				p.fx_event(attack)
 		DB.WHO_COP: police.fx_event(id, attack)
 		DB.WHO_NPC: crowd.fx_event(id, attack)
+		DB.WHO_DOG: dogs.fx_event(id, attack)
 
 
 ## A client reporting that it walked in front of vehicle `vi`.

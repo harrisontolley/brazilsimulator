@@ -617,6 +617,51 @@ func _restyle(i: int) -> void:
 		_drop_held(i)
 
 
+## Which way NPC i is facing.
+func yaw_of(i: int) -> float:
+	return _yaw[i]
+
+
+## Up to n people strolling the promenade who could be walking a dog.
+func pet_owners(n: int) -> Array:
+	var out: Array = []
+	for k in range(5, _walkers.size(), 9):
+		var i := _walkers[k]
+		if _home[i].z > 41.0 and _home[i].z < 50.5 and _w_spd[i] < 2.0 and _w_pose[i] == Kit.WALK and DB.ARCHETYPES[arch[i]].id != "vendor":
+			out.append(i)
+			if out.size() >= n:
+				break
+	return out
+
+
+## Somebody running for it within r of p, or -1.
+func fleeing_near(p: Vector3, r: float) -> int:
+	for i in _active:
+		if state[i] == FLEE and _ov.has(i) and _ov[i][5] and absf(pos[i].x - p.x) < r and absf(pos[i].z - p.z) < r and absf(pos[i].y - p.y) < 2.0:
+			return i
+	return -1
+
+
+## `pid` has hurt a dog at `at` in front of people. Some of them are not having it.
+func srv_outrage(at: Vector3, pid: int) -> void:
+	if MatchState.time < _fight_ok:
+		return
+	_fight_ok = MatchState.time + 1.5
+	var angry := 0
+	for i in count:
+		if state[i] != AMBIENT or _lying[i] == 1 or absf(pos[i].x - at.x) > 11.0 or absf(pos[i].z - at.z) > 11.0 or absf(pos[i].y - at.y) > 3.0:
+			continue
+		if angry < 3 and randf() < 0.3 and Places.room_at(pos[i]) < 0:
+			_hostile[i] = {"target": pid, "cd": 0.8, "until": 12.0, "shooter": false}
+			_srv_set(i, HOSTILE)
+			angry += 1
+		elif _grp[i] < 0 and not _gawk.has(i) and randf() < 0.5:
+			_gawk[i] = MatchState.time + GAWK_TIME
+			Net.game.bcast("cl_gawk", [i, at, Kit.POINT if randf() < 0.6 else Kit.FILM, true], self)
+	if angry > 0:
+		Net.game.send(pid, "cl_toast", ["People saw what you did to that dog."])
+
+
 ## Is NPC i still at their activity, free to be told what to do?
 func act_free(i: int) -> bool:
 	return state[i] == AMBIENT and _grp[i] >= 0

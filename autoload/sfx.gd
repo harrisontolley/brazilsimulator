@@ -164,6 +164,14 @@ func _build() -> void:
 	made["grunt"] = _wav(_voice(0.22, [150.0, 120.0, 95.0], [620.0, 1050.0], 0.35, 5), false)
 	made["die"] = _wav(_voice(0.7, [210.0, 170.0, 110.0, 80.0], [560.0, 980.0], 0.3, 6), false)
 	made["shout"] = _wav(_voice(0.4, [230.0, 300.0, 240.0], [640.0, 1900.0], 0.15, 7), false)
+	# Dogs: a yap, a woof and a boom, by size, and the rest of what they have to say.
+	made["bark0"] = _wav(_bark([820.0, 1050.0, 600.0], 0.09, 10), false)
+	made["bark1"] = _wav(_bark([380.0, 470.0, 260.0], 0.13, 11), false)
+	made["bark2"] = _wav(_bark([190.0, 240.0, 130.0], 0.17, 12), false)
+	made["growl"] = _wav(_growl(), false)
+	made["yelp"] = _wav(_voice(0.24, [700.0, 1250.0, 1100.0, 600.0], [1100.0, 2300.0], 0.12, 13), false)
+	made["whine"] = _wav(_voice(0.65, [820.0, 980.0, 900.0, 700.0], [900.0, 2500.0], 0.05, 14), false)
+	made["bite"] = _wav(_bite(), false)
 	for k in BABBLE:
 		made["babble%d" % k] = _wav(_syllable(k), false)
 	_adopt.call_deferred(made)
@@ -374,6 +382,38 @@ func _voice(seconds: float, pitch: Array, vowel: Array, rough: float, seed_value
 		breath += 0.5 * (rng.randf_range(-1.0, 1.0) - breath)
 		var env := minf(1.0, u * 18.0) * minf(1.0, (1.0 - u) * 5.0)
 		f[i] = (v * (1.0 + rough * breath * 1.5) + breath * rough * 2.0) * env
+	return f
+
+
+## One bark: a rough shout with a hard front edge, as long as the dog is big.
+func _bark(pitch: Array, seconds: float, seed_value: int) -> PackedFloat32Array:
+	var f := _voice(seconds, pitch, [pitch[0] * 1.9, pitch[0] * 3.6], 0.9, seed_value)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_value
+	var out := _buf(seconds + 0.08)
+	for i in f.size():
+		out[i] = f[i] * exp(-float(i) / RATE / (seconds * 0.55)) * 0.2
+	_hiss(out, rng, 0.0, 0.02, 0.5, 0.5)
+	return out
+
+
+## Deep in the throat, rattling.
+func _growl() -> PackedFloat32Array:
+	var f := _voice(0.9, [88.0, 82.0, 92.0, 80.0], [420.0, 900.0], 1.0, 15)
+	for i in f.size():
+		var t := float(i) / RATE
+		f[i] *= 0.55 + 0.45 * sin(TAU * 27.0 * t)
+	return f
+
+
+## Teeth meeting.
+func _bite() -> PackedFloat32Array:
+	var f := _buf(0.18)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 16
+	_hiss(f, rng, 0.0, 0.012, 1.0, 0.6)
+	_tone(f, 0.0, 900.0, 300.0, 0.015, 0.6)
+	_tone(f, 0.01, 180.0, 90.0, 0.03, 0.7)
 	return f
 
 

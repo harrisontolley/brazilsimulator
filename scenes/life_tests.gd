@@ -24,6 +24,8 @@ static func run(g: Node, what: String) -> bool:
 			await _poses(g)
 		"panic":
 			await _panic(g)
+		"dogs":
+			await _dogs(g)
 		_:
 			return false
 	return true
@@ -290,3 +292,105 @@ static func _panic(g: Node) -> void:
 			alive_after += 1
 	var ok: bool = near.size() >= 8 and ran + stared >= near.size() * 0.6 and ran >= near.size() * 0.4 and far >= ran * 0.5 and inside == 0 and alive_after == alive_before and crowd._scream_ms > 0
 	g.debug_result("panic", ok, "bystanders %d ran %d (got clear %d) stared %d, inside things %d, vanished %d, screamed %s " % [near.size(), ran, far, stared, inside, alive_before - alive_after, crowd._scream_ms > 0] + str(stuck))
+
+
+## Somewhere on the sand with nothing within r of it.
+static func _clearing(r: float) -> Vector3:
+	for x in range(-200, 200, 7):
+		for z in range(-22, 24, 5):
+			var c := Vector3(x, 0, z)
+			var ok := not Layout.on_play_area(c, r)
+			for a in 16:
+				for d in [r, r * 0.6, r * 0.3]:
+					ok = ok and not Nav.blocked(c + Vector3(cos(a * TAU / 16.0), 0, sin(a * TAU / 16.0)) * d)
+			if ok:
+				return c
+	return Vector3(0, 0, 0)
+
+
+## One of every breed for the camera, every trick they know, and then the three kinds of
+## dog there are to meet: one that goes for you, one that runs, one that can be killed.
+static func _dogs(g: Node) -> void:
+	var dogs = g.dogs
+	var D = dogs
+	var pl = g.local_player
+	var base := _clearing(11.0)
+	var breeds := {}
+	for i in dogs.dogs.size():
+		if not breeds.has(dogs.dogs[i].breed):
+			breeds[dogs.dogs[i].breed] = i
+	if out_dir() != "":
+		g.crowd.debug_only([])
+		pl.global_position = base + Vector3(0, 0.2, 40)
+		var used := {}
+		for b in breeds:
+			used[breeds[b]] = true
+			dogs.debug_pose(breeds[b], base + Vector3((b - 3.5) * 1.5, 0, 0), PI * 0.6, D.STAND)
+		var anims := [D.TROT, D.RUN, D.SIT, D.LIE, D.SNIFF, D.BARK, D.GROWL, D.DIG, D.SCRATCH, D.PEE, D.BEG, D.COWER, D.DEAD, D.WAG]
+		var k := 0
+		for i in dogs.dogs.size():
+			if used.has(i) or k >= anims.size():
+				continue
+			dogs.debug_pose(i, base + Vector3((k % 7 - 3) * 1.7, 0, -3.0 - (k / 7) * 2.6), PI * 0.6, anims[k], 2.0 if anims[k] == D.TROT else (6.0 if anims[k] == D.RUN else 0.0))
+			used[i] = true
+			k += 1
+		for i in dogs.dogs.size():
+			if not used.has(i):
+				dogs.debug_pose(i, Vector3(250, 0, -30), 0.0, D.SIT)
+		var cam := _camera(g, base + Vector3(0.5, 2.6, 6.5), base + Vector3(0, 0.3, -3.2), 50.0)
+		for shot in 2:
+			await g.get_tree().create_timer(0.45).timeout
+			await _snap(g, "dogs_%d" % shot)
+		cam.queue_free()
+		cam = _camera(g, base + Vector3(0.0, 1.3, 5.5), base + Vector3(0, 0.35, 0), 60.0)
+		await g.get_tree().create_timer(0.3).timeout
+		await _snap(g, "dogs_breeds")
+		cam.queue_free()
+		g.debug_result("dogs", breeds.size() == 8, "pictures of %d breeds" % breeds.size())
+		return
+	# Everybody else out of the way.
+	for i in dogs.dogs.size():
+		dogs.debug_pose(i, Vector3(-250 + i * 3, 0, -30), 0.0, D.SIT)
+	g.crowd.debug_only([])
+	var inside := 0
+	# One that goes for you.
+	pl.global_position = base + Vector3(0, 0.2, 0)
+	pl.st.hp = 100.0
+	var mean: int = dogs.debug_dog(D.PITBULL, D.AGGRESSIVE, base + Vector3(6.5, 0, 0))
+	var warned := false
+	var t := 0.0
+	while t < 9.0 and pl.st.hp >= 100.0:
+		await g.get_tree().process_frame
+		t += g.get_process_delta_time()
+		warned = warned or dogs.dogs[mean].state == D.WARN
+		if Nav.blocked(dogs.dogs[mean].pos):
+			inside += 1
+	var bitten: bool = pl.st.hp < 100.0
+	var bite_t := t
+	# A bullet settles it.
+	var pick: Array = dogs.ray_pick(pl.global_position + Vector3(0, 1.2, 0), (dogs.dogs[mean].pos + Vector3(0, 0.4, 0) - pl.global_position - Vector3(0, 1.2, 0)).normalized(), 30.0, 0.0)
+	var killed: bool = dogs.srv_damage(mean, 9999.0, 1)
+	await g.get_tree().create_timer(0.3).timeout
+	var dead: bool = killed and not dogs.alive(mean) and (dogs._state[mean] & 15) == D.DEAD
+	# One that wants nothing to do with you.
+	pl.st.hp = 100.0
+	pl.global_position = base + Vector3(-40, 0.2, 0)
+	var shy: int = dogs.debug_dog(D.CARAMELO, D.SKITTISH, base + Vector3(-37.0, 0, 0))
+	t = 0.0
+	while t < 4.0:
+		await g.get_tree().process_frame
+		t += g.get_process_delta_time()
+		if Nav.blocked(dogs.dogs[shy].pos):
+			inside += 1
+	var fled: float = dogs.dogs[shy].pos.distance_to(pl.global_position)
+	# And one that thinks you are wonderful.
+	pl.global_position = base + Vector3(-80, 0.2, 10)
+	var pal: int = dogs.debug_dog(D.LABRADOR, D.FRIENDLY, base + Vector3(-76.0, 0, 10))
+	t = 0.0
+	var followed := false
+	while t < 6.0 and not followed:
+		await g.get_tree().process_frame
+		t += g.get_process_delta_time()
+		followed = dogs.dogs[pal].state == D.FOLLOW
+	var ok: bool = breeds.size() == 8 and warned and bitten and pick[0] == mean and dead and fled > 10.0 and followed and inside == 0 and pl.st.hp >= 100.0
+	g.debug_result("dogs", ok, "breeds %d dogs %d, warned %s bitten %s after %.1f s, ray found it %s, died %s, shy one %.1f m off, friend follows %s, inside things %d" % [breeds.size(), dogs.dogs.size(), warned, bitten, bite_t, pick[0] == mean, dead, fled, followed, inside])

@@ -30,8 +30,6 @@ var _skis: MultiMesh
 var _surf: MultiMesh
 var _heads: MultiMesh
 var _head_home: Array = []
-var _dogs: MultiMesh
-var _dog_home: Array = []
 var _volley: MultiMesh
 var _clouds: MultiMesh
 var _cloud_home: Array = []
@@ -51,7 +49,6 @@ func _ready() -> void:
 	_build_birds(rng)
 	_build_kites(rng)
 	_build_sea(rng)
-	_build_dogs(rng)
 	_build_sky(rng)
 	_apply_day()
 
@@ -169,28 +166,6 @@ func _build_sea(rng: RandomNumberGenerator) -> void:
 	tanker.material_override = _vertex_mat()
 	tanker.position = Vector3(900, 0, -500)
 	_ship.add_child(tanker)
-
-
-func _build_dogs(rng: RandomNumberGenerator) -> void:
-	# Vira-lata caramelo: the stray every beach has a pack of.
-	var tan := Color(0.8, 0.56, 0.28)
-	var parts: Array = [
-		part(Vector3(0, 0.42, 0), Vector3(0.26, 0.26, 0.75), tan),
-		part(Vector3(0, 0.6, -0.48), Vector3(0.24, 0.24, 0.3), tan),
-		part(Vector3(0, 0.55, -0.68), Vector3(0.13, 0.12, 0.16), tan.darkened(0.35)),
-		part(Vector3(0, 0.6, 0.45), Vector3(0.06, 0.06, 0.32), tan, Vector3(0.7, 0, 0)),
-	]
-	for sx in [-0.1, 0.1]:
-		parts.append(part(Vector3(sx, 0.76, -0.42), Vector3(0.07, 0.14, 0.05), tan.darkened(0.3)))
-		for sz in [-0.28, 0.28]:
-			parts.append(part(Vector3(sx, 0.15, sz), Vector3(0.08, 0.3, 0.08), tan))
-	var xf: Array = []
-	var tint: Array = []
-	for i in 18:
-		_dog_home.append([Vector3(rng.randf_range(-280, 280), 0.0, rng.randf_range(-24, 30)), rng.randf_range(6.0, 16.0), rng.randf() * TAU, rng.randf_range(0.25, 0.5)])
-		xf.append(Transform3D())
-		tint.append(Color(1, 1, 1).darkened(rng.randf() * 0.45))
-	_dogs = _free_multi(compose(parts), xf, tint)
 
 
 func _build_sky(rng: RandomNumberGenerator) -> void:
@@ -348,17 +323,6 @@ func _process(delta: float) -> void:
 		var u := fposmod(t * 0.55 + i * 0.37, 2.0)
 		var k := u if u < 1.0 else 2.0 - u
 		_volley.set_instance_transform(i, Transform3D(Basis(), c + Vector3(lerpf(-5.0, 5.0, k), 1.2 + sin(fposmod(u, 1.0) * PI) * 3.2, sin(i + floorf(t * 0.55)) * 1.5)))
-
-	for i in _dog_home.size():
-		var h: Array = _dog_home[i]
-		var home: Vector3 = h[0]
-		var r: float = h[1]
-		var ph: float = h[2]
-		var w: float = h[3]
-		var a := t * w + ph
-		var p := home + Vector3(cos(a) * r, absf(sin(t * 9.0 + ph)) * 0.08, sin(a * 2.0) * r * 0.5)
-		var v := Vector3(-sin(a) * r, 0, cos(a * 2.0) * r)
-		_dogs.set_instance_transform(i, Transform3D(Basis(Vector3.UP, atan2(-v.x, -v.z)), p))
 
 	for i in _cloud_home.size():
 		var h: Array = _cloud_home[i]
