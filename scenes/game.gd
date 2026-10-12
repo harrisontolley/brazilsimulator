@@ -337,7 +337,9 @@ func _debug_test(what: String) -> void:
 			var front: int = pl.st.heat
 			var hide: int = Places.hide_near(pl.global_position, 400.0)
 			pl.global_position = Places.hides[hide].pos
-			interaction.srv_act(interaction.acts.size() - Places.hides.size() + hide, 0)
+			for act in interaction.acts:
+				if act.kind == &"hide" and act.arg == hide:
+					interaction.srv_act(act.id, 0)
 			await get_tree().create_timer(0.3).timeout
 			var tucked: bool = pl.st.hide == hide and not police._sees(cop, pl, 400.0, PI)
 			srv_unhide_me()

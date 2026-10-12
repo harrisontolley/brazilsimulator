@@ -31,7 +31,23 @@ const MOUSE := {
 }
 
 
+## Set by a scripted test, which presses keys with no window to capture a mouse in.
+var scripted := false
+
+
+## Is the player at the controls: mouse captured, or a script standing in for them?
+func playing() -> bool:
+	return scripted or Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+
+
 func _ready() -> void:
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--test="):
+			scripted = true
+		# A run that only exists to take pictures keeps out of the way of whoever is at the desk.
+		if a.begins_with("--shot=") or a.begins_with("--out="):
+			DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_NO_FOCUS, true)
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_MINIMIZED)
 	for action in KEYS:
 		var e := InputEventKey.new()
 		e.physical_keycode = KEYS[action]

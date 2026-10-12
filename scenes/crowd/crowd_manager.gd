@@ -1409,6 +1409,8 @@ func debug_stand(at: Vector3, yaw: float) -> int:
 	_walker[i] = 0
 	_lying[i] = 0
 	_idle[i] = Kit.STAND
+	_grp[i] = -1
+	_sit[i] = 0
 	_home[i] = at
 	_yaw[i] = yaw
 	hp[i] = 60.0

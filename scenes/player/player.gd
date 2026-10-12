@@ -342,7 +342,7 @@ func aim_dir() -> Vector3:
 func _unhandled_input(e: InputEvent) -> void:
 	if not is_local:
 		return
-	var captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+	var captured := Controls.playing()
 	if e is InputEventMouseMotion and captured:
 		# Scales with the aim zoom, not with the speed widening on top of it.
 		var s: float = SENS * rig.fov_target / 75.0
@@ -362,7 +362,7 @@ func _unhandled_input(e: InputEvent) -> void:
 func _physics_process(delta: float) -> void:
 	if not is_local:
 		return
-	var active := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and can_act()
+	var active := Controls.playing() and can_act()
 	var wish := Vector3.ZERO
 	if active:
 		var iv := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
@@ -637,7 +637,7 @@ func knock(v: Vector3) -> void:
 func net_byte() -> int:
 	if not is_local:
 		return net_mv
-	var aiming := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and Input.is_action_pressed("aim") and can_act()
+	var aiming := Controls.playing() and Input.is_action_pressed("aim") and can_act()
 	return mv | (8 if mv == MV_WALLRUN and _wall_side > 0.0 else 0) | (16 if aiming else 0) | (_hops << 5) | (128 if _hop_air else 0)
 
 
@@ -966,7 +966,7 @@ func _animate_viewmodel() -> void:
 
 func _local_process(delta: float) -> void:
 	var g = Net.game
-	var captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+	var captured := Controls.playing()
 	var head := global_position + HEAD
 	var dir := aim_dir()
 	_animate_viewmodel()

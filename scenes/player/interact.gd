@@ -75,7 +75,7 @@ func _process(delta: float) -> void:
 	if _t <= 0.0:
 		_t = TICK
 		current = _pick(p)
-	var usable: bool = not current.is_empty() and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and p.can_act()
+	var usable: bool = not current.is_empty() and Controls.playing() and p.can_act()
 	if not usable or not Input.is_action_pressed("interact"):
 		_held = 0.0
 		_fired = false
