@@ -25,6 +25,7 @@ const Interact := preload("res://scenes/player/interact.gd")
 const Threats := preload("res://scenes/world/threats.gd")
 const Casino := preload("res://scenes/world/casino.gd")
 const Yacht := preload("res://scenes/world/yacht.gd")
+const Roleta := preload("res://scenes/world/roleta.gd")
 const SeaPatrol := preload("res://scenes/police/sea_patrol.gd")
 const Prison := preload("res://scenes/world/prison.gd")
 const Places := preload("res://scenes/world/places.gd")
@@ -32,6 +33,7 @@ const WeaponKit := preload("res://scenes/weapons/weapon_kit.gd")
 const DrugKit := preload("res://scenes/items/drug_kit.gd")
 const Nav := preload("res://scenes/world/nav.gd")
 const LifeTests := preload("res://scenes/life_tests.gd")
+const Emotes := preload("res://scenes/characters/emotes.gd")
 
 ## cl_fx `mode` bits: a further pellet of the same shot (no second bang), the same round
 ## after it has gone through somebody, a throw, a rocket leaving the tube.
@@ -66,6 +68,7 @@ var interaction: Node
 var threats: Node3D
 var casino: Node
 var yacht: Node3D
+var roleta: Node3D
 var sea_patrol: Node3D
 var prison: Node
 var local_player: CharacterBody3D
@@ -77,6 +80,7 @@ var _move_t := 0.0
 var _clock_t := 0.0
 var _end_t := 0.0
 var _od_t := 0.0
+var _emote_hit := {}  # peer id -> the st.emote_n of the killing emote that has already landed
 var _last_attack := {}
 var _last_ping := {}
 var _respawn := {}
@@ -124,6 +128,9 @@ func _ready() -> void:
 	yacht = Yacht.new()
 	yacht.name = "Yacht"
 	add_child(yacht)
+	roleta = Roleta.new()
+	roleta.name = "Roleta"
+	add_child(roleta)
 	sea_patrol = SeaPatrol.new()
 	sea_patrol.name = "SeaPatrol"
 	add_child(sea_patrol)
@@ -965,6 +972,7 @@ func srv_client_ready(pname: String) -> void:
 	for id in drops:
 		drop_data.append([id, drops[id].pos, drops[id].money, drops[id].items])
 	cl_init.rpc_id(pid, MatchState.seed_value, MatchState.duration, MatchState.time, MatchState.ended, _players_data(), crowd.snapshot(), drop_data, motos.snapshot(), events.snapshot())
+	roleta.cl_sync.rpc_id(pid, roleta.results)
 	ready_peers.append(pid)
 	bcast("cl_spawn", [pid, pname.left(16), DB.spawn_point(), Player.fresh_state()])
 
@@ -994,6 +1002,7 @@ func cl_match_start(seed_value: int, duration: float, pdata: Array) -> void:
 	traffic.setup(seed_value)
 	motos.reset()
 	yacht.reset()
+	roleta.reset()
 	sea_patrol.reset()
 	if local_player != null:
 		local_player.stop_ride()
@@ -1076,6 +1085,7 @@ func _on_peer_left(pid: int) -> void:
 	_respawn.erase(pid)
 	_air.erase(pid)
 	motos.srv_release(pid)
+	roleta.srv_left(pid)
 	if players.has(pid):
 		bcast("cl_despawn", [pid])
 
@@ -1116,6 +1126,8 @@ func _srv_process(delta: float) -> void:
 		_od_t = 0.0
 	for id in players.keys():
 		_srv_tick_player(players[id], delta, od_tick)
+	if od_tick:
+		_srv_emote_watchers()
 
 	_move_t -= delta
 	if _move_t <= 0.0 and ready_peers.size() > 1:
@@ -1147,6 +1159,15 @@ func _srv_process(delta: float) -> void:
 func _srv_tick_player(p: CharacterBody3D, delta: float, od_tick: bool) -> void:
 	var st: Dictionary = p.st
 	var dirty := false
+	var em: int = st.get("emote", -1)
+	if em >= 0:
+		var t: float = MatchState.time - st.emote_t
+		if not p.can_emote() or Emotes.over(em, t):
+			st.emote = -1
+			dirty = true
+		elif Emotes.LIST[em].has("kill") and t >= Emotes.LIST[em].kill.t and _emote_hit.get(p.id, -1) != st.emote_n:
+			_emote_hit[p.id] = st.emote_n
+			_srv_emote_kill(p, Emotes.LIST[em].kill)
 	var ended: Array = []  # overdoses that have just run their course
 	for d in st.drugs.keys():
 		var e = st.drugs[d]
@@ -1455,6 +1476,85 @@ func cl_ping(pos: Vector3) -> void:
 	hud.add_ping(pos)
 
 
+# --- emotes ---
+
+## How many people one dancer can gather.
+const EMOTE_CROWD := 7
+## What the people standing about do when somebody near them does an emote of each sort.
+const EMOTE_REACT := {
+	"dance": [Kit.DANCE, Kit.FILM, Kit.CLAP, Kit.DANCE, Kit.CHEER, Kit.FILM],
+	"laugh": [Kit.LAUGH, Kit.POINT, Kit.FILM, Kit.LAUGH],
+	"look": [Kit.LOOK, Kit.POINT, Kit.FILM],
+	"wave": [Kit.WAVE],
+	"clap": [Kit.CLAP, Kit.CHEER],
+}
+
+## A player wants to start emote `eid`, in step with player `with` if that one is at the same
+## thing and it is a thing people do together; or, with -1, to stop.
+@rpc("any_peer", "call_remote", "reliable")
+func srv_emote(eid: int, with := 0) -> void:
+	var p = players.get(Net.sender())
+	if p == null or p.st.get("emote", -1) == eid:
+		return
+	if eid >= 0:
+		if not Emotes.has(eid) or not p.can_emote():
+			return
+		p.st.emote_t = MatchState.time
+		var lead = players.get(with)
+		if lead != null and lead != p and lead.emote() == eid and Emotes.LIST[eid].get("join", false) and lead.global_position.distance_to(p.global_position) < Player.JOIN_RANGE * 2.0:
+			p.st.emote_t = lead.st.emote_t
+	p.st.emote = eid
+	p.st.emote_n = p.st.get("emote_n", 0) + 1
+	push_state(p)
+
+
+## The moment a killing emote lands: whoever is standing where it points gets all of it.
+func _srv_emote_kill(p, kill: Dictionary) -> void:
+	var at: Vector3 = p.global_position
+	var fwd: Vector3 = -p.global_basis.z
+	fwd.y = 0.0
+	fwd = fwd.normalized()
+	var struck := false
+	for id in players.keys():
+		var o = players[id]
+		if o != p and o.can_fight() and _emote_reaches(at, fwd, o.global_position, kill) and _clear(p.eye(), o.eye()):
+			struck = true
+			if kill.has("knock"):
+				send(id, "cl_knock", [fwd * kill.knock + Vector3(0, kill.knock * 0.6, 0)])
+			srv_damage(id, 9999.0, p.id)
+			bcast("cl_fx", [at + Vector3(0, 1.2, 0), o.global_position + Vector3(0, 1.0, 0), true, DB.WHO_PLAYER, p.id, DB.WHO_PLAYER, id, DB.FX_KILL, "fists", FX_PELLET])
+	for i in crowd.count:
+		if crowd.state[i] < crowd.DEAD and _emote_reaches(at, fwd, crowd.pos[i], kill) and _clear(p.eye(), crowd.pos[i] + Vector3(0, 1.3, 0)):
+			struck = true
+			crowd.srv_damage_npc(i, 9999.0, p.id)
+			bcast("cl_fx", [at + Vector3(0, 1.2, 0), crowd.pos[i] + Vector3(0, 1.0, 0), true, DB.WHO_PLAYER, p.id, DB.WHO_NPC, i, DB.FX_KILL, "fists", FX_PELLET])
+	if struck:
+		Crime.report_noise(at, 90.0, p.id)
+		Crime.report_crime(at, p.id, 3)
+
+
+static func _emote_reaches(at: Vector3, fwd: Vector3, who: Vector3, kill: Dictionary) -> bool:
+	var to := who - at
+	if absf(to.y) > 1.5:
+		return false
+	to.y = 0.0
+	var d := to.length()
+	return d < kill.reach and d > 0.05 and fwd.dot(to / d) > cos(kill.arc)
+
+
+## Anyone dancing draws a few of the people nearby: they stop and film it, clap, laugh or
+## point, whichever the emote asks for.
+func _srv_emote_watchers() -> void:
+	for id in players:
+		var p = players[id]
+		var em: int = p.emote()
+		if em < 0 or p.st.jail > 0.0:
+			continue
+		var poses: Array = EMOTE_REACT.get(Emotes.LIST[em].react, [])
+		if not poses.is_empty():
+			crowd.srv_watch(p.global_position, poses, EMOTE_CROWD)
+
+
 # --- combat ---
 
 ## Hurts a player. A bare fist to the head may put them out cold instead; returns whether it did.
@@ -1462,6 +1562,8 @@ func srv_damage(pid: int, amount: float, attacker: int, zone := 0, ko := false) 
 	var p = players.get(pid)
 	if p == null or p.st.dead or MatchState.ended or p.st.get("hide", -1) >= 0:
 		return false
+	# Nobody keeps dancing through that.
+	p.st.emote = -1
 	if ko and zone == DB.ZONE_HEAD and p.st.ko <= 0.0 and MatchState.time > _ko_immune.get(pid, 0.0) and randf() < DB.KO_CHANCE:
 		p.st.ko = DB.KO_PLAYER
 		_ko_immune[pid] = MatchState.time + DB.KO_PLAYER + DB.KO_IMMUNE
@@ -2098,6 +2200,7 @@ func _setup_interact() -> void:
 	interaction.on(&"dice", func(_a: Dictionary) -> void: hud.open_dice())
 	interaction.on(&"slot", func(_a: Dictionary) -> void: hud.open_slot())
 	interaction.on(&"roulette", func(_a: Dictionary) -> void: hud.open_roulette())
+	interaction.on(&"wheel", func(_a: Dictionary) -> void: hud.open_wheel())
 	interaction.on(&"blackjack", func(_a: Dictionary) -> void: hud.open_blackjack())
 	interaction.on(&"cage", Callable(), casino.srv_safe)
 	interaction.on(&"yacht_safe", Callable(), yacht.srv_safe)

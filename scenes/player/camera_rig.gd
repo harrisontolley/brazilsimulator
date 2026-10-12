@@ -2,6 +2,8 @@ extends Node3D
 ## Head pivot. Scroll steps between first person (arm length 0) and third person.
 
 const STEPS := [0.0, 2.8, 5.0]
+## How far back the view stands to watch its own body dance, at the least.
+const WATCH := 3.6
 
 var cam: Camera3D
 var shake := 0.0
@@ -20,6 +22,8 @@ var dip := 0.0
 var offset := Vector3.ZERO
 ## Eye to a scope: the view goes to the head whatever distance it was following at.
 var scoped := false
+## Standing back from the body and free to walk round it: the head has let go of the view.
+var watching := false
 
 var _arm: SpringArm3D
 var _step := 0
@@ -49,6 +53,11 @@ func zoom(dir: int) -> void:
 	_step = clampi(_step + dir, 0, STEPS.size() - 1)
 
 
+## Walks the view round the body while it is being watched.
+func orbit(amount: float) -> void:
+	rotation.y = wrapf(rotation.y + amount, -PI, PI)
+
+
 func pitch(amount: float) -> void:
 	rotation.x = clampf(rotation.x + amount, -1.45, 1.45)
 
@@ -64,7 +73,10 @@ func first_person() -> bool:
 
 
 func _process(delta: float) -> void:
-	_arm.spring_length = lerpf(_arm.spring_length, 0.0 if scoped else STEPS[_step], minf(1.0, (30.0 if scoped else 12.0) * delta))
+	var back: float = maxf(STEPS[_step], WATCH) if watching else STEPS[_step]
+	_arm.spring_length = lerpf(_arm.spring_length, 0.0 if scoped else back, minf(1.0, (30.0 if scoped else (7.0 if watching else 12.0)) * delta))
+	if not watching:
+		rotation.y = lerp_angle(rotation.y, 0.0, minf(1.0, 9.0 * delta))
 	cam.fov = lerpf(cam.fov, fov_target + fov_boost, minf(1.0, 10.0 * delta))
 	_height = lerpf(_height, height_target, minf(1.0, 14.0 * delta))
 	position = Vector3(offset.x, _height + offset.y, offset.z)

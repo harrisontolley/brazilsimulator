@@ -1,6 +1,8 @@
 extends Node
 ## Static game data: items, NPC archetypes, vendors, map constants.
 
+const Layout := preload("res://scenes/world/layout.gd")
+
 const ITEMS := {
 	# Weapons. `held` is the Kit.HELD_* shown in the hand. `ko`: a blow to the head can knock
 	# someone out. Guns carry `mag` rounds, take `reload` seconds to refill, kick the view up by
@@ -228,7 +230,7 @@ static func spawn_point() -> Vector3:
 	var p := Vector3.ZERO
 	for i in 16:
 		p = Vector3(randf_range(-270.0, 270.0), 0.2, randf_range(-30.0, 34.0))
-		if clear_of_solids(p, 1.0) == p:
+		if clear_of_solids(p, 1.0) == p and not Layout.on_wheel(p, 2.0):
 			break
 	return p
 

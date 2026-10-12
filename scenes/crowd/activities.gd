@@ -18,7 +18,7 @@ const Places := preload("res://scenes/world/places.gd")
 const Nav := preload("res://scenes/world/nav.gd")
 
 enum { NONE, CHAT, DINE, QUEUE, SELFIE, DIG, ALTINHA, FRESCOBOL, CAPOEIRA, CHURRASCO, GANG, ROOM,
-		ARGUE, BUSKER, COUPLE, WORKOUT, BEGGAR, PREACHER, SMOKERS, SWEEPER, PHOTO }
+		ARGUE, BUSKER, COUPLE, WORKOUT, BEGGAR, PREACHER, SMOKERS, SWEEPER, PHOTO, WATCH }
 
 const BALL_R := 0.2
 ## Seconds one touch of the ball takes to reach the next player.
@@ -90,6 +90,13 @@ func _member(g: Dictionary, p: Vector3, yaw: float, idle: int, arch := "", look 
 	g.n += 1
 
 
+## Takes on n people the crowd already has, from index `first`, as a group that somebody
+## else directs: nothing here ever tells them what to do, and no dice are thrown for it.
+func adopt(pos: Vector3, first: int, n: int) -> int:
+	groups.append({"kind": WATCH, "pos": pos, "seed": 0, "first": first, "n": n, "period": 1e9, "off": 0.0, "seg": -1, "speaker": -1, "ball": -1})
+	return groups.size() - 1
+
+
 ## A ring of n people round `c` looking in at it.
 func _ring(g: Dictionary, c: Vector3, n: int, r: float, idle: int, arch := "", look := 0) -> void:
 	var a0 := _rng.randf() * TAU
@@ -105,7 +112,9 @@ func _sand_spot(z_lo: float, z_hi: float, margin: float) -> Vector3:
 		p = Vector3(_rng.randf_range(-285.0, 285.0), 0.0, _rng.randf_range(z_lo, z_hi))
 		if not Layout.on_play_area(p, margin) and DB.clear_of_solids(p, margin) == p:
 			break
-	return p
+	# (Stepping off the wheel's ground afterwards, rather than throwing again, leaves the dice
+	# for everybody else as they were.)
+	return Layout.off_wheel(p, margin + 1.5)
 
 
 # --- planning, one kind at a time ---

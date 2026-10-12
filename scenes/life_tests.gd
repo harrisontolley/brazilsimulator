@@ -6,6 +6,11 @@ const Nav := preload("res://scenes/world/nav.gd")
 const Layout := preload("res://scenes/world/layout.gd")
 const Places := preload("res://scenes/world/places.gd")
 const Kit := preload("res://scenes/characters/char_kit.gd")
+const CharRig := preload("res://scenes/characters/char_rig.gd")
+const Emotes := preload("res://scenes/characters/emotes.gd")
+
+## What _cast_of(4242) came to before the wheel was built.
+const CAST := [281228236, 438102235, 2323301200]
 
 
 static func out_dir() -> String:
@@ -40,6 +45,16 @@ static func run(g: Node, what: String) -> bool:
 			await _yacht(g)
 		"seacops":
 			await _seacops(g)
+		"cast":
+			await _cast(g)
+		"roleta":
+			await _roleta(g)
+		"roletanet":
+			await _roleta_net(g)
+		"emotes":
+			await _emotes(g)
+		"emoteshots":
+			await _emote_shots(g)
 		"arsenal", "shotgun", "sniper", "rocket", "grenade", "molotov":
 			await _arsenal(g, what)
 		_:
@@ -1053,3 +1068,559 @@ static func _seacops(g: Node) -> void:
 		bad.append("diving did not lose them")
 	_keys_up()
 	g.debug_result("seacops", bad.is_empty(), "out after %.1f s (%d of them), alongside after %.1f s, shot for %.0f, seen %s, one killed %s, lost by diving %.1f s  %s" % [out, n, near, shot, seen, killed, lost, "; ".join(bad)])
+
+
+## What the crowd's casting comes to for `seed_value`: who everybody is, what groups there
+## are, and where everybody well away from the wheel spends the day. Only the first
+## `Crowd.COUNT` are counted: whoever is added after them has dice of their own.
+static func _cast_of(g: Node, seed_value: int) -> Array:
+	var c = g.crowd
+	c.setup(seed_value)
+	var dice: Array = []
+	var far: Array = []
+	for i in mini(c.count, 2500):
+		# (Somebody on a round of the shops keeps time by how long the round is, and one of the
+		# rounds has to go the long way past the wheel.)
+		dice.append([c.arch[i], c.money[i], c._scale[i], c._look[i], c._gun[i], c._afloat[i], c._grp[i], c._w_phase[i] if c._round[i] < 0 else 0.0, c._leave_t[i], c._round[i], c._mm.get_instance_color(i)])
+		if absf(c._origin[i].x - Layout.WHEEL_POS.x) > 60.0:
+			far.append([i, c._origin[i], c._walker[i], c._w_len[i], c._lying[i]])
+	var groups: Array = []
+	for gr in c.acts.groups:
+		if gr.kind <= c.acts.PHOTO:
+			groups.append([gr.kind, gr.n, gr.first, gr.seed])
+	return [hash(dice), hash(groups), hash(far)]
+
+
+## Nobody who was already in the crowd is anybody else for the wheel having been built, and
+## nobody is standing on it.
+static func _cast(g: Node) -> void:
+	var c = g.crowd
+	var got := _cast_of(g, 4242)
+	var on_stage := 0
+	for i in mini(c.count, 2500):
+		if c._walker[i] == 0 and Layout.on_wheel(c._origin[i]):
+			on_stage += 1
+	# The same again with nobody standing round the wheel at all.
+	var keep: Array = Places.stands.duplicate()
+	Places.stands.clear()
+	var bare := _cast_of(g, 4242)
+	Places.stands.append_array(keep)
+	c.setup(MatchState.seed_value)
+	g.debug_result("cast", got == CAST and bare == CAST and on_stage == 0, "cast %s without the wheel's people %s wanted %s, %d on the stage" % [got, bare, CAST, on_stage])
+
+
+## How much of mesh m's area faces up, and how many of its triangles are wound against
+## their own normals (so would be drawn from the wrong side).
+static func _facing(m: Mesh) -> Array:
+	var arrays := m.surface_get_arrays(0)
+	var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var n: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+	var up := 0.0
+	var all := 0.0
+	var inside_out := 0
+	for k in range(0, idx.size(), 3):
+		var a := v[idx[k]]
+		var face := (v[idx[k + 2]] - a).cross(v[idx[k + 1]] - a)
+		var area := face.length()
+		if area < 1e-9:
+			continue
+		all += area
+		if n[idx[k]].y > 0.9:
+			up += area
+		if face.dot(n[idx[k]]) < 0.0:
+			inside_out += 1
+	return [snappedf(up / maxf(all, 0.001), 0.01), inside_out]
+
+
+## The wheel on the beach: the ball always ends in the pocket that was called and never
+## jumps on the way there, the rounds keep time, bets are taken and refused when they should
+## be, a win pays what it says, somebody joining late sees the same wheel, there is a crowd
+## watching that knows what is going on, and you can get up on the deck.
+static func _roleta(g: Node) -> void:
+	var w = g.roleta
+	var p = g.local_player
+	var crowd = g.crowd
+	var bad: Array = []
+	var seed_value := MatchState.seed_value
+	await _wait(g, 0.5)
+
+	# The ball.
+	var missed := 0
+	var jump := 0.0
+	var stride := 0.0
+	for r in 6:
+		for n in 37:
+			var t1: float = r * w.ROUND + w.T_LAUNCH + w.T_REST + 0.7
+			var b: Vector3 = w.ball_state(seed_value, r, n, t1)
+			if w.number_at(b.x - w.rotor_angle(seed_value, t1)) != n or absf(b.y - w.R_POCKET) > 0.001 or absf(b.z - w.BALL_R) > 0.001:
+				missed += 1
+			for mark in [0.0, w.T_FALL, w.T_DROP, w.T_REST]:
+				var tm: float = r * w.ROUND + w.T_LAUNCH + mark
+				jump = maxf(jump, w.ball_at(seed_value, r, n, 5, tm - 0.0002).distance_to(w.ball_at(seed_value, r, n, 5, tm + 0.0002)))
+	for n in [0, 17, 26]:
+		var was: Vector3 = w.ball_at(seed_value, 3, n, 5, 3 * w.ROUND + w.T_OPEN)
+		for k in int((w.T_RESULT - w.T_OPEN) * 120.0):
+			var now: Vector3 = w.ball_at(seed_value, 3, n, 5, 3 * w.ROUND + w.T_OPEN + (k + 1) / 120.0)
+			stride = maxf(stride, was.distance_to(now))
+			was = now
+	if missed > 0 or jump > 0.02 or stride > 0.3:
+		bad.append("ball: %d wrong pockets, jump %.3f m at a join, %.2f m in a tick" % [missed, jump, stride])
+
+	# The clock.
+	var phases := [w.phase_at(5.0), w.phase_at(20.5), w.phase_at(33.0), w.phase_at(40.1), w.phase_at(MatchState.duration - 10.0)]
+	if phases[0][1] != w.OPEN or phases[1][1] != w.SPIN or phases[2][1] != w.PAID or phases[3][0] != 1 or phases[3][1] != w.OPEN or absf(phases[3][2] - (w.T_OPEN - 0.1)) > 0.01 or phases[4][1] != w.SHUT:
+		bad.append("phases %s" % [phases])
+
+	# What was built: a rotor and numbers that face up out of the wheel, drawn the right way
+	# round to be seen from that side.
+	var digits: Mesh = w._rotor.get_child(1).mesh
+	var faces: Array = []
+	for m in [w._rotor.get_child(0).mesh, digits, w._wheel.get_child(0).mesh]:
+		faces.append(_facing(m))
+	if w._rotor.get_child_count() < 2 or digits.get_aabb().size.x < 5.0 or faces[0][0] < 0.5 or faces[1][0] < 0.3 or faces[0][1] > 0 or faces[1][1] > 20 or faces[2][1] > 0 or Places.uses[Places.uses.size() - 1].kind != &"wheel":
+		bad.append("built: numbers span %s; [share facing up, triangles inside out] rotor %s numbers %s bowl %s" % [digits.get_aabb().size, faces[0], faces[1], faces[2]])
+
+	# Bets.
+	p.st.hp = 100000.0
+	p.st.money = 20000
+	p.global_position = w.desk + Vector3(0, 0.2, 0)
+	MatchState.time = 2.0
+	await _wait(g, 0.2)
+	var m0: int = p.st.money
+	var bank0: int = g.casino.bank
+	var took := func(kind: int, n: int, amount: int) -> bool:
+		var before: int = p.st.money
+		w._last.clear()
+		w.srv_bet(kind, n, amount)
+		return p.st.money == before - amount
+	var ok: bool = took.call(0, 0, 50)
+	var refused: bool = not took.call(0, 0, 55) and not took.call(9, 0, 50) and not took.call(7, 37, 50) and not took.call(6, 3, 50)
+	p.global_position = w.desk + Vector3(100, 0.2, 0)
+	refused = refused and not took.call(0, 0, 50)
+	p.global_position = w.desk + Vector3(0, 0.2, 0)
+	ok = ok and took.call(7, 17, 50) and took.call(6, 1, 10)
+	for k in 5:
+		ok = ok and took.call(0, 0, 10)
+	var ninth: bool = took.call(0, 0, 10)
+	if not ok or not refused or ninth or w.my_bets.size() != 8:
+		bad.append("bets: taken %s, bad ones refused %s, a ninth %s, slip %d" % [ok, refused, ninth, w.my_bets.size()])
+	# Seventeen comes up: the red loses, the number pays 35 to 1, the middle dozen 2 to 1.
+	w._force = 17
+	MatchState.time = w.T_OPEN - 0.1
+	var drawn := await _until(g, 2.0, func(): return w.result_of(0) >= 0)
+	var late: bool = took.call(0, 0, 50)
+	MatchState.time = w.T_RESULT - 0.1
+	var settled := await _until(g, 2.0, func(): return w._settled == 0)
+	var won: int = p.st.money - m0
+	if drawn < 0.0 or settled < 0.0 or late or w.result_of(0) != 17 or won != 1830 - 160 or p.st.money + g.casino.bank != m0 + bank0:
+		bad.append("spin: drawn %.1f settled %.1f, came up %d, late bet %s, won %d, books %d" % [drawn, settled, w.result_of(0), late, won, p.st.money + g.casino.bank - m0 - bank0])
+	# The table limit, in the next round.
+	MatchState.time = w.ROUND + 2.0
+	await _wait(g, 0.2)
+	var big := 0
+	for k in 5:
+		big += 1 if took.call(1, 0, 1000) else 0
+	if big != 4:
+		bad.append("limit: %d bets of 1000 taken" % big)
+
+	# Somebody walking in half way through.
+	var seen: PackedInt32Array = w.results.duplicate()
+	var here: Vector3 = w.ball_at(seed_value, 0, w.result_of(0), -1, 27.0)
+	w.cl_sync(PackedInt32Array())
+	var blank: bool = w.result_of(0) < 0
+	w.cl_sync(seen)
+	if not blank or w.result_of(0) != 17 or w.ball_at(seed_value, 0, w.result_of(0), -1, 27.0) != here:
+		bad.append("late joiner sees another wheel")
+
+	# The crowd: there, looking at it, and doing different things as the spin goes on.
+	var facing := 0
+	var look: Vector3 = w.at + Vector3(0, 0, 1.0)
+	for k in w._watchers:
+		var i: int = crowd.COUNT + w._first + k
+		var to: Vector3 = (look - crowd.pos[i]) * Vector3(1, 0, 1)
+		if crowd.state[i] == crowd.AMBIENT and crowd._grp[i] == crowd._stand_grp and absf(angle_difference(crowd.yaw_of(i), Kit.face(to))) < 0.5 and not Nav.blocked(crowd.pos[i]):
+			facing += 1
+	var mixes: Array = []
+	for t in [2.0 * w.ROUND + 8.0, 2.0 * w.ROUND + w.T_LAUNCH + w.T_FALL + 1.2, 2.0 * w.ROUND + w.T_RESULT + 2.0]:
+		MatchState.time = t
+		await _wait(g, 1.8)
+		var mix := {}
+		for k in w._watchers:
+			var pose: int = crowd._idle[crowd.COUNT + w._first + k]
+			mix[pose] = mix.get(pose, 0) + 1
+		mixes.append(mix)
+	var keen: int = mixes[1].get(Kit.HANDS_UP, 0) + mixes[1].get(Kit.FILM, 0) + mixes[1].get(Kit.POINT, 0)
+	var glad: int = mixes[2].get(Kit.CHEER, 0) + mixes[2].get(Kit.CLAP, 0) + mixes[2].get(Kit.DANCE, 0)
+	var sorry: int = mixes[2].get(Kit.SHRUG, 0) + mixes[2].get(Kit.ARGUE, 0)
+	if w._watchers < 30 or facing < w._watchers - 1 or mixes[0].get(Kit.HANDS_UP, 0) > 0 or mixes[0].size() < 4 or keen < 12 or glad + sorry < 14 or w.result_of(2) < 0:
+		bad.append("crowd: %d watching, %d facing it; waiting %s, as it drops %s, after %s" % [w._watchers, facing, mixes[0], mixes[1], mixes[2]])
+	# One of them takes fright and the rest carry on.
+	var runner: int = crowd.COUNT + w._first + 3
+	crowd._srv_flee(runner, w.at)
+	await _wait(g, 0.6)
+	if crowd.state[runner] != crowd.FLEE or crowd._grp[runner] != -1:
+		bad.append("runner: state %d group %d" % [crowd.state[runner], crowd._grp[runner]])
+
+	# What it costs to keep turning, a frame, in the middle of a spin.
+	MatchState.time = 3.0 * w.ROUND + w.T_LAUNCH + 3.0
+	await _wait(g, 0.3)
+	var usec := Time.get_ticks_usec()
+	for k in 500:
+		w._process(0.008)
+	var cost: float = (Time.get_ticks_usec() - usec) / 500000.0
+	if cost > 0.4:
+		bad.append("costs %.2f ms a frame" % cost)
+
+	# The panel.
+	MatchState.time = 3.0 * w.ROUND + 4.0
+	g.hud.open_wheel()
+	await _wait(g, 0.3)
+	var panel: bool = g.hud.shop_open and g.hud._wheel_buttons.size() == 10 and not g.hud._wheel_buttons[0].disabled
+	MatchState.time = 3.0 * w.ROUND + w.T_OPEN + 1.0
+	await _wait(g, 0.3)
+	panel = panel and g.hud._wheel_buttons[0].disabled and g.hud._wheel_row.visible
+	g.hud.close_shop()
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	if not panel:
+		bad.append("panel")
+
+	# Up the steps onto the deck.
+	p.global_position = w.at + Vector3(8.8, 0.2, -2.4)
+	p.rotation.y = PI / 2.0
+	await _wait(g, 0.3)
+	Input.action_press("move_forward")
+	var up := await _until(g, 6.0, func(): return p.global_position.y > w.DECK_Y - 0.1 and p.global_position.x < w.at.x + 5.2 and p.is_on_floor())
+	_keys_up()
+	if up < 0.0:
+		bad.append("steps: stuck at %s" % (p.global_position - w.at))
+	g.debug_result("roleta", bad.is_empty(), "ball true to the call, %.3f m at the joins, %.2f m a tick; 8 bets taken, 17 paid %d; %d watching, %d keen, %d glad %d sorry; deck in %.1f s; %.3f ms a frame  %s" % [jump, stride, won, w._watchers, keen, glad, sorry, up, cost, "; ".join(bad)])
+
+
+## For a second peer, joined to a host whose match is already some way in (--join=IP
+## --test=roletanet): it is told what has come up already, sees the same ball as the host
+## would, and a bet goes up to the host and an answer comes back.
+static func _roleta_net(g: Node) -> void:
+	var w = g.roleta
+	var p = g.local_player
+	var bad: Array = []
+	var told := await _until(g, 30.0, func(): return w.result_of(int(MatchState.time / w.ROUND) - 1) >= 0 or w.result_of(int(MatchState.time / w.ROUND)) >= 0)
+	if told < 0.0 or g.multiplayer.is_server():
+		bad.append("never heard what had come up (results %s, server %s)" % [w.results, g.multiplayer.is_server()])
+	p.global_position = w.desk + Vector3(0, 0.2, 0)
+	await _until(g, 45.0, func(): return w.phase_at(MatchState.time)[1] == w.OPEN and w.phase_at(MatchState.time)[2] < w.T_OPEN - 1.5)
+	# Nothing in their pockets, so the answer is no; but it is an answer.
+	g.to_server("srv_bet", [0, 0, 10], w)
+	var answered := await _until(g, 3.0, func(): return g.hud._toast_log.any(func(e): return e[0].text.begins_with("You have not got")))
+	if answered < 0.0:
+		bad.append("no answer to a bet")
+	var r := int(MatchState.time / w.ROUND)
+	var spun := await _until(g, 30.0, func(): return w.result_of(r) >= 0)
+	await _wait(g, 3.0)
+	var ball: Vector3 = w._bola.position
+	var want: Vector3 = w.ball_at(MatchState.seed_value, r, w.result_of(r), w.result_of(r - 1), w._t)
+	if spun < 0.0 or ball.distance_to(want) > 0.5 or absf(w._t - MatchState.time) > 0.3:
+		bad.append("spin: heard after %.1f, ball %.2f m from where it should be, clock out by %.2f" % [spun, ball.distance_to(want), w._t - MatchState.time])
+	g.debug_result("roletanet", bad.is_empty(), "told after %.1f s, answered in %.2f s, round %d came up %d  %s" % [told, answered, r, w.result_of(r), "; ".join(bad)])
+
+
+## What is wrong with the emotes as sums, before anybody dances one: a pose that is not a
+## number, a foot under the ground or nowhere near it, a joint bent the wrong way, a loop that
+## does not meet itself, a frame that jumps.
+static func _emote_sums() -> Array:
+	var bad: Array = []
+	for id in Emotes.COUNT:
+		var e: Dictionary = Emotes.LIST[id]
+		var was := Emotes.pose(id, 0.0)
+		var worst := 0.0
+		var worst_at := ""
+		var steps := int(e.len * 120.0)
+		for k in range(1, steps + 1):
+			var t: float = e.len * k / steps
+			var q := Emotes.pose(id, t)
+			var j := Emotes.joints(q)
+			var low := minf(j[Emotes.J_FOOT_L].y, j[Emotes.J_FOOT_R].y)
+			for i in CharRig.N:
+				if is_nan(q[i]) or is_inf(q[i]):
+					bad.append("%s is not a number at %.2f" % [e.name, t])
+				var d := absf(wrapf(q[i] - was[i], -PI, PI) if i == 0 or i == CharRig.ARM_R else q[i] - was[i])
+				if d > worst:
+					worst = d
+					worst_at = "%d at %.2f" % [i, t]
+			if low < Emotes.SOLE - 0.03 or low > Emotes.SOLE + 0.16:
+				bad.append("%s has its feet at %.2f at %.2f" % [e.name, low, t])
+			if q[2] < -0.1 or q[CharRig.ARM_R + 2] < -0.1 or q[CharRig.LEG_L + 1] < -0.1 or q[CharRig.LEG_R + 1] < -0.1:
+				bad.append("%s bends a joint backwards at %.2f" % [e.name, t])
+			if j[Emotes.J_HEAD].y < 0.5 or absf(j[Emotes.J_HEAD].x) > 0.7:
+				bad.append("%s loses its head at %.2f" % [e.name, t])
+			was = q
+			if bad.size() > 12:
+				return bad
+		if worst > 0.7:
+			bad.append("%s jumps %.2f in a frame (%s)" % [e.name, worst, worst_at])
+		var ends := Emotes.pose(id, 0.0)
+		var back := Emotes.pose(id, e.len if e.get("loop", false) else e.len + 1.0)
+		var first := Emotes.pose(id, 0.0) if e.get("loop", false) else Emotes.pose(Emotes.COUNT, 0.0)
+		# Sitting down happens once; it is the looking about that goes round.
+		if id != Emotes.SENTAR:
+			for i in CharRig.N:
+				if absf(back[i] - first[i]) > 0.06 or (not e.get("loop", false) and absf(ends[i] - first[i]) > 0.06):
+					bad.append("%s does not come back to where it began (%d: %.2f, %.2f)" % [e.name, i, back[i], first[i]])
+					break
+		if Emotes.stick(id, e.len * 0.4).size() != Emotes.J_COUNT:
+			bad.append("%s has no stick figure" % e.name)
+	# A hand asked to be somewhere is there.
+	for at in [Vector3(0.1, 1.6, -0.2), Vector3(-0.1, 1.2, -0.25), Vector3(0.4, 0.9, 0.1), Vector3(0.3, 1.7, -0.05)]:
+		var q := Emotes._p(Emotes.DOWN, Emotes.reach(1, at))
+		var got := Emotes.joints(q)[Emotes.J_HAND_R]
+		if got.distance_to(at) > 0.02:
+			bad.append("reach misses %s by %.2f" % [at, got.distance_to(at)])
+	return bad
+
+
+## Emotes: the sums, then one player doing them: the wheel, the camera standing back, what
+## stops a dance and what will not start one, a dance that travels, falling in with somebody
+## else's, the two that kill, and the people who stop to watch.
+static func _emotes(g: Node) -> void:
+	var bad := _emote_sums()
+	var p = g.local_player
+	var wheel = g.hud.wheel
+	var Wheel = wheel.get_script()
+	var spot := Vector3(-20, 0.2, 45)
+	_reset(g)
+	p.global_position = spot
+	p.rotation.y = 0.0
+	p.rig.zoom(-2)
+	await _wait(g, 0.5)
+
+	# The wheel as sums.
+	var slots := [Wheel.slot_of(Vector2(0, -100)), Wheel.slot_of(Vector2(100, 0)), Wheel.slot_of(Vector2(0, 100)), Wheel.slot_of(Vector2(-100, 0)), Wheel.slot_of(Vector2(70, -70)), Wheel.slot_of(Vector2(10, 10))]
+	if slots != [0, 2, 4, 6, 1, -1] or Wheel.pages() != 3:
+		bad.append("wheel slots %s pages %d" % [slots, Wheel.pages()])
+
+	# Hold the key, point, let go.
+	Input.action_press("emote")
+	await _wait(g, 0.4)
+	var opened: bool = wheel.open and wheel.visible
+	wheel.point(Vector2(0, -120))
+	var first: int = wheel.picked()
+	wheel.turn_page(1)
+	var second: int = wheel.picked()
+	wheel.turn_page(-1)
+	wheel.point(Vector2(5, 5))
+	var none: int = wheel.picked()
+	wheel.point(Vector2(0, -120))
+	var yaw_was: float = p.rotation.y
+	var look := InputEventMouseMotion.new()
+	look.relative = Vector2(80, 0)
+	p._unhandled_input(look)
+	if not opened or first != Emotes.PASSINHO or second != Emotes.TCHAU or none != -1 or p.rotation.y != yaw_was:
+		bad.append("wheel opened %s picked %d then %d then %d, body turned %s" % [opened, first, second, none, p.rotation.y != yaw_was])
+	wheel.point(Vector2(0, -120))
+	Input.action_release("emote")
+	await _wait(g, 0.9)
+	var off := 0.0
+	var want := Emotes.pose(Emotes.PASSINHO, p.emote_time())
+	for i in CharRig.N:
+		off += absf(p._anim._out[i] - want[i])
+	if p.emote() != Emotes.PASSINHO or wheel.open or p.rig.first_person() or p.can_attack() or off > 2.5 or off == 0.0:
+		bad.append("letting go did not start it: emote %d wheel %s first person %s can attack %s pose off by %.2f" % [p.emote(), wheel.open, p.rig.first_person(), p.can_attack(), off])
+	# The mouse walks the view round the dancer and leaves the dancer alone.
+	p._unhandled_input(look)
+	if p.rotation.y != yaw_was or absf(p.rig.rotation.y) < 0.01:
+		bad.append("the view does not orbit")
+	# Walking off ends it, there and then.
+	Input.action_press("move_forward")
+	await _wait(g, 0.5)
+	Input.action_release("move_forward")
+	if p.emote() >= 0 or p.global_position.distance_to(spot) < 0.5 or p.st.get("emote", -1) >= 0:
+		bad.append("walking does not stop it (emote %d, moved %.2f)" % [p.emote(), p.global_position.distance_to(spot)])
+	await _wait(g, 1.0)
+	if not p.rig.first_person() or absf(p.rig.rotation.y) > 0.05:
+		bad.append("the view does not come back")
+
+	# A tap does the last one again; another stops it.
+	for round in 2:
+		Input.action_press("emote")
+		await _wait(g, 0.06)
+		Input.action_release("emote")
+		await _wait(g, 0.3)
+		if (p.emote() == Emotes.PASSINHO) != (round == 0) or wheel.open:
+			bad.append("tap %d left emote %d" % [round, p.emote()])
+
+	# One that is over when it is over.
+	p.start_emote(Emotes.DAB)
+	await _wait(g, 0.5)
+	var dabbing: bool = p.emote() == Emotes.DAB
+	await _wait(g, 1.8)
+	if not dabbing or p.emote() >= 0 or p.st.emote >= 0:
+		bad.append("dab: began %s, still going %d" % [dabbing, p.st.emote])
+
+	# One that travels, and is steered.
+	p.global_position = spot
+	p.rotation.y = PI / 2.0
+	await _wait(g, 0.2)
+	var from: Vector3 = p.global_position
+	p.start_emote(Emotes.TRENZINHO)
+	await _wait(g, 1.6)
+	var gone: float = from.x - p.global_position.x
+	Input.action_press("move_left")
+	await _wait(g, 0.4)
+	Input.action_release("move_left")
+	var steered: bool = p.rotation.y > PI / 2.0 + 0.3 and p.emote() == Emotes.TRENZINHO
+	Input.action_press("move_back")
+	await _wait(g, 0.2)
+	Input.action_release("move_back")
+	if gone < 1.0 or gone > 3.5 or not steered or p.emote() >= 0:
+		bad.append("trenzinho went %.2f m, steered %s, backed out of %s" % [gone, steered, p.emote() < 0])
+
+	# Not out cold, and not in mid-air.
+	p.st.ko = 5.0
+	p.start_emote(Emotes.DAB)
+	await _wait(g, 0.2)
+	var cold: int = p.st.emote
+	p.st.ko = 0.0
+	p.global_position = spot + Vector3(0, 4, 0)
+	await _wait(g, 0.1)
+	p.start_emote(Emotes.DAB)
+	await _wait(g, 0.2)
+	if cold >= 0 or p.st.emote >= 0:
+		bad.append("emotes out cold (%d) or in the air (%d)" % [cold, p.st.emote])
+	await _wait(g, 1.5)
+
+	# Somebody else's dance, joined on the beat it has got to.
+	p.global_position = spot
+	p.rotation.y = PI / 2.0
+	var other = g._make_player(99, "Par", spot + Vector3(0, 0, 2.0))
+	other.st.emote = Emotes.TRENZINHO
+	other.st.emote_t = MatchState.time - 1.3
+	other.st.emote_n = 1
+	await _wait(g, 0.3)
+	var hint: String = g.hud.join_hint
+	Input.action_press("emote")
+	await _wait(g, 0.06)
+	Input.action_release("emote")
+	await _wait(g, 0.3)
+	if hint == "" or p.emote() != Emotes.TRENZINHO or p.st.emote_t != other.st.emote_t or g.hud.join_hint != "":
+		bad.append("joining: hint '%s', emote %d, %.2f s apart" % [hint, p.emote(), p.st.emote_t - other.st.emote_t])
+	p.stop_emote()
+	g.players.erase(99)
+	other.queue_free()
+	await _wait(g, 0.3)
+
+	# People stop to look at a dance.
+	_reset(g)
+	g.police.reset()
+	p.st.hp = 100.0
+	p.st.heat = 0
+	p.global_position = spot
+	for k in 8:
+		_dummy(g, k, spot + Vector3(cos(k * 0.8) * 4.0, -0.2, sin(k * 0.8) * 4.0))
+	g.crowd._gawk.clear()
+	await _wait(g, 0.3)
+	p.start_emote(Emotes.FIO)
+	await _wait(g, 3.5)
+	var watching := 0
+	for k in 8:
+		if g.crowd._gawk.has(k):
+			watching += 1
+	if p.emote() != Emotes.FIO or watching < 2:
+		bad.append("fio dental drew %d of 8 (emote %d, jail %.1f, states %s)" % [watching, p.emote(), p.st.jail, Array(g.crowd.state.slice(0, 8))])
+	p.stop_emote()
+	await _wait(g, 0.3)
+
+	# The finger gun: whoever it points at when it goes off, and nobody else.
+	_reset(g)
+	p.global_position = spot
+	p.rotation.y = PI / 2.0
+	p.st.hp = 100.0
+	_dummy(g, 0, spot + Vector3(-2.5, -0.2, 0))
+	_dummy(g, 1, spot + Vector3(2.5, -0.2, 0))
+	_dummy(g, 2, spot + Vector3(-9.0, -0.2, 0))
+	_dummy(g, 3, spot + Vector3(-2.0, -0.2, 2.5))
+	await _wait(g, 0.3)
+	p.start_emote(Emotes.POU)
+	await _wait(g, 1.2)
+	var early: bool = g.crowd.state[0] >= g.crowd.DEAD
+	var sight := [g._clear(p.eye(), g.crowd.pos[0] + Vector3(0, 1.3, 0)), g.crowd.pos[0], g.crowd.state[0], g._emote_hit]
+	var mid := "sight %s emote %d hp %.0f jail %.1f heat %d at %s yaw %.2f" % [sight, p.emote(), p.st.hp, p.st.jail, p.st.heat, p.global_position - spot, p.rotation.y]
+	await _wait(g, 1.0)
+	var fate := [g.crowd.state[0] >= g.crowd.DEAD, g.crowd.state[1] >= g.crowd.DEAD, g.crowd.state[2] >= g.crowd.DEAD, g.crowd.state[3] >= g.crowd.DEAD]
+	if early or fate != [true, false, false, false]:
+		bad.append("pou: dead early %s, then %s (%s)" % [early, fate, mid])
+	await _wait(g, 1.5)
+	# The law has no part in what comes next.
+	g.police.reset()
+	p.st.heat = 0
+	p.st.jail = 0.0
+	p.st.hp = 100.0
+	p.st.ko = 0.0
+	# Thinking better of it kills nobody; the boot does, from close up, and a player at that.
+	_reset(g)
+	p.global_position = spot
+	p.rotation.y = PI / 2.0
+	var mark = g._make_player(98, "Alvo", spot + Vector3(-1.3, 0, 0))
+	await _wait(g, 0.3)
+	p.start_emote(Emotes.BICUDA)
+	await _wait(g, 0.6)
+	p.stop_emote()
+	await _wait(g, 1.0)
+	var spared: bool = not mark.st.dead
+	p.start_emote(Emotes.BICUDA)
+	await _wait(g, 1.5)
+	if not spared or not mark.st.dead:
+		bad.append("bicuda: spared when called off %s, dead when not %s (jail %.1f, %.1f m off)" % [spared, mark.st.dead, p.st.jail, p.global_position.distance_to(spot)])
+	g.players.erase(98)
+	mark.queue_free()
+	await _wait(g, 0.6)
+	p.stop_emote()
+	_keys_up()
+	g.debug_result("emotes", bad.is_empty(), "%d emotes%s" % [Emotes.COUNT, "" if bad.is_empty() else ": " + "; ".join(bad)])
+
+
+## Every emote at once, one body each, six at a time, photographed at three moments of
+## itself (or with --emote=<id> just that one, close up, at eight); and the wheel on two of
+## its pages. For looking at: it always passes.
+static func _emote_shots(g: Node) -> void:
+	var p = g.local_player
+	var base := Vector3(-20, 0.2, 45)
+	g.crowd.visible = false
+	p.global_position = base + Vector3(0, 0, 30)
+	Input.action_press("emote")
+	await _wait(g, 0.4)
+	g.hud.wheel.point(Vector2(90, -90))
+	await _wait(g, 0.5)
+	await _snap(g, "wheel_0")
+	g.hud.wheel.turn_page(1)
+	g.hud.wheel.point(Vector2(-120, 20))
+	await _wait(g, 0.3)
+	await _snap(g, "wheel_1")
+	Input.action_release("emote")
+	g.hud.wheel.close()
+	var bodies: Array = []
+	for id in Emotes.COUNT:
+		var b = g._make_player(200 + id, "", base)
+		b.net_yaw = PI
+		b.st.emote = id
+		b.st.emote_n = 1
+		bodies.append(b)
+	var only := -1
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--emote="):
+			only = int(a.trim_prefix("--emote="))
+	g.police.visible = false
+	g.dogs.visible = false
+	for row in (3 if only < 0 else 1):
+		for id in Emotes.COUNT:
+			var here: bool = id / 6 == row if only < 0 else id == only
+			bodies[id].net_pos = base + (Vector3((id % 6 - 2.5) * 1.3 if only < 0 else 0.0, 0, 0) if here else Vector3(0, 0, -60))
+			bodies[id].global_position = bodies[id].net_pos
+		var cam := _camera(g, base + (Vector3(3.2, 1.5, 8.6) if only < 0 else Vector3(2.2, 1.3, 3.6)), base + Vector3(0, 0.85, 0), 27.0 if only < 0 else 40.0)
+		var shots := 3 if only < 0 else 8
+		for shot in shots:
+			for id in Emotes.COUNT:
+				bodies[id].st.emote_t = MatchState.time - Emotes.LIST[id].len * (shot + 0.5) / shots + 0.3
+			await _wait(g, 0.3)
+			await _snap(g, "emotes_%d_%d" % [row, shot])
+		cam.queue_free()
+	g.debug_result("emoteshots", true, "%d emotes" % Emotes.COUNT)

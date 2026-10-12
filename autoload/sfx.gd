@@ -75,6 +75,12 @@ func play(sound: String, at: Vector3, db := 0.0, pitch := 1.0) -> void:
 	p.play()
 
 
+## The stream called `sound` for a caller with a player of its own, or null if there is no
+## such thing (or not yet).
+func stream(sound: String) -> AudioStream:
+	return _streams.get(sound)
+
+
 ## A looping source for the caller to add to the scene and move about. It starts itself
 ## once the sound exists.
 func emitter(sound: String, db := 0.0, unit := 8.0, reach := 90.0, autoplay := true) -> AudioStreamPlayer3D:
@@ -216,8 +222,29 @@ func _build() -> void:
 	made["ski"] = _wav(_ski(), true)
 	made["tick"] = _wav(_tick(1500.0), false)
 	made["tick_kill"] = _wav(_tick(900.0), false)
+	made["bell"] = _wav(_bell(), false)
+	made["roll"] = _wav(_roll(), true)
 	for k in BABBLE:
 		made["babble%d" % k] = _wav(_syllable(k), false)
+	# What people dance to when they bring their own: two bars each, at the tempo of the feet.
+	made["em_passinho"] = _wav(_tune(126.0, [0, 6, 8, 16, 22, 24, 27], [4, 12, 20, 28, 30], 2,
+			{0: 45, 6: 45, 8: 48, 14: 43, 16: 45, 22: 45, 24: 50, 28: 48},
+			{0: 69, 3: 72, 6: 76, 8: 74, 11: 72, 14: 69, 16: 69, 19: 72, 22: 76, 24: 79, 26: 76, 28: 74, 30: 72}), true)
+	made["em_fio"] = _wav(_tune(120.0, [0, 4, 8, 12, 16, 20, 24, 28], [4, 12, 20, 28], 2,
+			{0: 48, 8: 43, 16: 45, 24: 41},
+			{0: 72, 2: 76, 4: 79, 6: 76, 8: 71, 10: 74, 12: 79, 14: 74, 16: 72, 18: 76, 20: 81, 22: 76, 24: 72, 26: 77, 28: 81, 30: 77}), true)
+	made["em_toma"] = _wav(_tune(140.0, [0, 8, 16, 24, 28], [4, 12, 20, 26, 30], 4,
+			{0: 43, 8: 43, 16: 38, 24: 43},
+			{0: 79, 4: 79, 8: 76, 12: 81, 16: 79, 24: 76}), true)
+	made["em_cossaco"] = _wav(_tune(150.0, [0, 8, 16, 24], [4, 12, 20, 28], 4,
+			{0: 45, 4: 52, 8: 45, 12: 52, 16: 40, 20: 52, 24: 40, 28: 52},
+			{0: 69, 2: 71, 4: 72, 6: 74, 8: 76, 12: 76, 16: 77, 18: 76, 20: 74, 22: 72, 24: 71, 28: 68}), true)
+	made["em_trenzinho"] = _wav(_tune(116.0, [0, 4, 8, 12, 16, 20, 24, 28], [12, 28], 2,
+			{0: 48, 4: 52, 8: 55, 12: 60, 16: 50, 20: 53, 24: 55, 28: 62},
+			{0: 72, 4: 72, 8: 76, 12: 79, 13: 79, 16: 74, 20: 74, 24: 77, 28: 81, 29: 81}), true)
+	made["clap"] = _wav(_clap(), false)
+	made["pou"] = _wav(_pou(), false)
+	made["whoosh"] = _wav(_whoosh(), false)
 	_adopt.call_deferred(made)
 
 
@@ -415,6 +442,69 @@ func _samba() -> PackedFloat32Array:
 			_tone(f, at, 880.0, 880.0, 0.05, 0.2)
 		if s in [3, 8, 13]:
 			_tone(f, at, 660.0, 660.0, 0.05, 0.2)
+	return f
+
+
+## Two bars of a tune in sixteenths: which steps the kick and the clap fall on, how often the
+## shaker ticks, and the notes (step -> MIDI number) of a bass and of a plucked lead over it.
+func _tune(bpm: float, kick: Array, clap: Array, shake: int, bass: Dictionary, lead: Dictionary) -> PackedFloat32Array:
+	var step := 60.0 / bpm / 4.0
+	var f := _buf(step * 32.0)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = int(bpm)
+	for s in 32:
+		var at := s * step
+		if s in kick:
+			_tone(f, at, 110.0, 46.0, 0.055, 1.0)
+		if s in clap:
+			_hiss(f, rng, at, 0.028, 0.5, 0.7)
+			_hiss(f, rng, at + 0.012, 0.02, 0.3, 0.9)
+		if s % shake == 0:
+			_hiss(f, rng, at, 0.012, 0.12 if s % 4 == 0 else 0.07)
+		if bass.has(s):
+			var hz := 440.0 * pow(2.0, (bass[s] - 69) / 12.0)
+			_tone(f, at, hz, hz, 0.11, 0.55)
+			_tone(f, at, hz * 2.0, hz * 2.0, 0.05, 0.16)
+		if lead.has(s):
+			var hz := 440.0 * pow(2.0, (lead[s] - 69) / 12.0)
+			_tone(f, at, hz, hz, 0.075, 0.3)
+			_tone(f, at, hz * 2.0, hz * 2.0, 0.04, 0.11)
+			_tone(f, at, hz * 3.0, hz * 3.0, 0.025, 0.05)
+	return f
+
+
+## Two palms meeting: not one crack but three, a few thousandths apart.
+func _clap() -> PackedFloat32Array:
+	var f := _buf(0.16)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 31
+	for k in 3:
+		_hiss(f, rng, k * 0.007, 0.006 + k * 0.007, 0.5, 0.75)
+	_tone(f, 0.0, 1100.0, 900.0, 0.01, 0.25)
+	return f
+
+
+## A gun as done by somebody's mouth.
+func _pou() -> PackedFloat32Array:
+	var f := _voice(0.34, [520.0, 300.0, 170.0, 120.0], [700.0, 1100.0], 0.25, 41)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 41
+	_hiss(f, rng, 0.0, 0.012, 0.9, 0.5)
+	_tone(f, 0.0, 190.0, 70.0, 0.05, 0.8)
+	return f
+
+
+## A leg going through the air with intent.
+func _whoosh() -> PackedFloat32Array:
+	var f := _buf(0.32)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 43
+	var y := 0.0
+	for i in f.size():
+		var t := float(i) / RATE / 0.32
+		var e := sin(PI * t)
+		y += lerpf(0.05, 0.5, e) * (rng.randf_range(-1.0, 1.0) - y)
+		f[i] = y * e * e
 	return f
 
 
@@ -626,6 +716,32 @@ func _tick(hz: float) -> PackedFloat32Array:
 	var f := _buf(0.09)
 	_tone(f, 0.0, hz, hz * 0.8, 0.012, 0.8)
 	_tone(f, 0.0, hz * 2.0, hz * 1.9, 0.006, 0.4)
+	return f
+
+
+## A croupier's bell: struck once and left to ring.
+func _bell() -> PackedFloat32Array:
+	var f := _buf(1.4)
+	_tone(f, 0.0, 1180.0, 1180.0, 0.22, 0.7)
+	_tone(f, 0.0, 2390.0, 2390.0, 0.12, 0.35)
+	_tone(f, 0.0, 3560.0, 3560.0, 0.06, 0.2)
+	_tone(f, 0.0, 400.0, 300.0, 0.01, 0.5)
+	return f
+
+
+## A ball running round a wooden track, to loop: a hollow rumble with the grain in it.
+func _roll() -> PackedFloat32Array:
+	var f := _buf(1.0)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 41
+	var lo := 0.0
+	var mid := 0.0
+	for i in f.size():
+		var t := float(i) / RATE
+		var x := rng.randf_range(-1.0, 1.0)
+		lo += 0.03 * (x - lo)
+		mid += 0.3 * (x - mid)
+		f[i] = lo * 3.0 + (mid - lo) * 0.25 * (0.6 + 0.4 * sin(TAU * 12.0 * t)) + sin(TAU * 96.0 * t) * 0.05
 	return f
 
 

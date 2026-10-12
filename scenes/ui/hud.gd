@@ -24,6 +24,7 @@ const TEXT_W := 900.0
 const SettingsMenu := preload("res://scenes/ui/settings_menu.gd")
 const DrugKit := preload("res://scenes/items/drug_kit.gd")
 const UI := preload("res://scenes/ui/ui_kit.gd")
+const EmoteWheel := preload("res://scenes/ui/emote_wheel.gd")
 const Layout := preload("res://scenes/world/layout.gd")
 ## What being under water does to the picture.
 const UNDER_BLUR := 0.9
@@ -39,12 +40,23 @@ const HELP := [
 	["1  2  3  4", "fists and blades / guns / sniper and launcher / grenades"],
 	["E (hold)", "rob: shout at them, or keep quiet over a sunbather"], ["V", "fake a shout"],
 	["F", "use, pick up, shop, hide, take a moto or a jet ski"], ["Z  X  G", "pick a drug, take it"],
+	["B (hold)", "emotes: point at one and let go; tap to join in, stop, or go again"],
 	["Tab", "scores"], ["Esc", "menu and settings"], ["F11", "fullscreen"],
 ]
 
 var shop_open := false
+var _wheel_row: HBoxContainer
+var _wheel_call: Label
+var _wheel_last: Array[Label] = []
+var _wheel_bets: Label
+## The buttons of the roleta's betting panel while it is the one that is open.
+var _wheel_buttons: Array = []
 ## The pause menu (Esc) is up: settings, leave, quit. The match carries on behind it.
 var menu_open := false
+## The emote wheel, for the player to open and steer.
+var wheel: EmoteWheel
+## What the emote key would do right now, shown when F has nothing to offer.
+var join_hint := ""
 
 var _root: Control
 var _tint: ColorRect
@@ -146,6 +158,20 @@ func _ready() -> void:
 	_top = _stack(Control.PRESET_CENTER_TOP)
 	_clock = _text(_top, 36, UI.SAND, true)
 	_crowd = _text(_top, 15, UI.DIM)
+	# The roleta, while you are near it or have money on it: the call, and what came up lately.
+	_wheel_row = HBoxContainer.new()
+	_wheel_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_wheel_row.add_theme_constant_override("separation", 9)
+	_wheel_row.visible = false
+	_top.add_child(_wheel_row)
+	_wheel_call = UI.label(22, UI.CANARY, true)
+	_wheel_row.add_child(_wheel_call)
+	for k in 8:
+		var n := UI.label(22 if k == 0 else 18, UI.SAND, true)
+		_wheel_row.add_child(n)
+		_wheel_last.append(n)
+	_wheel_bets = _text(_top, 17, UI.SAND, false, TEXT_W)
+	_wheel_bets.visible = false
 	_banner = _text(_top, 34, Color(1.0, 0.6, 0.15), true, TEXT_W)
 	_toasts = VBoxContainer.new()
 	_toasts.add_theme_constant_override("separation", 0)
@@ -276,6 +302,8 @@ func _ready() -> void:
 		what.text = pair[1]
 		keys.add_child(what)
 
+	wheel = EmoteWheel.new()
+	_root.add_child(wheel)
 	_ignore_mouse(_root)
 
 	# Shop is the one interactive panel, so it is added after the mouse pass.
@@ -443,7 +471,7 @@ func hit_marker(head: bool, kill: bool) -> void:
 
 ## What F would do right now, and how far through a hold it is.
 func set_prompt(text: String, frac: float) -> void:
-	_prompt.text = text
+	_prompt.text = text if text != "" else join_hint
 	_hold_bar.visible = frac > 0.0
 	_hold_bar.value = frac
 
@@ -632,6 +660,98 @@ func open_roulette() -> void:
 	_close_button()
 
 
+## The wheel on the beach. Unlike the tables indoors the bets wait for the spin, so the panel
+## stays up for as many as you want to put on, and says how long there is left to do it.
+func open_wheel() -> void:
+	_game_panel("ROLETA", "pick a stake, then your bets; they all ride on the next spin")
+	var stake := _stakes()
+	var roleta = Net.game.roleta
+	var casino = Net.game.casino
+	var bet := func(kind: int, n: int) -> void: Net.game.to_server("srv_bet", [kind, n, stake[0]], roleta)
+	var buttons: Array = []
+	var grid := GridContainer.new()
+	grid.columns = 3
+	_shop_list.add_child(grid)
+	for kind in 6:
+		var b := Button.new()
+		b.text = "%s  pays %d:1" % [casino.BETS[kind][0], casino.BETS[kind][1] - 1]
+		b.pressed.connect(bet.bind(kind, 0))
+		grid.add_child(b)
+		buttons.append(b)
+	for dozen in 3:
+		var b := Button.new()
+		b.text = "%d-%d  pays 2:1" % [dozen * 12 + 1, dozen * 12 + 12]
+		b.pressed.connect(bet.bind(6, dozen))
+		grid.add_child(b)
+		buttons.append(b)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_shop_list.add_child(row)
+	var number := SpinBox.new()
+	number.min_value = 0
+	number.max_value = 36
+	number.value = 17
+	row.add_child(number)
+	var straight := Button.new()
+	straight.text = "ON THE NUMBER  pays 35:1"
+	straight.pressed.connect(func(): bet.call(7, int(number.value)))
+	row.add_child(straight)
+	buttons.append(straight)
+	_close_button()
+	_wheel_buttons = buttons
+
+
+## How a spin came out for this player.
+func wheel_result(text: String, won: bool) -> void:
+	if shop_open and not _wheel_buttons.is_empty() and is_instance_valid(_result):
+		_result.text = text
+	elif won:
+		banner(text)
+	else:
+		toast(text)
+
+
+## The strip under the clock, and the betting panel if it is up.
+func _wheel_tick(p) -> void:
+	var roleta = Net.game.roleta
+	var ph: Array = roleta.phase_at(MatchState.time)
+	var r: int = ph[0]
+	var mine: Array = roleta.my_bets if roleta.my_round == r else []
+	var near: bool = p.global_position.distance_to(Layout.WHEEL_POS) < 45.0
+	var line := ""
+	match ph[1]:
+		roleta.OPEN: line = "ROLETA   bets close in %d" % ceili(ph[2])
+		roleta.SPIN: line = "ROLETA   nada mais..."
+		roleta.PAID: line = "ROLETA   %d %s" % [roleta.result_of(r), Net.game.casino.colour(roleta.result_of(r)).to_upper()] if roleta.result_of(r) >= 0 else "ROLETA"
+		roleta.SHUT: line = "ROLETA   fechado"
+	_wheel_row.visible = near or not mine.is_empty()
+	if _wheel_row.visible:
+		_wheel_call.text = line
+		_wheel_call.add_theme_color_override("font_color", UI.GUARANA.lightened(0.25) if ph[1] == roleta.SPIN or (ph[1] == roleta.OPEN and ph[2] < 5.0) else UI.CANARY)
+		var back: int = r - (0 if ph[1] == roleta.PAID else 1)
+		for l in _wheel_last:
+			while back >= 0 and roleta.result_of(back) < 0:
+				back -= 1
+			var n: int = roleta.result_of(back)
+			l.text = str(n) if n >= 0 else ""
+			l.add_theme_color_override("font_color", UI.SEA if n == 0 else (UI.GUARANA.lightened(0.2) if roleta.is_red(n) else UI.SAND))
+			back -= 1
+	var slip: Array = []
+	var staked := 0
+	for b in mine:
+		slip.append(roleta.bet_text(b))
+		staked += b[2]
+	_wheel_bets.visible = not mine.is_empty()
+	if _wheel_bets.visible:
+		_wheel_bets.text = "on the table R$%d:   %s" % [staked, ",   ".join(slip)]
+	if shop_open and not _wheel_buttons.is_empty() and is_instance_valid(_result):
+		var taking: bool = ph[1] == roleta.OPEN and ph[2] > 0.3
+		for b in _wheel_buttons:
+			b.disabled = not taking
+		if ph[1] != roleta.PAID or mine.is_empty():
+			_result.text = "%s\n%s" % [line.trim_prefix("ROLETA   "), ("R$%d on:  %s" % [staked, ",  ".join(slip)]) if not mine.is_empty() else "nothing on the table"]
+
+
 func open_blackjack() -> void:
 	_game_panel("VINTE-E-UM", "house stands on 17; a natural pays 3:2")
 	var stake := _stakes()
@@ -678,6 +798,7 @@ func _open_panel(title_text: String) -> void:
 	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	title.custom_minimum_size.x = 300
 	_shop_list.add_child(title)
+	_wheel_buttons = []
 	_shop.visible = true
 	shop_open = true
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -694,6 +815,7 @@ func _close_button() -> void:
 func close_shop() -> void:
 	_shop.visible = false
 	shop_open = false
+	_wheel_buttons = []
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
@@ -752,6 +874,7 @@ func _process(delta: float) -> void:
 	_hurt.material.set_shader_parameter("amount", maxf(_hurt_k, low))
 
 	_money.text = "R$ %d" % st.money
+	_wheel_tick(p)
 
 	# What is in the hand, and how much of it is left.
 	var w = DB.ITEMS[st.equipped]
@@ -791,7 +914,7 @@ func _process(delta: float) -> void:
 		loose = w.hip if w.has("scope") and not p.is_aiming() else w.spread
 		loose *= 0.6 if p.is_crouched() else (1.5 if p.mv == p.MV_AIR else 1.0)
 	_reticle.spread = loose / deg_to_rad(maxf(p.rig.cam.fov, 1.0))
-	_reticle.show_cross = not p.scoped and not shop_open and not menu_open and not st.dead
+	_reticle.show_cross = not p.scoped and not shop_open and not menu_open and not st.dead and not wheel.open and p.emote() < 0
 	_scope.visible = p.scoped and p.rig.first_person()
 
 	_update_hotbar(p)

@@ -86,6 +86,11 @@ const COURTS := [
 	[Vector3(100, 0, 35), Vector2(8, 4)],
 ]
 
+## The roulette wheel stands on the sand below the casino, facing the sea. WHEEL_AREA is the
+## ground it and its audience take up: nothing else is put there.
+const WHEEL_POS := Vector3(-21, 0, 34)
+const WHEEL_AREA := [Vector3(-21, 0, 30.5), Vector2(10.0, 9.0)]
+
 ## Plots in the two building rows (row 0 faces the avenida, row 1 the back street) that the
 ## street leaves empty for a building you can walk into. `door` and `back` are the x of the
 ## front and back doorways, `public` how deep from the front the customers' part goes.
@@ -318,3 +323,22 @@ static func on_play_area(p: Vector3, margin := 0.0) -> bool:
 		if in_rect(p, c, margin):
 			return true
 	return false
+
+
+static func on_wheel(p: Vector3, margin := 0.0) -> bool:
+	return in_rect(p, WHEEL_AREA, margin)
+
+
+## p, or if that is on the wheel's ground the nearest spot off it: to one side or toward the
+## sea, never up against the promenade wall behind.
+static func off_wheel(p: Vector3, margin := 0.0) -> Vector3:
+	if not on_wheel(p, margin):
+		return p
+	var c: Vector3 = WHEEL_AREA[0]
+	var h: Vector2 = WHEEL_AREA[1] + Vector2(margin, margin)
+	var west := p.x - (c.x - h.x)
+	var east := c.x + h.x - p.x
+	var south := p.z - (c.z - h.y)
+	if south <= west and south <= east:
+		return Vector3(p.x, p.y, c.z - h.y)
+	return Vector3(c.x - h.x if west < east else c.x + h.x, p.y, p.z)

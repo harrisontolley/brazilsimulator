@@ -283,10 +283,13 @@ func _decor() -> void:
 		if Layout.on_play_area(p, 2.0):
 			continue
 		var tint := Color.from_hsv(rng.randf(), 0.75, 0.95)
-		_parasol(p, tint)
+		# The dice are thrown for the ones the wheel stands on too, so the rest fall as they did.
+		var shown := not Layout.on_wheel(p, 2.5)
+		if shown:
+			_parasol(p, tint)
 		if rng.randf() < 0.6:
 			var yaw := rng.randf() * TAU
-			for side in [-0.6, 0.6]:
+			for side in ([-0.6, 0.6] if shown else []):
 				var at := p + Basis(Vector3.UP, yaw) * Vector3(side, 0, 1.0)
 				_box(at + Vector3(0, 0.22, 0), Vector3(0.55, 0.06, 1.0), tint.lightened(0.4), Vector3(0.0, yaw, 0.0))
 				_box(at + Basis(Vector3.UP, yaw) * Vector3(0, 0.45, -0.6), Vector3(0.55, 0.06, 0.6), tint.lightened(0.4), Vector3(-1.0, yaw, 0.0))
@@ -362,7 +365,9 @@ func _palms() -> void:
 	for i in 46:
 		var p := Vector3(rng.randf_range(-295, 295), 0, rng.randf_range(28, 38))
 		if not Layout.on_play_area(p, 3.0):
-			xf.append(_palm_at(rng, p))
+			var palm := _palm_at(rng, p)
+			if not Layout.on_wheel(p, 4.0):
+				xf.append(palm)
 	_instances(mesh, _vertex_mat(), xf)
 
 
@@ -463,9 +468,16 @@ func _cover() -> void:
 			continue
 		var w := rng.randf_range(3.0, 5.5)
 		var d := rng.randf_range(2.0, 3.2)
+		var shown := not Layout.on_wheel(p, 3.0)
 		for k in 7:
 			var g := Color(0.16, 0.42 + rng.randf() * 0.14, 0.18)
-			_box(p + Vector3(rng.randf_range(-0.5, 0.5) * w, 0.45, rng.randf_range(-0.5, 0.5) * d), Vector3(rng.randf_range(1.0, 1.7), rng.randf_range(0.7, 1.1), rng.randf_range(1.0, 1.6)), g, Vector3(0, rng.randf() * PI, 0))
+			var at := p + Vector3(rng.randf_range(-0.5, 0.5) * w, 0.45, rng.randf_range(-0.5, 0.5) * d)
+			var size := Vector3(rng.randf_range(1.0, 1.7), rng.randf_range(0.7, 1.1), rng.randf_range(1.0, 1.6))
+			var turn := rng.randf() * PI
+			if shown:
+				_box(at, size, g, Vector3(0, turn, 0))
+		if not shown:
+			continue
 		Places.add_cover(AABB(p - Vector3(w * 0.5 + 0.4, 0.5, d * 0.5 + 0.4), Vector3(w + 0.8, 2.5, d + 0.8)), 0.4, true)
 
 
@@ -505,7 +517,7 @@ func _promenade() -> void:
 			_box(g + Vector3(0, 2.2 + k * 0.12, 0), Vector3(2.0, 0.08, 0.08), STEEL)
 		_solid(Vector3(gx + 9.0, 0.3, 37.2), Vector3(2.2, 0.6, 0.7), Color(0.1, 0.45, 0.2))
 	# Sand castles near the wall.
-	for sx in [-205.0, -20.0, 77.0, 232.0]:
+	for sx in [-205.0, -78.0, 77.0, 232.0]:
 		var s := Vector3(sx, 0, 36.6)
 		var sand := SAND.darkened(0.12)
 		_box(s + Vector3(0, 0.5, 0), Vector3(3.0, 1.0, 3.0), sand)

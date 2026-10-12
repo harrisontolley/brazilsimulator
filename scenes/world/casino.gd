@@ -110,19 +110,26 @@ func srv_roulette(kind: int, n: int, amount: int) -> void:
 	if p == null:
 		return
 	var roll := randi_range(0, 36)
+	_settle(p, amount, amount * BETS[kind][1] if wins(kind, clampi(n, 0, 36 if kind == 7 else 2), roll) else 0, "%d %s" % [roll, colour(roll)])
+
+
+## Does a bet of `kind` (on dozen or number n, for the two that take one) win when `roll` comes up?
+static func wins(kind: int, n: int, roll: int) -> bool:
 	var red := REDS.has(roll)
-	var won := false
 	match kind:
-		0: won = red
-		1: won = roll > 0 and not red
-		2: won = roll > 0 and roll % 2 == 0
-		3: won = roll % 2 == 1
-		4: won = roll >= 1 and roll <= 18
-		5: won = roll >= 19
-		6: won = roll > 0 and (roll - 1) / 12 == clampi(n, 0, 2)
-		7: won = roll == clampi(n, 0, 36)
-	var colour := "verde" if roll == 0 else ("vermelho" if red else "preto")
-	_settle(p, amount, amount * BETS[kind][1] if won else 0, "%d %s" % [roll, colour])
+		0: return red
+		1: return roll > 0 and not red
+		2: return roll > 0 and roll % 2 == 0
+		3: return roll % 2 == 1
+		4: return roll >= 1 and roll <= 18
+		5: return roll >= 19
+		6: return roll > 0 and (roll - 1) / 12 == n
+		7: return roll == n
+	return false
+
+
+static func colour(roll: int) -> String:
+	return "verde" if roll == 0 else ("vermelho" if REDS.has(roll) else "preto")
 
 
 # --- vinte-e-um ---
@@ -227,7 +234,8 @@ func srv_safe(p, _act: Dictionary, _arg: int) -> void:
 		g.send(p.id, "cl_toast", ["The safe is empty - somebody got here first"])
 		return
 	_safe_ok = MatchState.time + SAFE_COOLDOWN
-	var take: int = mini(int(bank * 0.6), 4000)
+	# (A good night for the punters can leave the float in the red; the safe is then just empty.)
+	var take: int = clampi(int(bank * 0.6), 0, 4000)
 	bank -= take
 	p.st.money += take
 	_banned[p.id] = MatchState.time + BAN_TIME

@@ -6,7 +6,7 @@
 //               .y = time the pose last changed (the old one blends out from there),
 //               .z = flag bits, .w = time of last one-shot (+ attack, - hit).
 //
-// Players are "rigged": their pose arrives whole in rig0..rig4 from scenes/characters/char_rig.gd,
+// Players are "rigged": their pose arrives whole in rig0..rig5 from scenes/characters/char_rig.gd,
 // which can smooth and interrupt transitions in ways a stateless shader cannot.
 
 uniform float now = 0.0;
@@ -20,6 +20,7 @@ uniform vec4 rig1 = vec4(0.0);  // arm_r, lean
 uniform vec4 rig2 = vec4(0.0);  // leg_l, leg_r
 uniform vec4 rig3 = vec4(0.0);  // head, rise, pitch
 uniform vec4 rig4 = vec4(0.0);  // brow, shift, squash, roll
+uniform vec4 rig5 = vec4(0.0);  // twist, bend, tilt, sway
 
 const float HALF_PI = 1.5707963;
 
@@ -799,8 +800,12 @@ void char_vertex(inout vec3 p, inout vec3 n, float propf, float partf, vec4 cd, 
 	Pose q;
 	float squash = 0.0;
 	float roll = 0.0;
+	// Joints only a rigged body has: the chest turning and tipping over the hips, the head
+	// on one side, and the hips swung out over planted feet.
+	vec4 more = vec4(0.0);
 	if (rigged) {
 		roll = rig4.w;
+		more = rig5;
 		q = Pose(rig0.xyz, rig1.xyz, rig2.xy, rig2.zw, rig0.w, rig1.w, rig3.xy, rig3.z, rig3.w, rig4.x, rig4.y);
 		squash = rig4.z;
 	} else {
@@ -861,6 +866,7 @@ void char_vertex(inout vec3 p, inout vec3 n, float propf, float partf, vec4 cd, 
 		vec3 neck = vec3(0.0, 1.4, 0.0);
 		p = neck + (p - neck) * (1.0 + 0.9 * min(trip, 1.0) * (0.75 + 0.25 * sin(now * 2.0 + seed * 40.0)));
 		ry(p, n, neck, q.head.y);
+		rz(p, n, neck, more.z);
 		rx(p, n, neck, -q.head.x);
 	}
 	if (part == PART_FORE_L) {
@@ -888,7 +894,7 @@ void char_vertex(inout vec3 p, inout vec3 n, float propf, float partf, vec4 cd, 
 	if (part == PART_THIGH_L) {
 		vec3 hip = vec3(-0.095, 0.8, 0.0);
 		rx(p, n, hip, q.leg_l.x);
-		rz(p, n, hip, -q.spread);
+		rz(p, n, hip, more.w - q.spread);
 	}
 	if (part == PART_SHIN_R) {
 		rx(p, n, vec3(0.095, 0.45, 0.0), -q.leg_r.y);
@@ -897,11 +903,17 @@ void char_vertex(inout vec3 p, inout vec3 n, float propf, float partf, vec4 cd, 
 	if (part == PART_THIGH_R) {
 		vec3 hip = vec3(0.095, 0.8, 0.0);
 		rx(p, n, hip, q.leg_r.x);
-		rz(p, n, hip, q.spread);
+		rz(p, n, hip, more.w + q.spread);
 	}
 	if (part <= PART_FORE_R) {
-		rx(p, n, vec3(0.0, 0.82, 0.0), -q.lean);
+		vec3 waist = vec3(0.0, 0.82, 0.0);
+		// The pelvis stays with the legs; the turn comes in up the spine.
+		float up = part == PART_TORSO ? smoothstep(0.82, 1.1, p.y) : 1.0;
+		ry(p, n, waist, more.x * up);
+		rz(p, n, waist, more.y * up);
+		rx(p, n, waist, -q.lean);
 	}
+	p.x -= sin(more.w) * 0.75;
 
 	p.y += q.rise;
 	// Squash and stretch on a hit or a landing, anchored at the feet.

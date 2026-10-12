@@ -93,6 +93,8 @@ var hp := PackedFloat32Array()
 var near := PackedInt32Array()
 
 const PARTY_RANGE := 10.0
+## How far off people will stop to watch somebody dancing.
+const WATCH_RANGE := 9.0
 var _party := {}           # idx -> true while dancing along with someone on bala
 ## What the ambient crowd is up to in groups: tables, ball games, gangs (see activities.gd).
 var acts: Node3D
@@ -128,6 +130,7 @@ var _idle := PackedByteArray()     # Kit pose when standing about (dancers, drum
 var _afloat := PackedByteArray()   # 1: on a boat, with nowhere to walk to
 var _gun := PackedByteArray()      # 1: carries a pistol openly (the boca's soldiers)
 var _grp := PackedInt32Array()     # activity group they belong to, -1 once they have left it
+var _stand_grp := -1               # the group of everybody past COUNT (Places.stands)
 var _sit := PackedByteArray()      # 1: sitting down
 var _gest := PackedByteArray()     # 1: the one doing the talking
 var _babble: Node3D
@@ -198,7 +201,9 @@ func setup(seed_value: int) -> void:
 	near.clear()
 	_leave_ptr = 0
 
-	count = COUNT
+	# Whoever the world asked for by name comes after everybody else, with dice of their own.
+	var stands: Array = Places.stands
+	count = COUNT + stands.size()
 	pos.resize(count)
 	_home.resize(count)
 	_w_dir.resize(count)
@@ -258,12 +263,26 @@ func setup(seed_value: int) -> void:
 
 	var sea_rng := RandomNumberGenerator.new()
 	sea_rng.seed = seed_value ^ 0x5EA
+	var stand_rng := RandomNumberGenerator.new()
+	stand_rng.seed = seed_value ^ 0x70DA
+	_stand_grp = acts.adopt(stands[0].pos, COUNT, stands.size()) if not stands.is_empty() else -1
 	for i in count:
 		# Where they spend the day decides a lot about who they are.
-		var spot: Dictionary = planned[i] if i < planned.size() else _spot(rng)
+		var spot: Dictionary
+		if i >= COUNT:
+			var s: Dictionary = stands[i - COUNT]
+			spot = {"p": s.pos, "walk": 0.0, "dir": Basis(Vector3.UP, s.yaw) * Vector3.FORWARD, "far": 1.0, "yaw": s.yaw, "idle": s.idle, "grp": _stand_grp, "stay": true}
+			if s.arch != "":
+				spot["arch"] = s.arch
+			spot.merge(s.opts)
+		elif i < planned.size():
+			spot = planned[i]
+		else:
+			spot = _spot(rng)
+			spot.p = Layout.off_wheel(spot.p, 1.0)
 		# People on the water draw their looks from dice of their own, so that putting them
-		# there changes nobody on land.
-		var r: RandomNumberGenerator = sea_rng if spot.get("afloat", false) else rng
+		# there changes nobody on land. So do the ones added at the end.
+		var r: RandomNumberGenerator = stand_rng if i >= COUNT else (sea_rng if spot.get("afloat", false) else rng)
 		var roll := r.randf()
 		var ai := 0
 		for k in DB.ARCHETYPES.size():
@@ -688,6 +707,25 @@ func srv_outrage(at: Vector3, pid: int) -> void:
 			Net.game.bcast("cl_gawk", [i, at, Kit.POINT if randf() < 0.6 else Kit.FILM, true], self)
 	if angry > 0:
 		Net.game.send(pid, "cl_toast", ["People saw what you did to that dog."])
+
+
+## Somebody at `at` is doing something worth a look and no threat to anyone. One more of the
+## people idling nearby stops to watch in one of `poses`, until there are `most` of them.
+func srv_watch(at: Vector3, poses: Array, most: int) -> void:
+	var free: Array = []
+	var watching := 0
+	for i in count:
+		if state[i] != AMBIENT or absf(pos[i].x - at.x) > WATCH_RANGE or absf(pos[i].z - at.z) > WATCH_RANGE or absf(pos[i].y - at.y) > 3.0:
+			continue
+		if _gawk.has(i):
+			watching += 1
+		elif _lying[i] == 0 and _grp[i] < 0 and pos[i].distance_to(at) > 1.5:
+			free.append(i)
+	if watching >= most or free.is_empty():
+		return
+	var i: int = free[randi() % free.size()]
+	_gawk[i] = MatchState.time + GAWK_TIME * randf_range(0.6, 1.1)
+	Net.game.bcast("cl_gawk", [i, at, poses[randi() % poses.size()], true], self)
 
 
 ## Is NPC i still at their activity, free to be told what to do?
@@ -1351,6 +1389,10 @@ func _resume(i: int) -> void:
 	elif off.length() < 1.5:
 		_home[i] = _origin[i]
 		_lying[i] = 1 if _was[i] & 2 else 0
+		if i >= COUNT:
+			# Back where they were put, facing the way they were, and under orders again.
+			_grp[i] = _stand_grp
+			_yaw[i] = _w_yaw[i]
 		_place(i, _home[i])
 
 
@@ -1393,7 +1435,7 @@ func _walk_to(from: Vector3, to: Vector3) -> PackedVector3Array:
 @rpc("authority", "call_remote", "reliable")
 func cl_shelter(t0: float) -> void:
 	for i in count:
-		if state[i] != AMBIENT or _walker[i] == 1 or _afloat[i] == 1 or pos[i].y > 1.0 or pos[i].z > 38.0 or (i * 7919) % 100 >= 65:
+		if state[i] != AMBIENT or _walker[i] == 1 or _afloat[i] == 1 or i >= COUNT or pos[i].y > 1.0 or pos[i].z > 38.0 or (i * 7919) % 100 >= 65:
 			continue
 		var to_z := 42.0 + (i * 31) % 80 * 0.1
 		var to := Nav.nearest_free(Vector3(pos[i].x + ((i * 13) % 9 - 4) * 0.6, 0.0, to_z))

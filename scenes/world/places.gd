@@ -21,6 +21,10 @@ static var uses: Array = []
 ## {pos, r, depth}: holes dug in the sand. These come and go with the match, so the crowd's
 ## activity planner owns the list rather than the world.
 static var pits: Array = []
+## {pos, yaw, idle, arch, opts}: people added to the crowd after everybody else, so that
+## putting them there changes nobody who was already in it. Whoever asked for them is the
+## one who tells them what to do.
+static var stands: Array = []
 
 static var _tables := 0
 
@@ -36,6 +40,7 @@ static func clear() -> void:
 	seats.clear()
 	spots.clear()
 	uses.clear()
+	stands.clear()
 	_tables = 0
 
 
@@ -64,6 +69,10 @@ static func add_seat(pos: Vector3, yaw: float, room := -1, table := -1) -> int:
 ## (never goes home), `afloat` (nowhere to walk to), `gun` (a Kit.HELD_* carried openly).
 static func add_spot(pos: Vector3, yaw: float, poses: Array, arch := "", room := -1, opts := {}) -> void:
 	spots.append({"pos": pos, "yaw": yaw, "poses": poses, "arch": arch, "room": room, "opts": opts})
+
+
+static func add_stand(pos: Vector3, yaw: float, idle: int, arch := "", opts := {}) -> void:
+	stands.append({"pos": pos, "yaw": yaw, "idle": idle, "arch": arch, "opts": opts})
 
 
 static func add_use(kind: StringName, pos: Vector3, prompt: String, arg := 0, hold := 0.0, jail := 0) -> void:
