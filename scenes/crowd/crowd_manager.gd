@@ -11,7 +11,7 @@ extends Node3D
 const Kit := preload("res://scenes/characters/char_kit.gd")
 const Layout := preload("res://scenes/world/layout.gd")
 
-enum { AMBIENT, COWER, FLEE, HOSTILE, DEAD, GONE }
+enum { AMBIENT, COWER, FLEE, HOSTILE, PARADE, DEAD, GONE }
 
 const COUNT := 2500
 const FLEE_SPEED := 5.5
@@ -26,6 +26,13 @@ const BODY_RADIUS := 0.5
 const WORLD_AABB := Layout.WORLD_AABB
 ## cl_npc flag bit: this hostile NPC has a gun out. The low two bits are its wealth tier.
 const NPC_SHOOTER := 4
+## cl_npc flag bit: a PARADE NPC is dancing along rather than running for cover.
+const NPC_DANCE := 8
+## cl_npc flag bit: a PARADE NPC is just walking there.
+const NPC_STROLL := 16
+const STROLL_SPEED := 1.5
+const DANCE_SPEED := 1.6
+const SHELTER_SPEED := 4.6
 const LOCAL_TOPS := [Color(1.0, 0.85, 0.1), Color(0.1, 0.65, 0.3), Color(0.95, 0.95, 0.95), Color(0.3, 0.7, 0.95), Color(0.9, 0.35, 0.2)]
 
 var count := 0
@@ -64,6 +71,7 @@ var _ov := {}              # idx -> [origin, dir, t0] for FLEE
 var _hostile_target := {}  # client: idx -> latest server position
 var _shooter := {}         # idx -> true while HOSTILE with a gun
 var _moving := {}          # idx -> whether a HOSTILE NPC is currently running
+var _dancing := {}         # idx -> how a PARADE NPC is going: 1 dancing, 2 strolling (absent: running)
 var _changed := {}         # idx -> last state event, replayed to late joiners
 
 # server only
@@ -80,6 +88,7 @@ func setup(seed_value: int) -> void:
 	_hostile_target.clear()
 	_shooter.clear()
 	_moving.clear()
+	_dancing.clear()
 	_changed.clear()
 	_rob.clear()
 	_hostile.clear()
@@ -350,6 +359,9 @@ func _restyle(i: int) -> void:
 		FLEE:
 			pose = Kit.FLEE
 			speed = FLEE_SPEED
+		PARADE:
+			pose = [Kit.FLEE, Kit.DANCE, Kit.WALK][_dancing.get(i, 0)]
+			speed = _parade_speed(i)
 		HOSTILE:
 			pose = Kit.AIM if _shooter.has(i) else Kit.FIGHT
 			speed = HOSTILE_SPEED if _moving.get(i, false) else 0.0
@@ -392,7 +404,7 @@ func _process(delta: float) -> void:
 			_hide(i)
 
 	for i in _walkers:
-		if state[i] != AMBIENT:
+		if state[i] != AMBIENT or _walker[i] == 0:
 			continue
 		var length := _w_len[i]
 		var u := fposmod(t * _w_spd[i] + _w_phase[i], 2.0 * length)
@@ -411,6 +423,20 @@ func _process(delta: float) -> void:
 				_hide(i)
 			else:
 				_place(i, e[0] + e[1] * FLEE_SPEED * dt)
+		elif state[i] == PARADE:
+			# Marching somewhere together; whoever gets there stays there.
+			var e = _ov[i]
+			var far: float = e[3]
+			var d: float = minf((t - e[2]) * _parade_speed(i), far)
+			_place(i, e[0] + e[1] * d)
+			if d >= far:
+				state[i] = AMBIENT
+				_home[i] = pos[i]
+				_walker[i] = 0
+				_lying[i] = 0
+				_idle[i] = Kit.DANCE if _dancing.get(i, 0) == 1 else Kit.STAND
+				_active.erase(i)
+				_restyle(i)
 		elif state[i] == HOSTILE:
 			if server:
 				_srv_hostile(i, delta)
@@ -574,6 +600,7 @@ func cl_npc(i: int, s: int, p: Vector3, dir: Vector3, t0: float, flags: int) -> 
 		_shooter[i] = true
 	else:
 		_shooter.erase(i)
+	_dancing.erase(i)
 	match s:
 		COWER:
 			var threat := _nearest_player(p) - p
@@ -584,6 +611,8 @@ func cl_npc(i: int, s: int, p: Vector3, dir: Vector3, t0: float, flags: int) -> 
 			_ov[i] = [p, dir, t0, Layout.run_dist(p, dir, FLEE_SPEED * FLEE_TIME)]
 			_active[i] = true
 			_yaw[i] = Kit.face(dir)
+		PARADE:
+			_begin_parade(i, p, dir, t0, 1 if flags & NPC_DANCE else (2 if flags & NPC_STROLL else 0))
 		HOSTILE:
 			_place(i, p)
 			_active[i] = true
@@ -599,6 +628,36 @@ func cl_npc(i: int, s: int, p: Vector3, dir: Vector3, t0: float, flags: int) -> 
 			_hide(i)
 	if s != GONE:
 		_restyle(i)
+
+
+## `dir` carries both the heading and, in its length, how far to go.
+func _parade_speed(i: int) -> float:
+	return [SHELTER_SPEED, DANCE_SPEED, STROLL_SPEED][_dancing.get(i, 0)]
+
+
+func _begin_parade(i: int, p: Vector3, dir: Vector3, t0: float, mode: int) -> void:
+	state[i] = PARADE
+	_ov[i] = [p, dir.normalized(), t0, dir.length()]
+	_active[i] = true
+	_lying[i] = 0
+	_yaw[i] = Kit.face(dir)
+	if mode > 0:
+		_dancing[i] = mode
+	else:
+		_dancing.erase(i)
+	_place(i, p)
+	_restyle(i)
+
+
+## The heavens opened at match time t0: most people out on the open sand run for the
+## promenade. Every peer works this out for itself from the same crowd, so it is one message.
+@rpc("authority", "call_remote", "reliable")
+func cl_shelter(t0: float) -> void:
+	for i in count:
+		if state[i] != AMBIENT or _walker[i] == 1 or pos[i].y > 1.0 or pos[i].z > 38.0 or (i * 7919) % 100 >= 65:
+			continue
+		var to_z := 42.0 + (i * 31) % 80 * 0.1
+		_begin_parade(i, pos[i], Vector3(((i * 13) % 9 - 4) * 0.6, 0.0, to_z - pos[i].z), t0, 0)
 
 
 @rpc("authority", "call_remote", "unreliable")
@@ -628,6 +687,51 @@ func _srv_set(i: int, s: int, dir := Vector3.ZERO) -> void:
 	if _hostile.has(i) and _hostile[i].shooter:
 		flags |= NPC_SHOOTER
 	Net.game.bcast("cl_npc", [i, s, pos[i], dir, MatchState.time, flags], self)
+
+
+## Sends NPC i `dist` along `dir`: running for shelter (mode 0), dancing with a bloco (1)
+## or just walking (2).
+func srv_parade(i: int, dir: Vector3, dist: float, mode: int) -> void:
+	_hostile.erase(i)
+	var flags: int = DB.wealth_tier(money[i]) | [0, NPC_DANCE, NPC_STROLL][mode]
+	Net.game.bcast("cl_npc", [i, PARADE, pos[i], dir.normalized() * dist, MatchState.time, flags], self)
+
+
+## Brings back someone who had left the beach as a fresh arrival with full pockets.
+func srv_revive(i: int, at: Vector3, cash: int, dir: Vector3, dist: float) -> void:
+	pos[i] = at
+	money[i] = cash
+	hp[i] = DB.ARCHETYPES[arch[i]].hp
+	srv_parade(i, dir, dist, 2)
+
+
+## Indices of up to `limit` NPCs who have gone home.
+func gone(limit: int) -> Array:
+	var out: Array = []
+	for i in count:
+		if state[i] == GONE:
+			out.append(i)
+			if out.size() >= limit:
+				break
+	return out
+
+
+## Everyone minding their own business within r of `at` runs from it.
+func srv_scare(at: Vector3, r: float, chance := 1.0) -> void:
+	for i in count:
+		if state[i] == AMBIENT and absf(pos[i].x - at.x) < r and absf(pos[i].z - at.z) < r and absf(pos[i].y - at.y) < 3.0 and randf() < chance:
+			_srv_flee(i, at)
+
+
+## Two NPCs open fire on each other until one drops or `seconds` pass.
+func srv_duel(a: int, b: int, seconds: float) -> void:
+	for pair in [[a, b], [b, a]]:
+		var i: int = pair[0]
+		if state[i] >= DEAD:
+			continue
+		_hostile[i] = {"target": -1, "duel": pair[1], "cd": randf_range(0.3, 1.2), "until": seconds, "shooter": true}
+		_srv_set(i, HOSTILE)
+		_yaw[i] = Kit.face(pos[pair[1]] - pos[i])
 
 
 func _srv_flee(i: int, threat: Vector3) -> void:
@@ -660,8 +764,11 @@ func _srv_hostile(i: int, delta: float) -> void:
 	if h == null:
 		return
 	var g = Net.game
-	var p = g.players.get(h.target)
 	h.until -= delta
+	if h.has("duel"):
+		_srv_duel_tick(i, h, delta)
+		return
+	var p = g.players.get(h.target)
 	if p == null or not p.can_fight() or h.until <= 0.0:
 		_srv_flee(i, pos[i] - Vector3(0, 0, 1))
 		return
@@ -696,6 +803,26 @@ func _srv_hostile(i: int, delta: float) -> void:
 		h.cd = 1.0
 		g.bcast("cl_fx", [pos[i] + Vector3(0, 1.3, 0), p.global_position + Vector3(0, 1.0, 0), true, DB.WHO_NPC, i, DB.WHO_PLAYER, h.target])
 		g.srv_damage(h.target, DB.ARCHETYPES[arch[i]].melee, -1)
+
+
+func _srv_duel_tick(i: int, h: Dictionary, delta: float) -> void:
+	var g = Net.game
+	var other: int = h.duel
+	if h.until <= 0.0 or state[other] >= DEAD:
+		_srv_flee(i, pos[other])
+		return
+	h.cd -= delta
+	if h.cd > 0.0:
+		return
+	h.cd = randf_range(0.7, 1.5)
+	var hit := randf() < 0.3
+	var to_pt := pos[other] + Vector3(0, 1.0, 0) + (Vector3.ZERO if hit else Vector3(randf_range(-1.5, 1.5), randf_range(0.5, 2.0), randf_range(-1.5, 1.5)))
+	g.bcast("cl_fx", [pos[i] + Vector3(0, 1.3, 0), to_pt, false, DB.WHO_NPC, i, DB.WHO_NPC if hit else DB.WHO_NONE, other])
+	Crime.report_noise(pos[i], 90.0, -1)
+	if hit:
+		srv_damage_npc(other, 35.0, -1)
+		if state[other] == DEAD and randf() < 0.5:
+			g.srv_add_drop(pos[other] + Vector3(0.8, 0, 0.5), 0, {"pistol": 1, "ammo": 6})
 
 
 ## Makes an NPC who was minding their own business go after a player, if they are the type.

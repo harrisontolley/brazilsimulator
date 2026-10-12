@@ -3,16 +3,21 @@ extends Node
 
 signal join_failed
 
-const PORT := 24565
+const DEFAULT_PORT := 24565
 const MAX_PLAYERS := 16
 const GAME_SCENE := "res://scenes/game.tscn"
 const MENU_SCENE := "res://scenes/main_menu.tscn"
 
+## Overridden with --port=N, e.g. to run a second host on one machine.
+var PORT := DEFAULT_PORT
 var local_name := "Kid"
 var game: Node = null
 
 
 func _ready() -> void:
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--port="):
+			PORT = int(a.trim_prefix("--port="))
 	multiplayer.connected_to_server.connect(_on_connected)
 	multiplayer.connection_failed.connect(_on_failed)
 	multiplayer.server_disconnected.connect(leave)

@@ -2,6 +2,8 @@ extends "res://scenes/world/world_kit.gd"
 ## Footballs. The host simulates them as rigid bodies and streams where they are; everyone
 ## else just draws them. Run into one to dribble it, hit it to shoot, score for cash.
 
+const Kit := preload("res://scenes/characters/char_kit.gd")
+
 const RADIUS := 0.22
 const GOAL_PAY := 60
 const SHOT_SPEED := 21.0
@@ -202,7 +204,7 @@ func cl_balls(ps: PackedVector3Array) -> void:
 func cl_goal(at: Vector3, who: String) -> void:
 	var g = Net.game
 	g.fx.confetti(at + Vector3(0, 1.5, 0))
-	g.crowd.Kit.cheer(4.0)
+	Kit.cheer(4.0)
 	Sfx.play("cheer", at)
 	Sfx.play("whistle", at)
 	if who != "":

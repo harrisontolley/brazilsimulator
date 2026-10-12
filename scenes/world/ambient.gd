@@ -290,7 +290,8 @@ func _free_multi(mesh: Mesh, xf: Array, tint: Array) -> MultiMesh:
 func _process(delta: float) -> void:
 	var t := MatchState.time
 	_day_t -= delta
-	if _day_t <= 0.0:
+	var ev = Net.game.events if Net.game != null else null
+	if _day_t <= 0.0 or (ev != null and (ev.storm > 0.0 or ev.flash > 0.0)):
 		_day_t = 0.5
 		_apply_day()
 
@@ -427,6 +428,18 @@ func _apply_day() -> void:
 	world.env.fog_light_color = a[5].lerp(b[5], u)
 	world.env.ambient_light_color = a[6].lerp(b[6], u)
 	world.env.ambient_light_energy = lerpf(a[7], b[7], u)
+	# A downpour greys everything out; lightning whites it for an instant.
+	var ev = Net.game.events if Net.game != null else null
+	var storm: float = ev.storm if ev != null else 0.0
+	var flash: float = ev.flash if ev != null else 0.0
+	var grey := Color(0.3, 0.33, 0.38)
+	world.sun.light_energy = world.sun.light_energy * (1.0 - 0.75 * storm) + flash * 2.5
+	world.sky_mat.sky_top_color = world.sky_mat.sky_top_color.lerp(grey.darkened(0.3), storm * 0.9)
+	world.sky_mat.sky_horizon_color = world.sky_mat.sky_horizon_color.lerp(grey, storm * 0.9)
+	world.sky_mat.ground_horizon_color = world.sky_mat.sky_horizon_color
+	world.env.fog_light_color = world.sky_mat.sky_horizon_color
+	world.env.fog_density = lerpf(0.0004, 0.007, storm)
+	world.env.ambient_light_energy += flash * 0.8
 	var night := lerpf(a[8], b[8], u)
 	for m in night_mats:
 		m.set_shader_parameter("night", night)

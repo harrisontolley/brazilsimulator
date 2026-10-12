@@ -59,6 +59,13 @@ var _gun_t := PackedFloat32Array() # pistol stays drawn until this Kit time
 var _send_t := 0.0
 var _frozen := false
 
+## Events tilt the odds (server only): rain shortens how far cops see, a roar of fireworks
+## drowns out gunfire, and a blitz pins a few of them to a checkpoint.
+var sight_mult := 1.0
+var deaf_until := 0.0
+var blitz_at := Vector3.ZERO
+var blitz_until := 0.0
+
 
 func _ready() -> void:
 	_mm = Kit.add_to(self, N, Layout.WORLD_AABB)
@@ -77,6 +84,9 @@ func _ready() -> void:
 
 
 func reset() -> void:
+	sight_mult = 1.0
+	deaf_until = 0.0
+	blitz_until = 0.0
 	cops.clear()
 	for i in N:
 		# Ten walk the calçadão, the rest the back street.
@@ -205,7 +215,9 @@ func _srv_process(delta: float) -> void:
 			c.ignore = 0
 		match c.state:
 			PATROL:
-				if _move(c, c.goal, PATROL_SPEED, delta):
+				if c.get("post", false) and MatchState.time < blitz_until:
+					_move(c, blitz_at + c.post_off, INVESTIGATE_SPEED, delta)
+				elif _move(c, c.goal, PATROL_SPEED, delta):
 					c.goal = _patrol_point()
 				if look:
 					for pid in g.players:
@@ -248,6 +260,9 @@ func _srv_process(delta: float) -> void:
 			pl.st.seen = seen
 			g.push_state(pl)
 
+	if MatchState.time < blitz_until:
+		_srv_blitz_check()
+
 	_send_t -= delta
 	if _send_t <= 0.0:
 		_send_t = 0.1
@@ -265,15 +280,61 @@ func _sees(c: Dictionary, pl, max_range: float) -> bool:
 	var crowd = Net.game.crowd
 	var p: Vector3 = pl.global_position
 	var d := Vector2(p.x - c.pos.x, p.z - c.pos.z).length()
+	max_range *= sight_mult
 	if d > max_range:
 		return false
-	var hidden: bool = d > CLOSE_RANGE and p.y < HOP_HEIGHT
+	# At the top heat the helicopter is on you: no crowd hides someone under its light.
+	var lit: bool = pl.st.heat >= 3 and not _roofed(p)
+	var hidden: bool = d > CLOSE_RANGE and p.y < HOP_HEIGHT and not lit
 	if hidden and d > max_range / (1.0 + COVER * crowd.count_near(p, COVER_RADIUS)):
 		return false
 	var q := PhysicsRayQueryParameters3D.create(c.pos + Vector3(0, 1.5, 0), p + Vector3(0, 0.9, 0), 1)
 	if not get_world_3d().direct_space_state.intersect_ray(q).is_empty():
 		return false
 	return not (hidden and d > BLOCK_MIN and crowd.count_on_segment(c.pos, p, BLOCK_WIDTH) >= BLOCK_COUNT)
+
+
+func _roofed(p: Vector3) -> bool:
+	var q := PhysicsRayQueryParameters3D.create(p + Vector3(0, 1.8, 0), p + Vector3(0, 60.0, 0), 1)
+	return not get_world_3d().direct_space_state.intersect_ray(q).is_empty()
+
+
+## Pins the four nearest idle cops to a checkpoint at `at` for `seconds`.
+func srv_blitz(at: Vector3, seconds: float) -> void:
+	blitz_at = at
+	blitz_until = MatchState.time + seconds
+	var order: Array = cops.duplicate()
+	order.sort_custom(func(a, b): return a.pos.distance_squared_to(at) < b.pos.distance_squared_to(at))
+	var n := 0
+	for c in cops:
+		c.post = false
+	for c in order:
+		if c.state == PATROL and n < 4:
+			c.post = true
+			c.post_off = Vector3((n % 2) * 4.0 - 2.0, 0.0, (n / 2) * 3.0 - 1.5)
+			n += 1
+
+
+## Anyone walking through the checkpoint with something to hide gets pulled.
+func _srv_blitz_check() -> void:
+	var g = Net.game
+	for pid in g.players:
+		var pl = g.players[pid]
+		if pl.st.heat > 0 or not pl.can_fight() or pl.global_position.distance_to(blitz_at) > 9.0:
+			continue
+		var dirty: bool = pl.st.inv.has("pistol")
+		for item in DB.DRUGS + DB.LOOT:
+			dirty = dirty or pl.st.inv.get(item, 0) > 0
+		if not dirty:
+			continue
+		for c in cops:
+			if c.get("post", false) and c.state == PATROL and c.pos.distance_to(blitz_at) < 8.0:
+				pl.st.heat = 1
+				pl.wanted_t = WANTED_TIME
+				g.push_state(pl)
+				g.send(pid, "cl_toast", ["BLITZ! They found what you are carrying"])
+				_start_chase(c, pid, pl.global_position)
+				break
 
 
 func _start_chase(c: Dictionary, pid: int, at: Vector3) -> void:
@@ -383,6 +444,8 @@ func _move(c: Dictionary, goal: Vector3, speed: float, delta: float) -> bool:
 
 
 func _on_noise(p: Vector3, radius: float, _pid: int) -> void:
+	if MatchState.time < deaf_until:
+		return
 	for c in cops:
 		if c.state == PATROL and c.pos.distance_to(p) < radius:
 			c.state = INVESTIGATE

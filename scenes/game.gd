@@ -9,6 +9,7 @@ const Player := preload("res://scenes/player/player.gd")
 const Beach := preload("res://scenes/world/beach.gd")
 const Ambient := preload("res://scenes/world/ambient.gd")
 const Traffic := preload("res://scenes/world/traffic.gd")
+const Events := preload("res://scenes/world/events.gd")
 const Balls := preload("res://scenes/world/balls.gd")
 const Motos := preload("res://scenes/world/motos.gd")
 const Crowd := preload("res://scenes/crowd/crowd_manager.gd")
@@ -31,6 +32,7 @@ var ambient: Node3D
 var traffic: Node3D
 var motos: Node3D
 var balls: Node3D
+var events: Node3D
 var crowd: Node3D
 var police: Node3D
 var hud: CanvasLayer
@@ -67,6 +69,9 @@ func _ready() -> void:
 	balls = Balls.new()
 	balls.name = "Balls"
 	add_child(balls)
+	events = Events.new()
+	events.name = "Events"
+	add_child(events)
 	crowd = Crowd.new()
 	crowd.name = "Crowd"
 	add_child(crowd)
@@ -101,6 +106,8 @@ func _ready() -> void:
 			_debug_cam(a.trim_prefix("--cam="))
 		elif a.begins_with("--test=") and multiplayer.is_server():
 			_debug_test(a.trim_prefix("--test="))
+		elif a.begins_with("--event=") and multiplayer.is_server():
+			events.force(a.trim_prefix("--event="))
 		elif a.begins_with("--time="):
 			MatchState.time = float(a.trim_prefix("--time="))
 
@@ -197,13 +204,13 @@ func srv_client_ready(pname: String) -> void:
 	var drop_data: Array = []
 	for id in drops:
 		drop_data.append([id, drops[id].pos, drops[id].money, drops[id].items])
-	cl_init.rpc_id(pid, MatchState.seed_value, MatchState.duration, MatchState.time, MatchState.ended, _players_data(), crowd.snapshot(), drop_data, motos.snapshot())
+	cl_init.rpc_id(pid, MatchState.seed_value, MatchState.duration, MatchState.time, MatchState.ended, _players_data(), crowd.snapshot(), drop_data, motos.snapshot(), events.snapshot())
 	ready_peers.append(pid)
 	bcast("cl_spawn", [pid, pname.left(16), DB.spawn_point(), Player.fresh_state()])
 
 
 @rpc("authority", "call_remote", "reliable")
-func cl_init(seed_value: int, duration: float, time: float, ended: bool, pdata: Array, crowd_snap: Array, drop_data: Array, moto_snap: Array) -> void:
+func cl_init(seed_value: int, duration: float, time: float, ended: bool, pdata: Array, crowd_snap: Array, drop_data: Array, moto_snap: Array, event: Array) -> void:
 	cl_match_start(seed_value, duration, pdata)
 	MatchState.time = time
 	MatchState.ended = ended
@@ -211,6 +218,8 @@ func cl_init(seed_value: int, duration: float, time: float, ended: bool, pdata: 
 	for d in drop_data:
 		cl_drop_add(d[0], d[1], d[2], d[3])
 	motos.apply_snapshot(moto_snap)
+	if event[0] >= 0:
+		events.cl_event(event[0], event[1], event[2], event[3], event[4])
 
 
 @rpc("authority", "call_remote", "reliable")
@@ -280,6 +289,7 @@ func _srv_start_match() -> void:
 	_bicho_round = 0
 	police.reset()
 	balls.reset()
+	events.srv_reset()
 	var pdata: Array = []
 	for id in players:
 		var p = players[id]
@@ -548,6 +558,13 @@ func srv_attack(dir: Vector3) -> void:
 			Crime.report_crime(origin, pid, 3)
 		return
 	var dmg: float = w.damage * (p.melee_mult() if w.melee else 1.0)
+	# So does the armoured truck, when there is one to crack.
+	var truck_t: float = events.srv_strike(origin, dir, hit.t, dmg, pid)
+	if truck_t >= 0.0:
+		bcast("cl_fx", [origin, origin + dir * truck_t, w.melee, DB.WHO_PLAYER, pid, DB.WHO_NONE, -1])
+		if not w.melee:
+			Crime.report_noise(origin, 90.0, pid)
+		return
 	match hit.type:
 		DB.WHO_PLAYER: srv_damage(hit.id, dmg, pid)
 		DB.WHO_COP: police.srv_damage_cop(hit.id, dmg, pid)
