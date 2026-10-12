@@ -27,6 +27,7 @@ var _ball_tints: Array = []
 func _ready() -> void:
 	_rng.seed = 1502
 	DB.solids.clear()
+	Nav.begin()
 	_init_kit()
 	_environment()
 	_ground()

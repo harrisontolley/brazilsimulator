@@ -25,6 +25,8 @@ const Prison := preload("res://scenes/world/prison.gd")
 const Places := preload("res://scenes/world/places.gd")
 const WeaponKit := preload("res://scenes/weapons/weapon_kit.gd")
 const DrugKit := preload("res://scenes/items/drug_kit.gd")
+const Nav := preload("res://scenes/world/nav.gd")
+const LifeTests := preload("res://scenes/life_tests.gd")
 
 const END_SCREEN_TIME := 15.0
 const PICKUP_RANGE := 2.6
@@ -834,6 +836,8 @@ func _debug_test(what: String) -> void:
 			await get_tree().create_timer(0.4).timeout
 			var up: bool = not local_player.is_crouched()
 			debug_result("crouch", still and up and absf(spd - Player.CROUCH_SPEED) < 0.3 and low < 1.0, "speed %.2f head %.2f" % [spd, low])
+		_:
+			LifeTests.run(self, what)
 
 
 ## A camera that travels beside the local player, looking at them side on.

@@ -3,6 +3,8 @@ extends RefCounted
 ## cover, seats. The world fills it in as it builds; nothing here is networked, because every
 ## peer builds the same world.
 
+const Nav := preload("res://scenes/world/nav.gd")
+
 ## {name, box: AABB, public: AABB, doors: [[outside, inside]], cops: bool, lit: Node3D}
 static var rooms: Array = []
 ## {pos, kind (DB.HIDE_KINDS key), exit (where you climb back out), room}
@@ -39,6 +41,8 @@ static func clear() -> void:
 
 static func add_room(room: Dictionary) -> int:
 	rooms.append(room)
+	# A room is somewhere to go into, not a short cut to the next street.
+	Nav.add_cost(room.box, 5.0)
 	return rooms.size() - 1
 
 

@@ -10,6 +10,7 @@ extends Node3D
 const Kit := preload("res://scenes/characters/char_kit.gd")
 const Layout := preload("res://scenes/world/layout.gd")
 const Places := preload("res://scenes/world/places.gd")
+const Nav := preload("res://scenes/world/nav.gd")
 
 enum { PATROL, INVESTIGATE, CHASE, DOWN, SEARCH, KO }
 
@@ -699,12 +700,19 @@ func _move(c: Dictionary, goal: Vector3, speed: float, delta: float) -> bool:
 		goal = Layout.snap(goal)
 	if Vector2(goal.x - c.pos.x, goal.z - c.pos.z).length() < 0.5:
 		return true
-	var to: Vector3 = (Places.route(c.pos, goal, Layout.next_point) if indoors or Places.room_at(c.pos) >= 0 else Layout.next_point(c.pos, goal)) - c.pos
+	# The street plan says which corner to make for; the grid gets them there round the furniture.
+	var via: Vector3 = Places.route(c.pos, goal, Layout.next_point) if indoors or Places.room_at(c.pos) >= 0 else Layout.next_point(c.pos, goal)
+	via.y = 0.0
+	if not c.has("nav"):
+		c.nav = {}
+	var to: Vector3 = Nav.steer(c.nav, c.pos, via, speed * delta, MatchState.time) - c.pos
 	to.y = 0.0
-	var d := to.length()
-	if d > 0.01:
-		c.pos += to / d * minf(speed * delta, d)
+	if to.length() > 0.0001:
+		c.pos += to
 		c.yaw = lerp_angle(c.yaw, Kit.face(to), minf(1.0, 8.0 * delta))
+	elif Nav.blocked(via):
+		# As near as anyone on foot can get to it.
+		return true
 	c.pos.y = 0.0
 	return false
 

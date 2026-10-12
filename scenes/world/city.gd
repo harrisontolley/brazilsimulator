@@ -410,6 +410,8 @@ func _favela() -> void:
 		_box(Vector3(0, y * 0.5, z0 + deep * 0.5), Vector3(1040, y, deep), earth.darkened(0.04 * (i % 2)))
 		if i < Layout.TERRACES:
 			_collider(Vector3(0, y * 0.5, z0 + deep * 0.5), Vector3(1040, y, deep))
+			# Nobody in the crowd steps off the front of a terrace.
+			Nav.add_box(Vector3(0, y - Layout.TERRACE_H + 1.0, z0 - 0.25), Vector3(1040, 1.0, 0.3))
 		# Retaining wall trim.
 		_box(Vector3(0, y - 0.1, z0 - 0.06), Vector3(1040, 0.2, 0.14), earth.lightened(0.2))
 		_houses(i, z0, y)

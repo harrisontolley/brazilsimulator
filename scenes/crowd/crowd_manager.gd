@@ -13,13 +13,17 @@ const Layout := preload("res://scenes/world/layout.gd")
 const Activities := preload("res://scenes/crowd/activities.gd")
 const Babble := preload("res://scenes/crowd/babble.gd")
 const Places := preload("res://scenes/world/places.gd")
+const Nav := preload("res://scenes/world/nav.gd")
 
 ## Everything before DEAD is somebody who is still there to be dealt with.
 enum { AMBIENT, COWER, FLEE, HOSTILE, PARADE, KO, DEAD, GONE }
 
 const COUNT := 2500
 const FLEE_SPEED := 5.5
-const FLEE_TIME := 10.0
+## How far someone runs from trouble before they stop and look back.
+const FLEE_DIST := 42.0
+## How long before someone who ran comes back to where they were.
+const CALM_TIME := 50.0
 const HOSTILE_SPEED := 4.8
 const ROB_RATE := 0.55
 const ROB_TICK := 0.1
@@ -38,6 +42,10 @@ const NPC_SHOOTER := 4
 const NPC_DANCE := 8
 ## cl_npc flag bit: a PARADE NPC is just walking there.
 const NPC_STROLL := 16
+## cl_run flag bit: at the end of the run they are gone for good.
+const NPC_VANISH := 32
+## cl_run flag bit: walking back to where they started the day, to pick up where they left off.
+const NPC_HOME := 64
 const STROLL_SPEED := 1.5
 const DANCE_SPEED := 1.6
 const SHELTER_SPEED := 4.6
@@ -52,6 +60,9 @@ const SNATCH_RANGE := 3.4
 ## How many of the crowd can have something in their hand at once.
 const HELD_POOL := 64
 const NO_POSE := 255
+## What a stroller might stop to do, and how people stand after a fright.
+const PAUSE_POSES := [Kit.PHONE, Kit.STAND, Kit.SELFIE, Kit.PHONE, Kit.STAND, Kit.SQUAT, Kit.TALK]
+const SHAKEN_POSES := [Kit.STAND, Kit.PHONE, Kit.SQUAT, Kit.STAND]
 const LOCAL_TOPS := [Color(1.0, 0.85, 0.1), Color(0.1, 0.65, 0.3), Color(0.95, 0.95, 0.95), Color(0.3, 0.7, 0.95), Color(0.9, 0.35, 0.2)]
 
 var count := 0
@@ -80,6 +91,11 @@ var _w_yaw := PackedFloat32Array()
 var _w_len := PackedFloat32Array()
 var _w_spd := PackedFloat32Array()
 var _w_phase := PackedFloat32Array()
+var _w_stop := PackedFloat32Array()   # seconds a walker stands still in each cycle (0: never)
+var _w_cycle := PackedFloat32Array()  # length of that cycle
+var _w_pause := PackedByteArray()     # Kit pose a walker has stopped to strike, 0 while walking
+var _origin := PackedVector3Array()   # where they started the day
+var _was := PackedByteArray()         # what they were doing there: 1 walking, 2 lying
 var _leave_t := PackedFloat32Array()
 var _leave_order := PackedInt32Array()
 var _leave_ptr := 0
@@ -102,7 +118,7 @@ var _held_free: Array[int] = []
 var _blood: MultiMesh
 var _blood_n := 0
 var _active := {}          # idx -> true while FLEE / HOSTILE
-var _ov := {}              # idx -> [origin, dir, t0] for FLEE
+var _ov := {}              # idx -> [corners to run through, t0, speed, length, flags] for FLEE / PARADE
 var _hostile_target := {}  # client: idx -> latest server position
 var _shooter := {}         # idx -> true while HOSTILE with a gun
 var _moving := {}          # idx -> whether a HOSTILE NPC is currently running
@@ -115,6 +131,7 @@ var _hostile := {}  # idx -> {target, cd, until, shooter}
 var _ko := {}       # idx -> [match time they come round, pid who did it]
 var _calls := {}    # idx -> [match time the call goes through, where, pid, severity]
 var _cower := {}    # idx -> match time someone cowering indoors gets up again
+var _calm := {}     # idx -> match time someone who ran goes back to where they were
 var _panic_ok := 0.0
 var _call_ok := 0.0
 var _send_t := 0.0
@@ -135,6 +152,7 @@ func setup(seed_value: int) -> void:
 	_ko.clear()
 	_calls.clear()
 	_cower.clear()
+	_calm.clear()
 	_panic_ok = 0.0
 	_call_ok = 0.0
 	if multiplayer.is_server() and not Crime.noise.is_connected(_on_noise):
@@ -160,6 +178,12 @@ func setup(seed_value: int) -> void:
 	_w_len.resize(count)
 	_w_spd.resize(count)
 	_w_phase.resize(count)
+	_w_stop.resize(count)
+	_w_cycle.resize(count)
+	_w_pause.resize(count)
+	_w_pause.fill(0)
+	_origin.resize(count)
+	_was.resize(count)
 	_leave_t.resize(count)
 	money.resize(count)
 	_look.resize(count)
@@ -228,11 +252,31 @@ func setup(seed_value: int) -> void:
 		_w_len[i] = rng.randf_range(minf(15.0, far), far)
 		_w_spd[i] = spot.get("speed", rng.randf_range(0.9, 1.7))
 		_w_phase[i] = rng.randf() * 140.0
+		# People out for a stroll stop now and then; people running or playing do not.
+		_w_cycle[i] = rng.randf_range(16.0, 55.0)
+		_w_stop[i] = rng.randf_range(2.5, 7.0) if _w_spd[i] < 2.5 and rng.randf() < 0.8 else 0.0
+		if walker:
+			# The lane runs only as far each way as there is nothing to walk into.
+			p = Nav.nearest_free(p)
+			var half := _w_len[i] * 0.5
+			var fwd := maxf(Nav.free_run(p, _w_dir[i], half) - 0.5, 0.0)
+			var back := maxf(Nav.free_run(p, -_w_dir[i], half) - 0.5, 0.0)
+			p += _w_dir[i] * (fwd - back) * 0.5
+			_w_len[i] = fwd + back
+			while _w_len[i] > 3.0 and not Nav.clear(p - _w_dir[i] * _w_len[i] * 0.5, p + _w_dir[i] * _w_len[i] * 0.5):
+				_w_len[i] *= 0.8
+			walker = _w_len[i] > 3.0
+			_home[i] = p
+		elif _grp[i] < 0:
+			p = Nav.nearest_free(p)
+			_home[i] = p
 		_walker[i] = 1 if walker else 0
 		if walker:
 			_walkers.append(i)
 		if _lying[i] == 1:
 			towels.append(i)
+		_origin[i] = _home[i]
+		_was[i] = (1 if walker else 0) | (2 if _lying[i] == 1 else 0)
 		# Left to themselves on a pavement, people get their phones out or hunker down.
 		if not walker and not on_sand and _lying[i] == 0 and not spot.has("idle"):
 			var habit := rng.randf()
@@ -474,8 +518,11 @@ func _restyle(i: int) -> void:
 			if _lying[i] == 1:
 				pose = Kit.SUNBATHE
 			elif _walker[i] == 1:
-				pose = Kit.RUN if _w_spd[i] > 2.5 else Kit.WALK
-				speed = _w_spd[i]
+				if _w_pause[i] != 0:
+					pose = _w_pause[i]
+				else:
+					pose = Kit.RUN if _w_spd[i] > 2.5 else Kit.WALK
+					speed = _w_spd[i]
 			elif _party.has(i):
 				pose = Kit.DANCE
 			else:
@@ -488,7 +535,7 @@ func _restyle(i: int) -> void:
 			speed = FLEE_SPEED
 		PARADE:
 			pose = [Kit.FLEE, Kit.DANCE, Kit.WALK][_dancing.get(i, 0)]
-			speed = _parade_speed(i)
+			speed = _ov[i][2] if _ov.has(i) else STROLL_SPEED
 		HOSTILE:
 			pose = Kit.AIM if _shooter.has(i) else Kit.FIGHT
 			speed = HOSTILE_SPEED if _moving.get(i, false) else 0.0
@@ -572,36 +619,37 @@ func _process(delta: float) -> void:
 		if state[i] != AMBIENT or _walker[i] == 0:
 			continue
 		var length := _w_len[i]
-		var u := fposmod(t * _w_spd[i] + _w_phase[i], 2.0 * length)
+		var tw := t
+		if _w_stop[i] > 0.0:
+			# Each cycle is a stretch of walking and then a stop; only the walking moves them on.
+			var cyc := _w_cycle[i]
+			var at := t + i * 7.31
+			var k := floorf(at / cyc)
+			var walk := cyc - _w_stop[i]
+			var ph := at - k * cyc
+			tw = k * walk + minf(ph, walk)
+			var pause := _pause_pose(i, int(k)) if ph > walk else 0
+			if pause != _w_pause[i]:
+				_w_pause[i] = pause
+				_restyle(i)
+		var u := fposmod(tw * _w_spd[i] + _w_phase[i], 2.0 * length)
 		var out := u < length
-		_yaw[i] = _w_yaw[i] if out else _w_yaw[i] + PI
+		# Turning round at the end of the lane takes a moment, as it does for anyone.
+		_yaw[i] = lerp_angle(_yaw[i], _w_yaw[i] if out else _w_yaw[i] + PI, minf(1.0, 7.0 * delta))
 		_place(i, _home[i] + _w_dir[i] * ((u if out else 2.0 * length - u) - length * 0.5))
 
 	var server := multiplayer.is_server()
 	for i in _active.keys():
-		if state[i] == FLEE:
-			var e = _ov[i]
-			var dt: float = t - e[2]
-			if dt > FLEE_TIME or dt * FLEE_SPEED > e[3]:
-				state[i] = GONE
-				_active.erase(i)
-				_hide(i)
-			else:
-				_place(i, e[0] + e[1] * FLEE_SPEED * dt)
-		elif state[i] == PARADE:
-			# Marching somewhere together; whoever gets there stays there.
-			var e = _ov[i]
+		if state[i] == FLEE or state[i] == PARADE:
+			var e: Array = _ov[i]
+			var d: float = (t - e[1]) * e[2]
 			var far: float = e[3]
-			var d: float = minf((t - e[2]) * _parade_speed(i), far)
-			_place(i, e[0] + e[1] * d)
+			var at: Array = Nav.along(e[0][0], e[0], minf(d, far))
+			if at[1] != Vector3.ZERO:
+				_yaw[i] = lerp_angle(_yaw[i], Kit.face(at[1]), minf(1.0, 9.0 * delta))
+			_place(i, at[0])
 			if d >= far:
-				state[i] = AMBIENT
-				_home[i] = pos[i]
-				_walker[i] = 0
-				_lying[i] = 0
-				_idle[i] = Kit.DANCE if _dancing.get(i, 0) == 1 else Kit.STAND
-				_active.erase(i)
-				_restyle(i)
+				_end_run(i, e[4])
 		elif state[i] == HOSTILE:
 			if server:
 				_srv_hostile(i, delta)
@@ -619,6 +667,12 @@ func _process(delta: float) -> void:
 				if not robbing:
 					_cower.erase(i)
 					_srv_set(i, AMBIENT)
+		for i in _calm.keys():
+			if t >= _calm[i]:
+				# One a frame: working out the way home is not free.
+				_calm.erase(i)
+				_srv_go_home(i)
+				break
 		for i in _calls.keys():
 			var call: Array = _calls[i]
 			if state[i] != AMBIENT:
@@ -830,7 +884,8 @@ func cl_npc(i: int, s: int, p: Vector3, dir: Vector3, t0: float, flags: int) -> 
 	if i < 0 or i >= count:
 		return
 	state[i] = s
-	_changed[i] = [i, s, p, dir, t0, flags]
+	_changed[i] = ["cl_npc", [i, s, p, dir, t0, flags]]
+	_ov.erase(i)
 	if s != AMBIENT and s != COWER:
 		# Whatever they were in the middle of, they are not going back to it.
 		_grp[i] = -1
@@ -853,12 +908,6 @@ func cl_npc(i: int, s: int, p: Vector3, dir: Vector3, t0: float, flags: int) -> 
 			if threat.length_squared() > 0.0001:
 				_yaw[i] = Kit.face(threat)
 			_place(i, p)
-		FLEE:
-			_ov[i] = [p, dir, t0, Layout.run_dist(p, dir, FLEE_SPEED * FLEE_TIME)]
-			_active[i] = true
-			_yaw[i] = Kit.face(dir)
-		PARADE:
-			_begin_parade(i, p, dir, t0, 1 if flags & NPC_DANCE else (2 if flags & NPC_STROLL else 0))
 		HOSTILE:
 			_place(i, p)
 			_active[i] = true
@@ -881,25 +930,116 @@ func cl_npc(i: int, s: int, p: Vector3, dir: Vector3, t0: float, flags: int) -> 
 		_restyle(i)
 
 
-## `dir` carries both the heading and, in its length, how far to go.
-func _parade_speed(i: int) -> float:
-	return [SHELTER_SPEED, DANCE_SPEED, STROLL_SPEED][_dancing.get(i, 0)]
+## NPC i sets off through the corners in `pts` (the first is where they are now): running
+## from something (FLEE) or going somewhere (PARADE).
+@rpc("authority", "call_remote", "reliable")
+func cl_run(i: int, s: int, pts: PackedVector3Array, t0: float, flags: int) -> void:
+	if i < 0 or i >= count or pts.size() < 2 or (s != FLEE and s != PARADE):
+		return
+	_changed[i] = ["cl_run", [i, s, pts, t0, flags]]
+	_begin_run(i, s, pts, t0, flags)
 
 
-func _begin_parade(i: int, p: Vector3, dir: Vector3, t0: float, mode: int) -> void:
-	state[i] = PARADE
+func _run_speed(i: int, s: int, flags: int) -> float:
+	if s == FLEE:
+		# Not everybody is as quick on their feet.
+		return FLEE_SPEED * (0.82 + (i * 37 % 100) * 0.0035)
+	if flags & NPC_DANCE:
+		return DANCE_SPEED
+	return STROLL_SPEED if flags & (NPC_STROLL | NPC_HOME) else SHELTER_SPEED
+
+
+func _begin_run(i: int, s: int, pts: PackedVector3Array, t0: float, flags: int) -> void:
+	state[i] = s
 	_grp[i] = -1
 	_sit[i] = 0
-	_ov[i] = [p, dir.normalized(), t0, dir.length()]
-	_active[i] = true
+	_gest[i] = 0
 	_lying[i] = 0
-	_yaw[i] = Kit.face(dir)
-	if mode > 0:
-		_dancing[i] = mode
+	_w_pause[i] = 0
+	_hostile_target.erase(i)
+	_moving.erase(i)
+	_shooter.erase(i)
+	_tier[i] = flags & 3
+	_ov[i] = [pts, t0, _run_speed(i, s, flags), Nav.length(pts[0], pts), flags]
+	_active[i] = true
+	if flags & NPC_DANCE:
+		_dancing[i] = 1
+	elif flags & (NPC_STROLL | NPC_HOME):
+		_dancing[i] = 2
 	else:
 		_dancing.erase(i)
-	_place(i, p)
+	if MatchState.time - t0 < 0.5:
+		_place(i, pts[0])
 	_restyle(i)
+
+
+## NPC i has got where they were running to.
+func _end_run(i: int, flags: int) -> void:
+	var fled := state[i] == FLEE
+	_active.erase(i)
+	_ov.erase(i)
+	if flags & NPC_VANISH:
+		state[i] = GONE
+		_hide(i)
+		return
+	state[i] = AMBIENT
+	_home[i] = pos[i]
+	_walker[i] = 0
+	_lying[i] = 0
+	if flags & NPC_HOME:
+		# Back where the day started: the towel, or the same stretch of pavement.
+		_home[i] = _origin[i]
+		_lying[i] = 1 if _was[i] & 2 else 0
+		if _was[i] & 1:
+			_walker[i] = 1
+			# Pick the lane back up from the middle, which is where they have just walked to.
+			_w_phase[i] = fposmod(_w_len[i] * 0.5 - _walk_time(i, MatchState.time) * _w_spd[i], 2.0 * _w_len[i])
+		_idle[i] = Kit.STAND
+	elif fled:
+		# Far enough. Turn round and see what is happening back there.
+		_yaw[i] += PI
+		_idle[i] = _shaken_pose(i)
+		_place(i, pos[i])
+		if multiplayer.is_server():
+			_calm[i] = MatchState.time + CALM_TIME * (0.6 + (i * 53 % 100) * 0.01)
+	else:
+		_idle[i] = Kit.DANCE if _dancing.get(i, 0) == 1 else Kit.STAND
+	_dancing.erase(i)
+	_restyle(i)
+
+
+## The walking a stroller has done by match time t, with their stops taken out.
+func _walk_time(i: int, t: float) -> float:
+	if _w_stop[i] <= 0.0:
+		return t
+	var cyc := _w_cycle[i]
+	var at := t + i * 7.31
+	var k := floorf(at / cyc)
+	var walk := cyc - _w_stop[i]
+	return k * walk + minf(at - k * cyc, walk)
+
+
+## What walker i stops to do the k-th time they stop.
+func _pause_pose(i: int, k: int) -> int:
+	var poses: Array = PAUSE_POSES
+	return poses[absi(i * 7919 + k * 104729) % poses.size()]
+
+
+## How someone stands once they have run far enough.
+func _shaken_pose(i: int) -> int:
+	var poses: Array = SHAKEN_POSES
+	return poses[i * 31 % poses.size()]
+
+
+## The corners to walk through from `from` to `to` without going through anything,
+## starting with `from` itself.
+func _walk_to(from: Vector3, to: Vector3) -> PackedVector3Array:
+	var pts := PackedVector3Array([from])
+	if Nav.clear(from, to):
+		pts.append(to)
+	else:
+		pts.append_array(Nav.path(from, to))
+	return pts
 
 
 ## The heavens opened at match time t0: most people out on the open sand run for the
@@ -910,7 +1050,8 @@ func cl_shelter(t0: float) -> void:
 		if state[i] != AMBIENT or _walker[i] == 1 or pos[i].y > 1.0 or pos[i].z > 38.0 or (i * 7919) % 100 >= 65:
 			continue
 		var to_z := 42.0 + (i * 31) % 80 * 0.1
-		_begin_parade(i, pos[i], Vector3(((i * 13) % 9 - 4) * 0.6, 0.0, to_z - pos[i].z), t0, 0)
+		var to := Nav.nearest_free(Vector3(pos[i].x + ((i * 13) % 9 - 4) * 0.6, 0.0, to_z))
+		_begin_run(i, PARADE, _walk_to(pos[i], to), t0, _tier[i])
 
 
 @rpc("authority", "call_remote", "unreliable")
@@ -926,11 +1067,12 @@ func snapshot() -> Array:
 
 func apply_snapshot(snap: Array) -> void:
 	for e in snap:
-		cl_npc(e[0], e[1], e[2], e[3], e[4], e[5])
-		if e[1] == DEAD or e[1] == KO:
+		callv(e[0], e[1])
+		var i: int = e[1][0]
+		if e[0] == "cl_npc" and (e[1][1] == DEAD or e[1][1] == KO):
 			# Went down before we joined: already on the ground, not falling over now.
-			_pose_t[e[0]] = Kit.now() - 5.0
-			_restyle(e[0])
+			_pose_t[i] = Kit.now() - 5.0
+			_restyle(i)
 
 
 # --- server: state changes ---
@@ -947,7 +1089,14 @@ func _srv_set(i: int, s: int, dir := Vector3.ZERO) -> void:
 func srv_parade(i: int, dir: Vector3, dist: float, mode: int) -> void:
 	_hostile.erase(i)
 	var flags: int = DB.wealth_tier(money[i]) | [0, NPC_DANCE, NPC_STROLL][mode]
-	Net.game.bcast("cl_npc", [i, PARADE, pos[i], dir.normalized() * dist, MatchState.time, flags], self)
+	var d := dir.normalized()
+	var from := Nav.nearest_free(pos[i])
+	var to := from + d * dist
+	# As far that way as the street allows; round whatever is in the way if it is something small.
+	if not Nav.clear(from, to):
+		var open := Nav.free_run(from, d, dist)
+		to = Nav.nearest_free(to) if open < dist * 0.5 else from + d * maxf(open - 0.5, 0.5)
+	Net.game.bcast("cl_run", [i, PARADE, _walk_to(from, to), MatchState.time, flags], self)
 
 
 ## Brings back someone who had left the beach as a fresh arrival with full pockets.
@@ -987,26 +1136,53 @@ func srv_duel(a: int, b: int, seconds: float) -> void:
 		_yaw[i] = Kit.face(pos[pair[1]] - pos[i])
 
 
-func _srv_flee(i: int, threat: Vector3) -> void:
+## NPC i runs from `threat`: out of the door if they are indoors and have the nerve, then
+## as far as it takes. `vanish`: they are not seen again.
+func _srv_flee(i: int, threat: Vector3, vanish := false) -> void:
 	_hostile.erase(i)
-	if Places.room_at(pos[i]) >= 0:
-		# Indoors there is nowhere to run to: down on the floor until it is over.
-		_cower[i] = MatchState.time + 20.0
+	_calm.erase(i)
+	var from := pos[i]
+	var pts := PackedVector3Array([from])
+	var room := Places.room_at(from)
+	if room >= 0:
+		var r: Dictionary = Places.rooms[room]
+		var door: Array = []
+		# The door to make for is the one that is not past whatever they are running from.
+		for d in r.doors:
+			if door.is_empty() or d[1].distance_to(from) - d[1].distance_to(threat) < door[1].distance_to(from) - door[1].distance_to(threat):
+				door = d
+		var way := PackedVector3Array()
+		if not vanish and (r.get("kind", "") == "presidio" or door.is_empty() or randf() < 0.4):
+			door = []
+		else:
+			way = Nav.path(from, door[1])
+		if door.is_empty() or way.is_empty() or way[way.size() - 1].distance_to(door[1]) > 1.5:
+			# Nowhere to run to: down on the floor until it is over.
+			_cower[i] = MatchState.time + 20.0
+			if state[i] != COWER:
+				_srv_set(i, COWER)
+			return
+		pts.append_array(way)
+		pts.append(door[0])
+		from = door[0]
+	pts.append_array(Nav.flee_path(from, threat, FLEE_DIST * randf_range(0.7, 1.25), i))
+	if pts.size() < 2:
 		if state[i] != COWER:
+			_cower[i] = MatchState.time + 12.0
 			_srv_set(i, COWER)
 		return
-	var dir := pos[i] - threat
-	dir.y = 0.0
-	var b := Layout.band(pos[i].z)
-	if pos[i].y > 1.0 or b == 2 or b == 4:
-		# In a street or along a terrace there is only up it or down it.
-		dir = Vector3(1.0 if dir.x >= 0.0 else -1.0, 0.0, 0.0)
-	elif b % 2 == 1:
-		dir = Vector3(0.0, 0.0, 1.0 if dir.z >= 0.0 else -1.0)
-	else:
-		# Bias toward the city so they run off the beach rather than into the sea.
-		dir = (dir.normalized() + Vector3(0, 0, 0.6)).normalized()
-	_srv_set(i, FLEE, dir)
+	var flags: int = DB.wealth_tier(money[i]) | (NPC_VANISH if vanish else 0)
+	Net.game.bcast("cl_run", [i, FLEE, pts, MatchState.time, flags], self)
+
+
+## Sends someone who ran back to where they started the day.
+func _srv_go_home(i: int) -> void:
+	if state[i] != AMBIENT or _grp[i] >= 0 or pos[i].distance_to(_origin[i]) < 2.0 or absf(pos[i].y - _origin[i].y) > 1.0:
+		return
+	var pts := _walk_to(pos[i], _origin[i])
+	if pts[pts.size() - 1].distance_to(_origin[i]) > 2.0:
+		return
+	Net.game.bcast("cl_run", [i, PARADE, pts, MatchState.time, DB.wealth_tier(money[i]) | NPC_HOME], self)
 
 
 func _srv_react(i: int, pid: int, threat: Vector3) -> void:
@@ -1043,11 +1219,11 @@ func _srv_hostile(i: int, delta: float) -> void:
 	var step := pos[i]
 	# Streets have to be gone round; nobody up on a terrace gives chase at all.
 	if d > (12.0 if h.shooter else 1.5) and pos[i].y < 1.0:
-		var room := Places.room_at(pos[i])
-		var via: Vector3 = (Places.route(pos[i], p.global_position, Layout.next_point) if room >= 0 or Places.room_at(p.global_position) >= 0 else Layout.next_point(pos[i], p.global_position)) - pos[i]
-		via.y = 0.0
-		if via.length() > 0.3:
-			step += via.normalized() * h.get("speed", HOSTILE_SPEED) * delta
+		# The street plan says which corner to make for; the grid gets them there round the furniture.
+		var goal: Vector3 = p.global_position
+		var via: Vector3 = Places.route(pos[i], goal, Layout.next_point) if Places.room_at(pos[i]) >= 0 or Places.room_at(goal) >= 0 else Layout.next_point(pos[i], goal)
+		via.y = pos[i].y
+		step = Nav.steer(h, pos[i], via, h.get("speed", HOSTILE_SPEED) * delta, MatchState.time)
 	_hostile_step(i, step, delta)
 	h.cd -= delta
 	if h.cd > 0.0:
@@ -1130,9 +1306,9 @@ func srv_scatter(i: int, from: Vector3) -> void:
 	for j in _hostile.keys():
 		if _hostile[j].get("mug", false):
 			_hostile.erase(j)
-			_srv_flee(j, from)
+			_srv_flee(j, from, true)
 	if state[i] == HOSTILE:
-		_srv_flee(i, from)
+		_srv_flee(i, from, true)
 
 
 ## Gunfire: anyone near who is the running kind, runs. The ones who live by it stay put.
@@ -1519,4 +1695,4 @@ func debug_showcase(at: Vector3) -> void:
 	_yaw[corpse] = PI * 0.5
 	cl_npc(corpse, DEAD, back + Vector3(-6.5, 0, 0), Vector3.ZERO, 0.0, 0)
 	# Timed to be crossing the back row when the screenshot fires at 4 s.
-	cl_npc(runner, FLEE, back + Vector3(6.5 - FLEE_SPEED * 3.9, 0, 0), Vector3.RIGHT, MatchState.time, 0)
+	cl_run(runner, FLEE, PackedVector3Array([back + Vector3(6.5 - FLEE_SPEED * 3.9, 0, 0), back + Vector3(60, 0, 0)]), MatchState.time, 0)
