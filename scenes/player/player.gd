@@ -122,6 +122,7 @@ var _ev := 0.0  # Kit one-shot event time
 var _pose := 0
 var _prev := 0
 var _pose_t := 0.0
+var _look := 0
 var _pit := -1       # the hole this player has fallen into
 var _pit_jumps := 0
 var _pit_cd := 0.0
@@ -880,10 +881,14 @@ func _animate(delta: float) -> void:
 
 	# Everything another player needs to know about you is worn on the body.
 	var flags := clampi(st.heat, 0, 3) << Kit.HEAT_SHIFT
-	if st.jail > 0.0:
+	if st.jail > 0.0 or st.get("fug", false):
 		flags |= Kit.F_JAIL
 	else:
 		flags |= Kit.F_SHORTS
+	if st.get("look", 0) != _look:
+		_look = st.get("look", 0)
+		for mm in [_body, _held]:
+			mm.set_instance_color(0, Color.from_hsv(fmod((id + _look) * 0.137, 1.0), 0.75, 0.9, fmod(id * 0.618, 1.0)))
 	if st.money >= 1000:
 		flags |= Kit.F_SACK_L
 	elif st.money >= 200:

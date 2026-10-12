@@ -16,6 +16,7 @@ const GRAFFITI := ["RIO 40°", "PAZ", "FAVELA VIVE", "SAUDADE", "É NÓIS", "AMO
 const YARDS := [[2, 52.0, 80.0], [4, -62.0, -30.0], [3, -124.0, -116.0], [1, 208.0, 216.0]]
 
 const Places := preload("res://scenes/world/places.gd")
+const Interiors := preload("res://scenes/world/interiors.gd")
 
 var _rng := RandomNumberGenerator.new()
 var _tanks: Array = []
@@ -40,6 +41,7 @@ func _ready() -> void:
 	_instances(_cyl(0.32, 0.32, 0.22, 10), _mat(Color(0.06, 0.06, 0.07)), _wheels)
 	_instances(_ball(0.12, -1.0, 6), _vertex_mat(), _fruit, _fruit_tints)
 	_flush()
+	add_child(Interiors.new())
 
 
 func _streets() -> void:
@@ -94,7 +96,7 @@ func _streets() -> void:
 		var x := -290.0 + i * 20.0 + _rng.randf_range(-3, 3)
 		if _near_cross(x, 7.0) or absf(x) < 13.0:
 			continue
-		if _rng.randf() < 0.55:
+		if _rng.randf() < 0.55 and Layout.lot_over(1, x - 3.0, x + 3.0).is_empty():
 			_car(Vector3(x, 0, 109.9), _rng.randf_range(-0.04, 0.04), CAR_TINTS[_rng.randi() % CAR_TINTS.size()])
 	var px := -298.0
 	var prev := Vector3.ZERO
@@ -186,6 +188,10 @@ func _cacambas() -> void:
 		var x := -285.0 + i * 37.0 + rng.randf_range(-6.0, 6.0)
 		if _near_cross(x, 8.0) or (x > -110.0 and x < -66.0) or (x > 144.0 and x < 184.0):
 			continue
+		# Not across somebody's back door.
+		var lot := Layout.lot_over(0, x - 2.0, x + 2.0)
+		if lot.has("back") and absf(lot.back - x) < 3.5:
+			continue
 		var p := Vector3(x, 0, 100.3)
 		_block(p + Vector3(0, 0.65, 0), Vector3(2.4, 1.3, 1.3), green if i % 3 != 0 else Color(0.2, 0.3, 0.55))
 		_box(p + Vector3(0, 1.36, 0.15), Vector3(2.5, 0.08, 1.1), DARK, Vector3(0.12, 0, 0))
@@ -234,6 +240,14 @@ func _row_a() -> void:
 			var w := minf(_rng.randf_range(14.0, 24.0), hi - x)
 			if hi - x - w < 12.0:
 				w = hi - x
+			# Some plots belong to buildings with insides (see interiors.gd).
+			var lot := Layout.lot_over(0, x, x + w)
+			if not lot.is_empty():
+				if x < lot.x0 - 0.1:
+					w = lot.x0 - x
+				else:
+					x = lot.x1
+					continue
 			var low := _rng.randf() < 0.38
 			var h := 3.5 * _rng.randi_range(2, 5) if low else _rng.randf_range(24.0, 58.0)
 			var tint := _wall_tint()
@@ -278,6 +292,13 @@ func _row_b() -> void:
 			var w := minf(_rng.randf_range(10.0, 18.0), hi - x)
 			if hi - x - w < 9.0:
 				w = hi - x
+			var lot := Layout.lot_over(1, x, x + w)
+			if not lot.is_empty():
+				if x < lot.x0 - 0.1:
+					w = lot.x0 - x
+				else:
+					x = lot.x1
+					continue
 			# The delegacia takes the plot in the middle.
 			if x < 9.0 and x + w > -9.0:
 				if x < -9.0:
@@ -437,7 +458,7 @@ func _favela() -> void:
 	_baile()
 	_campinho()
 	for v in DB.VENDORS:
-		if v.pos.z > Layout.ROAD_Z:
+		if v.pos.z > Layout.ROAD_Z and not v.get("indoor", false):
 			_vendor_stall(v)
 
 

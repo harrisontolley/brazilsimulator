@@ -11,11 +11,19 @@ static var hides: Array = []
 static var covers: Array = []
 ## {pos, yaw, room, table}
 static var seats: Array = []
+## {pos, yaw, poses, arch, room}: somewhere a person stands, and the things they do there.
+static var spots: Array = []
+## {kind, pos, prompt, arg, hold}: something to use with F that the world put there.
+static var uses: Array = []
 ## {pos, r, depth}: holes dug in the sand. These come and go with the match, so the crowd's
 ## activity planner owns the list rather than the world.
 static var pits: Array = []
 
 static var _tables := 0
+
+## The two ends of a doorway are closer together than this, so someone walking through never
+## finds themselves between them and unsure which way they were going.
+const DOOR_REACH := 1.7
 
 
 static func clear() -> void:
@@ -23,6 +31,8 @@ static func clear() -> void:
 	hides.clear()
 	covers.clear()
 	seats.clear()
+	spots.clear()
+	uses.clear()
 	_tables = 0
 
 
@@ -43,6 +53,14 @@ static func add_cover(box: AABB, mult: float, crouch: bool) -> void:
 static func add_seat(pos: Vector3, yaw: float, room := -1, table := -1) -> int:
 	seats.append({"pos": pos, "yaw": yaw, "room": room, "table": table})
 	return seats.size() - 1
+
+
+static func add_spot(pos: Vector3, yaw: float, poses: Array, arch := "", room := -1) -> void:
+	spots.append({"pos": pos, "yaw": yaw, "poses": poses, "arch": arch, "room": room})
+
+
+static func add_use(kind: StringName, pos: Vector3, prompt: String, arg := 0, hold := 0.0) -> void:
+	uses.append({"kind": kind, "pos": pos, "prompt": prompt, "arg": arg, "hold": hold})
 
 
 ## A fresh id to group the seats round one table.
@@ -115,9 +133,9 @@ static func route(from: Vector3, to: Vector3, street: Callable) -> Vector3:
 	if a >= 0:
 		# Leave by whichever door is nearest to where we are going.
 		var door: Array = _door(a, to)
-		return door[0] if from.distance_to(door[1]) < 0.8 else door[1]
+		return door[0] if from.distance_to(door[1]) < DOOR_REACH else door[1]
 	var door: Array = _door(b, from)
-	if from.distance_to(door[0]) < 0.8:
+	if from.distance_to(door[0]) < DOOR_REACH:
 		return door[1]
 	return street.call(from, door[0])
 

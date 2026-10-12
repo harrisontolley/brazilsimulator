@@ -691,11 +691,15 @@ func _search_point(c: Dictionary) -> Vector3:
 
 
 func _move(c: Dictionary, goal: Vector3, speed: float, delta: float) -> bool:
-	# Cops stay at street level and go round the blocks, never through them.
-	goal = Layout.snap(goal)
+	# Cops stay at street level and go round the blocks, never through them: into a building
+	# by its door, and only the part of it the public can go.
+	var room := Places.room_at(goal)
+	var indoors: bool = room >= 0 and Places.rooms[room].cops and Places.in_public(room, goal)
+	if not indoors:
+		goal = Layout.snap(goal)
 	if Vector2(goal.x - c.pos.x, goal.z - c.pos.z).length() < 0.5:
 		return true
-	var to: Vector3 = Layout.next_point(c.pos, goal) - c.pos
+	var to: Vector3 = (Places.route(c.pos, goal, Layout.next_point) if indoors or Places.room_at(c.pos) >= 0 else Layout.next_point(c.pos, goal)) - c.pos
 	to.y = 0.0
 	var d := to.length()
 	if d > 0.01:
@@ -765,6 +769,11 @@ func _on_crime(p: Vector3, pid: int, severity: int) -> void:
 		pl.st.vis = VIS_SEEN
 		g.push_state(pl)
 	pl.wanted_t = HEAT_STEP_TIME[clampi(pl.st.heat, 0, 3)]
+
+
+## A player has changed how they look: any description the police had is no use now.
+func forget(pid: int) -> void:
+	_known.erase(pid)
 
 
 ## Called by Game once a suspect is in custody.

@@ -20,6 +20,7 @@ const Layout := preload("res://scenes/world/layout.gd")
 const CombatFx := preload("res://scenes/fx/combat_fx.gd")
 const Interact := preload("res://scenes/player/interact.gd")
 const Threats := preload("res://scenes/world/threats.gd")
+const Casino := preload("res://scenes/world/casino.gd")
 const Places := preload("res://scenes/world/places.gd")
 const WeaponKit := preload("res://scenes/weapons/weapon_kit.gd")
 
@@ -44,6 +45,7 @@ var hud: CanvasLayer
 var fx: Node3D
 var interaction: Node
 var threats: Node3D
+var casino: Node
 var local_player: CharacterBody3D
 
 var _players_root: Node3D
@@ -92,6 +94,9 @@ func _ready() -> void:
 	threats = Threats.new()
 	threats.name = "Threats"
 	add_child(threats)
+	casino = Casino.new()
+	casino.name = "Casino"
+	add_child(casino)
 	_players_root = Node3D.new()
 	add_child(_players_root)
 	_drops_root = Node3D.new()
@@ -543,6 +548,64 @@ func _debug_test(what: String) -> void:
 			await get_tree().create_timer(0.6).timeout
 			police._srv_spot(cop)
 			debug_result("tip", called and unseen and known and local_player.st.heat == 2, "called %s unseen %s known %s heat %d" % [called, unseen, known, local_player.st.heat])
+		"indoor":
+			# Through the boteco's front door, a drink at the bar, out the back. The world must
+			# agree that it is a room with a roof on it.
+			var room: Dictionary = Places.rooms[1]
+			local_player.global_position = room.doors[0][0] + Vector3(0, 0.2, 0)
+			local_player.rotation.y = PI
+			Input.action_press("move_forward")
+			await get_tree().create_timer(1.4).timeout
+			Input.action_release("move_forward")
+			var inside: bool = Places.room_at(local_player.global_position) == 1
+			var roofed: bool = police._roofed(local_player.global_position)
+			var vi := DB.VENDORS.size() - 5
+			local_player.st.money = 500
+			local_player.st.hp = 50.0
+			local_player.global_position = DB.VENDORS[vi].pos + Vector3(0.3, 0.2, 0)
+			await get_tree().create_timer(0.3).timeout
+			srv_buy(vi, "espetinho")
+			var served: bool = local_player.st.hp > 80.0
+			var cop: Dictionary = police.debug_solo(room.doors[0][0] + Vector3(6, 0, -1), Vector3.LEFT)
+			cop.hold = false
+			var steps := 0
+			while Places.room_at(cop.pos) != 1 and steps < 600:
+				police._move(cop, local_player.global_position, 6.0, 0.05)
+				steps += 1
+			var by_door: bool = steps < 600
+			debug_result("indoor", inside and roofed and served and by_door, "inside %s roofed %s served %s cop in after %d steps" % [inside, roofed, served, steps])
+		"casino":
+			# Ten thousand spins should give back about nine tenths; a hand of blackjack plays
+			# through; the safe pays a gunman and sets the house on him.
+			var total := 0.0
+			for k in 20000:
+				total += Casino.slot_pays([casino._reel(), casino._reel(), casino._reel()])
+			var rtp := total / 20000.0
+			var room := 0
+			local_player.global_position = Vector3(0, 0.2, 80)
+			local_player.st.money = 5000
+			await get_tree().create_timer(0.3).timeout
+			var m0: int = local_player.st.money
+			casino.srv_slot(50)
+			casino._last.clear()
+			casino.srv_roulette(0, 0, 50)
+			casino._last.clear()
+			casino.srv_bj(0, 50)
+			if casino._hands.has(1):
+				casino.srv_bj(2, 0)
+			var played: bool = local_player.st.money != m0 or casino.bank != Casino.FLOAT
+			var even: bool = local_player.st.money + casino.bank == m0 + Casino.FLOAT
+			_give(local_player.st, "pistol", 1)
+			local_player.st.equipped = "pistol"
+			var before: int = local_player.st.money
+			casino.srv_safe(local_player, {}, 0)
+			var took: int = local_player.st.money - before
+			await get_tree().create_timer(0.3).timeout
+			var angry := 0
+			for i in crowd.count:
+				if crowd.state[i] == Crowd.HOSTILE:
+					angry += 1
+			debug_result("casino", rtp > 0.8 and rtp < 1.0 and played and even and took > 1000 and angry >= 3 and Places.rooms[room].kind == "cassino", "rtp %.3f played %s books balance %s safe %d bouncers %d" % [rtp, played, even, took, angry])
 		"crouch":
 			local_player.global_position = Vector3(-20, 0.2, 45)
 			Input.action_press("crouch")
@@ -733,6 +796,7 @@ func _srv_start_match() -> void:
 	_bicho_round = 0
 	police.reset()
 	threats.reset()
+	casino.reset()
 	balls.reset()
 	events.srv_reset()
 	var pdata: Array = []
@@ -1364,6 +1428,13 @@ func _setup_interact() -> void:
 	for hi in Places.hides.size():
 		var h: Dictionary = Places.hides[hi]
 		interaction.add(&"hide", h.pos, 2.4, "hide " + DB.HIDE_KINDS[h.kind].name, hi)
+	for u in Places.uses:
+		interaction.add(u.kind, u.pos, 2.2, u.prompt, u.arg, {"hold": u.hold})
+	interaction.on(&"slot", func(_a: Dictionary) -> void: hud.open_slot())
+	interaction.on(&"roulette", func(_a: Dictionary) -> void: hud.open_roulette())
+	interaction.on(&"blackjack", func(_a: Dictionary) -> void: hud.open_blackjack())
+	interaction.on(&"cage", Callable(), casino.srv_safe)
+	interaction.on(&"clothes", Callable(), _srv_clothes)
 	interaction.on(&"vendor", _use_vendor)
 	interaction.on(&"hide", Callable(), _srv_hide)
 	interaction.on(&"unhide", func(_a: Dictionary) -> void: to_server("srv_unhide_me"))
@@ -1408,6 +1479,20 @@ func _offer_near(p, out: Array) -> void:
 			best_d = d
 	if best >= 0:
 		out.append(Interact.offer(&"pickup", at, "pick up", best, 1))
+
+
+## A change of clothes: whoever they were looking for, it was not someone dressed like this.
+func _srv_clothes(p, _a: Dictionary, _arg: int) -> void:
+	if p.st.money < DB.CLOTHES_PRICE:
+		send(p.id, "cl_toast", ["Not enough money"])
+		return
+	p.st.money -= DB.CLOTHES_PRICE
+	p.st.fug = false
+	p.st.look = randi() % 1000
+	police.forget(p.id)
+	push_state(p)
+	send(p.id, "cl_toast", ["New clothes. Nobody would know you."])
+	send(p.id, "cl_sound", ["cash", p.global_position])
 
 
 # --- hiding ---

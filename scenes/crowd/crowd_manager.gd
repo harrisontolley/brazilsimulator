@@ -12,6 +12,7 @@ const Kit := preload("res://scenes/characters/char_kit.gd")
 const Layout := preload("res://scenes/world/layout.gd")
 const Activities := preload("res://scenes/crowd/activities.gd")
 const Babble := preload("res://scenes/crowd/babble.gd")
+const Places := preload("res://scenes/world/places.gd")
 
 ## Everything before DEAD is somebody who is still there to be dealt with.
 enum { AMBIENT, COWER, FLEE, HOSTILE, PARADE, KO, DEAD, GONE }
@@ -110,6 +111,7 @@ var _rob := {}      # pid -> {npc, meter, quiet, last}
 var _hostile := {}  # idx -> {target, cd, until, shooter}
 var _ko := {}       # idx -> [match time they come round, pid who did it]
 var _calls := {}    # idx -> [match time the call goes through, where, pid, severity]
+var _cower := {}    # idx -> match time someone cowering indoors gets up again
 var _panic_ok := 0.0
 var _call_ok := 0.0
 var _send_t := 0.0
@@ -129,6 +131,7 @@ func setup(seed_value: int) -> void:
 	_hostile.clear()
 	_ko.clear()
 	_calls.clear()
+	_cower.clear()
 	_panic_ok = 0.0
 	_call_ok = 0.0
 	if multiplayer.is_server() and not Crime.noise.is_connected(_on_noise):
@@ -594,6 +597,16 @@ func _process(delta: float) -> void:
 				_hostile_step(i, pos[i].lerp(_hostile_target[i], minf(1.0, 10.0 * delta)), delta)
 
 	if server:
+		for i in _cower.keys():
+			if state[i] != COWER:
+				_cower.erase(i)
+			elif t >= _cower[i]:
+				var robbing := false
+				for pid in _rob:
+					robbing = robbing or _rob[pid].npc == i
+				if not robbing:
+					_cower.erase(i)
+					_srv_set(i, AMBIENT)
 		for i in _calls.keys():
 			var call: Array = _calls[i]
 			if state[i] != AMBIENT:
@@ -947,6 +960,12 @@ func srv_duel(a: int, b: int, seconds: float) -> void:
 
 func _srv_flee(i: int, threat: Vector3) -> void:
 	_hostile.erase(i)
+	if Places.room_at(pos[i]) >= 0:
+		# Indoors there is nowhere to run to: down on the floor until it is over.
+		_cower[i] = MatchState.time + 20.0
+		if state[i] != COWER:
+			_srv_set(i, COWER)
+		return
 	var dir := pos[i] - threat
 	dir.y = 0.0
 	var b := Layout.band(pos[i].z)
@@ -993,7 +1012,8 @@ func _srv_hostile(i: int, delta: float) -> void:
 	var step := pos[i]
 	# Streets have to be gone round; nobody up on a terrace gives chase at all.
 	if d > (12.0 if h.shooter else 1.5) and pos[i].y < 1.0:
-		var via := Layout.next_point(pos[i], p.global_position) - pos[i]
+		var room := Places.room_at(pos[i])
+		var via: Vector3 = (Places.route(pos[i], p.global_position, Layout.next_point) if room >= 0 or Places.room_at(p.global_position) >= 0 else Layout.next_point(pos[i], p.global_position)) - pos[i]
 		via.y = 0.0
 		if via.length() > 0.3:
 			step += via.normalized() * h.get("speed", HOSTILE_SPEED) * delta
@@ -1038,6 +1058,15 @@ func _srv_duel_tick(i: int, h: Dictionary, delta: float) -> void:
 		srv_damage_npc(other, 35.0, -1)
 		if state[other] == DEAD and randf() < 0.5:
 			g.srv_add_drop(pos[other] + Vector3(0.8, 0, 0.5), 0, {"pistol": 1, "ammo": 6})
+
+
+## Every NPC of archetype `kind` within r of `at` goes for player `pid`, guns out if they have them.
+func srv_alarm(kind: String, at: Vector3, r: float, pid: int) -> void:
+	var a := _arch_index(kind)
+	for i in count:
+		if arch[i] == a and state[i] == AMBIENT and pos[i].distance_to(at) < r:
+			_hostile[i] = {"target": pid, "cd": 0.6, "until": 40.0, "shooter": randf() < DB.ARCHETYPES[a].shoot}
+			_srv_set(i, HOSTILE)
 
 
 ## Sends NPC i after a player to take their money off them rather than to hurt them.

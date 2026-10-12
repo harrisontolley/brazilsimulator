@@ -25,6 +25,7 @@ var _speed: Label
 var _target: Label
 var _prompt: Label
 var _mark: Label
+var _result: Label
 var _mark_t := 0.0
 var _hold_bar: ProgressBar
 var _rob_bar: ProgressBar
@@ -291,6 +292,101 @@ func open_bicho(vi: int) -> void:
 			close_shop())
 		grid.add_child(b)
 	_close_button()
+
+
+## A row of stake buttons; returns the one-element array holding the stake chosen.
+func _stakes() -> Array:
+	var stake := [Net.game.casino.STAKES[1]]
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_shop_list.add_child(row)
+	var group := ButtonGroup.new()
+	for amount in Net.game.casino.STAKES:
+		var b := Button.new()
+		b.text = "R$%d" % amount
+		b.toggle_mode = true
+		b.button_group = group
+		b.button_pressed = amount == stake[0]
+		b.pressed.connect(func(): stake[0] = amount)
+		row.add_child(b)
+	return stake
+
+
+func _game_panel(title_text: String, hint: String) -> void:
+	_open_panel(title_text)
+	_result = Label.new()
+	_result.text = hint
+	_result.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_result.custom_minimum_size = Vector2(460, 56)
+	_result.add_theme_font_size_override("font_size", 20)
+	_result.add_theme_color_override("font_color", Color(1.0, 0.9, 0.4))
+	_shop_list.add_child(_result)
+
+
+func open_slot() -> void:
+	_game_panel("CAÇA-NÍQUEL", "three of a kind pays; cherries from the left pay a little")
+	var stake := _stakes()
+	var b := Button.new()
+	b.text = "PULL"
+	b.pressed.connect(func(): Net.game.to_server("srv_slot", [stake[0]], Net.game.casino))
+	_shop_list.add_child(b)
+	_close_button()
+
+
+func open_roulette() -> void:
+	_game_panel("ROLETA", "pick a stake, then a bet")
+	var stake := _stakes()
+	var casino = Net.game.casino
+	var grid := GridContainer.new()
+	grid.columns = 3
+	_shop_list.add_child(grid)
+	for kind in 6:
+		var b := Button.new()
+		b.text = "%s  pays %d:1" % [casino.BETS[kind][0], casino.BETS[kind][1] - 1]
+		b.pressed.connect(func(): Net.game.to_server("srv_roulette", [kind, 0, stake[0]], casino))
+		grid.add_child(b)
+	for dozen in 3:
+		var b := Button.new()
+		b.text = "%d-%d  pays 2:1" % [dozen * 12 + 1, dozen * 12 + 12]
+		b.pressed.connect(func(): Net.game.to_server("srv_roulette", [6, dozen, stake[0]], casino))
+		grid.add_child(b)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_shop_list.add_child(row)
+	var number := SpinBox.new()
+	number.min_value = 0
+	number.max_value = 36
+	number.value = 17
+	row.add_child(number)
+	var straight := Button.new()
+	straight.text = "ON THE NUMBER  pays 35:1"
+	straight.pressed.connect(func(): Net.game.to_server("srv_roulette", [7, int(number.value), stake[0]], casino))
+	row.add_child(straight)
+	_close_button()
+
+
+func open_blackjack() -> void:
+	_game_panel("VINTE-E-UM", "house stands on 17; a natural pays 3:2")
+	var stake := _stakes()
+	var casino = Net.game.casino
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_shop_list.add_child(row)
+	var acts := ["DEAL", "HIT", "STAND", "DOUBLE"]
+	for k in acts.size():
+		var b := Button.new()
+		b.text = acts[k]
+		b.pressed.connect(func(): Net.game.to_server("srv_bj", [k, stake[0]], casino))
+		row.add_child(b)
+	_close_button()
+
+
+## The outcome of a bet, shown in whichever game panel is open.
+func game_result(text: String) -> void:
+	if shop_open and is_instance_valid(_result):
+		_result.text = text
+	else:
+		toast(text)
 
 
 func _open_panel(title_text: String) -> void:

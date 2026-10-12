@@ -52,6 +52,33 @@ const COURTS := [
 	[Vector3(100, 0, 35), Vector2(8, 4)],
 ]
 
+## Plots in the two building rows (row 0 faces the avenida, row 1 the back street) that the
+## street leaves empty for a building you can walk into. `door` and `back` are the x of the
+## front and back doorways, `public` how deep from the front the customers' part goes.
+const LOTS := [
+	{"kind": "cassino", "name": "BINGO ATLÂNTICO", "row": 0, "x0": -24.0, "x1": 24.0, "floors": 3, "door": 8.0, "back": 21.0, "public": 18.5,
+			"tint": Color(0.42, 0.1, 0.14), "sign": Color(0.85, 0.6, 0.1), "floor": Color(0.2, 0.2, 0.22), "light": Color(1.0, 0.8, 0.5)},
+	{"kind": "boteco", "name": "BOTECO DO ZÉ", "row": 0, "x0": -127.0, "x1": -111.0, "floors": 2, "back": -117.0,
+			"tint": Color(0.93, 0.8, 0.45), "sign": Color(0.75, 0.12, 0.1)},
+	{"kind": "mercado", "name": "MERCADINHO", "row": 0, "x0": 49.0, "x1": 61.0, "floors": 2,
+			"tint": Color(0.8, 0.88, 0.92), "sign": Color(0.1, 0.45, 0.75)},
+	{"kind": "farmacia", "name": "FARMÁCIA", "row": 0, "x0": 100.0, "x1": 114.0, "floors": 4, "public": 13.0,
+			"tint": Color(0.95, 0.95, 0.95), "sign": Color(0.1, 0.6, 0.3), "light": Color(0.9, 0.95, 1.0)},
+	{"kind": "barbearia", "name": "BARBEARIA", "row": 0, "x0": 150.0, "x1": 162.0, "floors": 1,
+			"tint": Color(0.85, 0.82, 0.9), "sign": Color(0.15, 0.2, 0.5)},
+	{"kind": "boteco", "name": "BAR DO PORTUGUÊS", "row": 1, "x0": 100.0, "x1": 114.0, "floors": 1, "back": 107.0,
+			"tint": Color(0.75, 0.86, 0.78), "sign": Color(0.1, 0.4, 0.2)},
+]
+
+
+## The lot in `row` that the stretch x0..x1 runs into, or {}.
+static func lot_over(row: int, x0: float, x1: float) -> Dictionary:
+	for lot in LOTS:
+		if lot.row == row and x1 > lot.x0 + 0.05 and x0 < lot.x1 - 0.05:
+			return lot
+	return {}
+
+
 ## Rounded hills behind the city as [centre, radii], filled in by the world as it builds them.
 static var hills: Array = []
 

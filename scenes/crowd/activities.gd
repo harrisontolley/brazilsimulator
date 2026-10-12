@@ -14,7 +14,7 @@ const Kit := preload("res://scenes/characters/char_kit.gd")
 const Layout := preload("res://scenes/world/layout.gd")
 const Places := preload("res://scenes/world/places.gd")
 
-enum { NONE, CHAT, DINE, QUEUE, SELFIE, DIG, ALTINHA, FRESCOBOL, CAPOEIRA, CHURRASCO, GANG }
+enum { NONE, CHAT, DINE, QUEUE, SELFIE, DIG, ALTINHA, FRESCOBOL, CAPOEIRA, CHURRASCO, GANG, ROOM }
 
 const BALL_R := 0.2
 ## Seconds one touch of the ball takes to reach the next player.
@@ -64,6 +64,7 @@ func plan(seed_value: int, crowd: Node3D) -> Array:
 	_plan_roda()
 	_plan_churrascos()
 	_plan_gangs()
+	_plan_spots()
 	_build_props()
 	return _specs
 
@@ -117,7 +118,7 @@ func _plan_tables() -> void:
 		for s in seats:
 			if _rng.randf() < 0.62:
 				taken.append(s)
-		if taken.size() < 2:
+		if taken.size() < 2 and not (taken.size() == 1 and taken[0].get("solo", false)):
 			continue
 		var c := Vector3.ZERO
 		for s in taken:
@@ -224,6 +225,19 @@ func _plan_gangs() -> void:
 		for s in _rng.randi_range(4, 5):
 			# Strung out along the wall, backs to it.
 			_member(g, c + Vector3((s - 2) * 1.1 + _rng.randf_range(-0.2, 0.2), 0, _rng.randf_range(-0.9, 0.3) if s % 2 == 1 else -1.2), Kit.face(Vector3.BACK), Kit.LEAN, "malandro")
+
+
+## Whoever the world wanted standing somewhere in particular: bar staff, croupiers, punters
+## at the machines, the men on the door. A handful to a group, so each bunch keeps its own time.
+func _plan_spots() -> void:
+	var g := {}
+	for k in Places.spots.size():
+		var s: Dictionary = Places.spots[k]
+		if k % 6 == 0:
+			g = _group(ROOM, s.pos, _rng.randf_range(4.0, 8.0))
+			g["poses"] = []
+		g.poses.append(s.poses)
+		_member(g, s.pos, s.yaw, s.poses[0], s.arch)
 
 
 ## The things groups need that are not people: balls in the air, holes in the sand, grills.
@@ -380,6 +394,13 @@ func _restage(g: Dictionary, seg: int) -> void:
 				var h := h01(g.seed + s * 31, seg)
 				c.act_pose(g.first + s, Kit.EAT if h < 0.3 else (Kit.DRINK if h < 0.6 else Kit.TALK), h > 0.8)
 				if h > 0.8:
+					g.speaker = s
+		ROOM:
+			for s in g.n:
+				var poses: Array = g.poses[s]
+				var pose: int = poses[int(h01(g.seed + s * 31, seg) * poses.size()) % poses.size()]
+				c.act_pose(g.first + s, pose, pose == Kit.TALK)
+				if pose == Kit.TALK:
 					g.speaker = s
 		GANG:
 			for s in g.n:

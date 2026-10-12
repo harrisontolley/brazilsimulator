@@ -19,6 +19,8 @@ const ITEMS := {
 	"espetinho": {"name": "Espetinho", "type": "food", "heal": 40.0, "price": 25},
 	"acai": {"name": "Açaí", "type": "food", "heal": 70.0, "price": 40},
 	"caipirinha": {"name": "Caipirinha", "type": "food", "heal": 10.0, "buff": true, "duration": 45.0, "comedown": 0.0, "od": 0.0, "price": 25},
+	"curativo": {"name": "Curativo", "type": "food", "heal": 60.0, "price": 35},
+	"cerveja": {"name": "Cerveja", "type": "food", "heal": 8.0, "buff": true, "duration": 30.0, "comedown": 0.0, "od": 0.0, "price": 12},
 	# Taken off the people you rob. Worth nothing until a fence buys it; lost if arrested.
 	"phone": {"name": "Celular", "type": "loot", "price": 120},
 	"watch": {"name": "Relógio", "type": "loot", "price": 180},
@@ -46,6 +48,7 @@ const ARCHETYPES := [
 	{"id": "mafia", "weight": 0.12, "money": [400, 1500], "resistance": 0.65, "fight": 0.7, "shoot": 0.5, "gun": 0.35, "hp": 120.0, "melee": 16.0, "scale": 1.15, "width": 1.45},
 	# Never rolled: these are placed where they belong.
 	{"id": "vendor", "weight": 0.0, "money": [60, 220], "resistance": 0.25, "fight": 0.1, "shoot": 0.0, "gun": 0.0, "hp": 50.0, "melee": 8.0, "scale": 1.0, "width": 1.0},
+	{"id": "seguranca", "weight": 0.0, "money": [100, 300], "resistance": 0.9, "fight": 1.0, "shoot": 0.7, "gun": 0.5, "hp": 130.0, "melee": 18.0, "scale": 1.12, "width": 1.3},
 	{"id": "malandro", "weight": 0.0, "money": [80, 300], "resistance": 0.55, "fight": 0.95, "shoot": 0.15, "gun": 0.3, "hp": 90.0, "melee": 13.0, "scale": 1.02, "width": 1.1},
 	{"id": "traficante", "weight": 0.0, "money": [250, 900], "resistance": 0.6, "fight": 0.9, "shoot": 0.85, "gun": 0.6, "hp": 100.0, "melee": 14.0, "scale": 1.05, "width": 1.15},
 ]
@@ -75,6 +78,12 @@ const VENDORS := [
 	{"name": "JOGO DO BICHO", "kind": "bicho", "pos": Vector3(-70, 0, 107.0), "stock": [], "color": Color(0.85, 0.75, 0.1)},
 	{"name": "BOCA", "kind": "shop", "discount": 0.7, "pos": BOCA_POS, "stock": ["cocaine", "weed", "meth"], "color": Color(0.2, 0.7, 0.3)},
 	{"name": "RECEPTADOR", "kind": "fence", "pos": Vector3(212, 6.2, 146.5), "stock": [], "color": Color(0.5, 0.3, 0.6)},
+	# Behind a counter indoors (see scenes/world/interiors.gd for the rooms).
+	{"name": "BOTECO DO ZÉ", "kind": "shop", "indoor": true, "till": true, "pos": Vector3(-123.2, 0, 79.5), "stock": ["cerveja", "caipirinha", "espetinho"], "color": Color(0.75, 0.12, 0.1)},
+	{"name": "MERCADINHO", "kind": "shop", "indoor": true, "till": true, "pos": Vector3(52, 0, 75.1), "stock": ["coco", "acai", "ammo"], "color": Color(0.1, 0.45, 0.75)},
+	{"name": "FARMÁCIA", "kind": "shop", "indoor": true, "till": true, "pos": Vector3(107, 0, 80.9), "stock": ["curativo"], "color": Color(0.1, 0.6, 0.3)},
+	{"name": "BAR DO PORTUGUÊS", "kind": "shop", "indoor": true, "till": true, "pos": Vector3(103.8, 0, 117.5), "stock": ["cerveja", "caipirinha", "espetinho"], "color": Color(0.1, 0.4, 0.2)},
+	{"name": "BICHO DO BINGO", "kind": "bicho", "indoor": true, "pos": Vector3(-14, 0, 89.4), "stock": [], "color": Color(0.85, 0.6, 0.1)},
 ]
 
 ## The 25 animals of the jogo do bicho, in their traditional order.
@@ -91,6 +100,8 @@ const BOCA_POS := Vector3(-120, 12.2, 162.5)
 const RODAS := [Vector3(40, 0, 45.5), Vector3(-195, 0, 45.5), Vector3(215, 0, 45.5)]
 const CAMPINHO_POS := Vector3(-46, 15, 172.5)
 const JAIL_TIME := 30.0
+## A clean shirt: nobody is looking for someone dressed like that.
+const CLOTHES_PRICE := 50
 ## Where a hit landed.
 const ZONE_BODY := 0
 const ZONE_HEAD := 1
