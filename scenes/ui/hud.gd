@@ -24,16 +24,21 @@ const TEXT_W := 900.0
 const SettingsMenu := preload("res://scenes/ui/settings_menu.gd")
 const DrugKit := preload("res://scenes/items/drug_kit.gd")
 const UI := preload("res://scenes/ui/ui_kit.gd")
+const Layout := preload("res://scenes/world/layout.gd")
+## What being under water does to the picture.
+const UNDER_BLUR := 0.9
+const UNDER_WOBBLE := 0.35
 
 const PHASE_TEXT := {"high": "HIGH", "down": "COMEDOWN", "od": "OVERDOSE"}
 const SLOT_PX := 56
 const HELP := [
 	["W A S D", "move"], ["Shift", "sprint"], ["Space", "jump; hold to hop, again in the air, off a wall"],
-	["Ctrl / C", "slide, or crouch and creep"], ["Q", "dive"], ["Scroll", "first / third person"],
+	["Ctrl / C", "slide, or crouch and creep"], ["Q", "dive"],
+	["In the sea", "Ctrl or Q under, Space up, Shift faster; mind your breath"], ["Scroll", "first / third person"],
 	["Left mouse", "attack; hold to draw back a throw"], ["Right mouse", "aim; look down a scope"], ["R", "reload"],
 	["1  2  3  4", "fists and blades / guns / sniper and launcher / grenades"],
 	["E (hold)", "rob: shout at them, or keep quiet over a sunbather"], ["V", "fake a shout"],
-	["F", "use, pick up, shop, hide, take a moto"], ["Z  X  G", "pick a drug, take it"],
+	["F", "use, pick up, shop, hide, take a moto or a jet ski"], ["Z  X  G", "pick a drug, take it"],
 	["Tab", "scores"], ["Esc", "menu and settings"], ["F11", "fullscreen"],
 ]
 
@@ -49,6 +54,9 @@ var _scope: ColorRect
 var _reticle: UI.Reticle
 var _hp: UI.Meter
 var _hp_text: Label
+var _air: UI.Meter
+var _air_cap: Label
+var _under_k := 0.0
 var _money: Label
 var _weapon: Label
 var _mag: Label
@@ -176,6 +184,14 @@ func _ready() -> void:
 	row.add_child(_hp_text)
 	_hp = UI.Meter.new()
 	vida.add_child(_hp)
+	# Only there while it matters: how much breath is left.
+	_air_cap = UI.label(15, UI.DIM)
+	_air_cap.text = "BREATH"
+	vida.add_child(_air_cap)
+	_air = UI.Meter.new()
+	_air.color = UI.SEA
+	_air.custom_minimum_size = Vector2(250, 12)
+	vida.add_child(_air)
 
 	# Bottom right: what is in your hand.
 	var br := _stack(Control.PRESET_BOTTOM_RIGHT)
@@ -722,6 +738,10 @@ func _process(delta: float) -> void:
 	# Health, and the red that closes in when some of it goes.
 	_hp.value = clampf(st.hp / 100.0, 0.0, 1.0)
 	_hp_text.text = "%d" % ceili(maxf(st.hp, 0.0))
+	_air.value = clampf(p.air / DB.BREATH, 0.0, 1.0)
+	_air.visible = p.air < DB.BREATH - 0.05 and not st.dead
+	_air_cap.visible = _air.visible
+	_under_k = move_toward(_under_k, 1.0 if Layout.cam_under else 0.0, delta * 6.0)
 	_hp_text.add_theme_color_override("font_color", UI.GUARANA.lightened(0.2) if st.hp < 30.0 else UI.SAND)
 	if st.hp < _hp_was - 0.5:
 		_hurt_k = minf(1.0, _hurt_k + (_hp_was - st.hp) / 35.0 + 0.25)
@@ -840,6 +860,10 @@ func _process(delta: float) -> void:
 			_target.text = "Hold E and keep QUIET to go through their bag" if g.crowd.is_lying(p.target_npc) else "Hold E and shout to rob"
 	elif p.snatch_npc >= 0:
 		_target.text = "E: SNATCH!"
+	elif p.mv == p.MV_SWIM:
+		_target.text = "Ctrl dive   Space up   look where you want to go   Shift faster" if p.head_under() else "Ctrl or Q dive under   Shift crawl   Space climb out"
+	elif p.mv == p.MV_RIDE and g.motos.on_ski(p.id):
+		_target.text = "W / S throttle   A / D steer   Space hop   F get off"
 	elif p.mv == p.MV_RIDE:
 		_target.text = "W / S throttle   A / D steer   Space hop   F get off   E snatch from people sitting"
 	elif p.is_crouched():
@@ -1008,6 +1032,13 @@ func _drug_screen(p, delta: float) -> void:
 		if _beat_t <= 0.0:
 			_beat_t = 0.55
 			Sfx.play("heartbeat", p.global_position + Vector3(0, 1.2, 0), 6.0)
+	if _under_k > 0.0:
+		# Looking through water: everything blue-green, soft, and never quite still.
+		var c := Color(0.02, 0.36, 0.48, 0.42 * _under_k)
+		var a := c.a + tint.a * (1.0 - c.a)
+		tint = Color((c.r * c.a + tint.r * tint.a * (1.0 - c.a)) / a, (c.g * c.a + tint.g * tint.a * (1.0 - c.a)) / a, (c.b * c.a + tint.b * tint.a * (1.0 - c.a)) / a, a)
+		blur = maxf(blur, UNDER_BLUR * _under_k)
+		wobble = maxf(wobble, UNDER_WOBBLE * _under_k)
 	_tint.color = tint
 	_blur.visible = blur > 0.0
 	_blur.material.set_shader_parameter("amount", blur)

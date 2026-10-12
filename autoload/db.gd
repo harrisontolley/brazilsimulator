@@ -110,8 +110,11 @@ const HOSPITAL_POS := Vector3(103.8, 0.2, 93.0)
 const HOSPITAL_BILL := 300
 ## How much of their cash someone who passes out in the street wakes up without.
 const OD_ROBBED := 0.3
+## How long anyone can hold a breath, and what running out of it costs each second after.
+const BREATH := 25.0
+const DROWN_DMG := 12.0
 ## Where a bad trip may leave you: a rooftop on the avenue, or up to the waist in the sea.
-const WAKE_SPOTS := [Vector3(60.0, 0.2, 86.0), Vector3(-40.0, 0.2, -44.0)]
+const WAKE_SPOTS := [Vector3(60.0, 0.2, 86.0), Vector3(-40.0, 0.2, -49.0)]
 ## What the two weapon keys cycle through.
 const MELEE := ["fists", "knife", "estoque", "taco"]
 const GUNS := ["pistol", "revolver", "smg", "shotgun", "fuzil"]

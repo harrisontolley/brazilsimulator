@@ -41,6 +41,7 @@ var _gondola: Node3D
 var _ship: Node3D
 var _gliders: Array = []
 var _day_t := 0.0
+var _under := false
 
 
 func _ready() -> void:
@@ -132,7 +133,7 @@ func _build_sea(rng: RandomNumberGenerator) -> void:
 	xf.clear()
 	tint.clear()
 	for i in 90:
-		_head_home.append(Vector3(rng.randf_range(-290, 290), 0.25, rng.randf_range(-58.0, -41.0)))
+		_head_home.append(Vector3(rng.randf_range(-290, 290), 0.25, rng.randf_range(-72.0, -52.0)))
 		xf.append(Transform3D())
 		tint.append([Color(0.96, 0.76, 0.6), Color(0.66, 0.45, 0.3), Color(0.45, 0.3, 0.2), Color(0.85, 0.62, 0.44)][i % 4])
 	_heads = _free_multi(_ball(0.2, -1.0, 6), xf, tint)
@@ -269,7 +270,7 @@ func _process(delta: float) -> void:
 	var t := MatchState.time
 	_day_t -= delta
 	var ev = Net.game.events if Net.game != null else null
-	if _day_t <= 0.0 or (ev != null and (ev.storm > 0.0 or ev.flash > 0.0)):
+	if _day_t <= 0.0 or (ev != null and (ev.storm > 0.0 or ev.flash > 0.0)) or Layout.cam_under != _under:
 		_day_t = 0.5
 		_apply_day()
 
@@ -297,14 +298,17 @@ func _process(delta: float) -> void:
 		var h: Array = _boat_home[i]
 		var home: Vector3 = h[0]
 		var ph: float = h[1]
-		var p := home + Vector3(sin(t * 0.05 + ph) * 12.0, sin(t * 1.1 + ph) * 0.12, cos(t * 0.04 + ph) * 8.0)
-		var b := Basis(Vector3.UP, ph + sin(t * 0.06 + ph) * 0.4) * Basis(Vector3.RIGHT, sin(t * 0.9 + ph) * 0.06) * Basis.from_scale(Vector3.ONE * h[2])
+		var p := home + Vector3(sin(t * 0.05 + ph) * 12.0, 0.0, cos(t * 0.04 + ph) * 8.0)
+		p.y = Layout.wave_y(p.x, p.z) + 0.05
+		var lean := Layout.wave_slope(p.x, p.z)
+		var b := Basis(Vector3.UP, ph + sin(t * 0.06 + ph) * 0.4) * Basis(Vector3.RIGHT, lean.y * 0.6) * Basis(Vector3.BACK, lean.x * 0.6) * Basis.from_scale(Vector3.ONE * h[2])
 		_boats.set_instance_transform(i, Transform3D(b, p))
 
 	for i in 4:
 		# Jet skis carve long figure eights just beyond the swimmers.
 		var a := t * 0.22 + i * 1.7
-		var p := Vector3(-200.0 + i * 130.0 + sin(a) * 90.0, 0.3 + absf(sin(t * 3.0 + i)) * 0.15, -85.0 + sin(a * 2.0) * 22.0)
+		var p := Vector3(-200.0 + i * 130.0 + sin(a) * 90.0, 0.0, -85.0 + sin(a * 2.0) * 22.0)
+		p.y = Layout.wave_y(p.x, p.z) + absf(sin(t * 3.0 + i)) * 0.12
 		var v := Vector3(cos(a) * 90.0, 0, cos(a * 2.0) * 44.0)
 		_skis.set_instance_transform(i, Transform3D(Basis(Vector3.UP, atan2(-v.z, v.x)) * Basis(Vector3.BACK, 0.12), p))
 
@@ -313,12 +317,15 @@ func _process(delta: float) -> void:
 		var ph := i * 1.9
 		var u := fposmod(t * 0.08 + ph * 0.13, 1.0)
 		var ride := smoothstep(0.6, 1.0, u)
-		var p := Vector3(-270.0 + i * 49.0 + sin(ph) * 14.0 + ride * 14.0, 0.25 + sin(t * 1.4 + ph) * 0.1, lerpf(-78.0, -44.0, ride))
+		var p := Vector3(-270.0 + i * 49.0 + sin(ph) * 14.0 + ride * 14.0, 0.0, lerpf(-78.0, -46.0, ride))
+		p.y = Layout.wave_y(p.x, p.z) - 0.02
 		_surf.set_instance_transform(i, Transform3D(Basis(Vector3.UP, 0.4 + ride * 0.5), p))
 
 	for i in _head_home.size():
 		var home: Vector3 = _head_home[i]
-		_heads.set_instance_transform(i, Transform3D(Basis(), home + Vector3(sin(t * 0.3 + i) * 1.5, sin(t * 1.5 + i * 0.7) * 0.1, cos(t * 0.25 + i) * 1.0)))
+		var hp := home + Vector3(sin(t * 0.3 + i) * 1.5, 0.0, cos(t * 0.25 + i) * 1.0)
+		hp.y = Layout.wave_y(hp.x, hp.z) + 0.02
+		_heads.set_instance_transform(i, Transform3D(Basis(), hp))
 
 	for i in Layout.COURTS.size():
 		var c: Vector3 = Layout.COURTS[i][0]
@@ -408,5 +415,10 @@ func _apply_day() -> void:
 	world.env.fog_density = lerpf(0.0004, 0.007, storm)
 	world.env.ambient_light_energy += flash * 0.8
 	var night := lerpf(a[8], b[8], u)
+	# With the eyes under water there is no seeing far, and what light there is is green.
+	_under = Layout.cam_under
+	if _under:
+		world.env.fog_density = 0.055
+		world.env.fog_light_color = Color(0.04, 0.34, 0.42) * (1.0 - 0.75 * night) * (1.0 - 0.5 * storm)
 	for m in night_mats:
 		m.set_shader_parameter("night", night)

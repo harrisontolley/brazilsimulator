@@ -27,6 +27,9 @@ const SHADE := [
 	[4, 240.0, 8192, RenderingServer.SHADOW_QUALITY_SOFT_ULTRA, true],
 ]
 
+enum { WATER_LOW, WATER_HIGH }
+const WATERS := ["Low", "High"]
+
 ## Window mode (WINDOWED / BORDERLESS / FULLSCREEN).
 var mode := WINDOWED
 ## Window size when windowed. In fullscreen it sets how finely the 3D view is drawn: the
@@ -39,6 +42,8 @@ var fps_cap := 0
 var msaa := 1
 ## Index into SHADOWS.
 var shadows := SHADOWS_HIGH
+## Index into WATERS: whether the sea shows what is under it and froths round what is in it.
+var water := WATER_HIGH
 ## Blood on the ground, and what an explosion does to whoever is standing on it.
 var gore := true
 ## 0..1.
@@ -85,6 +90,7 @@ func _load() -> void:
 	# It used to be a plain on or off.
 	var shade = cfg.get_value("display", "shadows", shadows)
 	shadows = (SHADOWS_HIGH if shade else SHADOWS_OFF) if shade is bool else clampi(int(shade), 0, SHADOWS.size() - 1)
+	water = clampi(int(cfg.get_value("display", "water", water)), 0, WATERS.size() - 1)
 	gore = cfg.get_value("display", "gore", gore)
 	volume = clampf(cfg.get_value("audio", "volume", volume), 0.0, 1.0)
 	fov = clampf(cfg.get_value("controls", "fov", fov), 60.0, 110.0)
@@ -105,6 +111,7 @@ func save() -> void:
 	cfg.set_value("display", "fps_cap", fps_cap)
 	cfg.set_value("display", "msaa", msaa)
 	cfg.set_value("display", "shadows", shadows)
+	cfg.set_value("display", "water", water)
 	cfg.set_value("display", "gore", gore)
 	cfg.set_value("audio", "volume", volume)
 	cfg.set_value("controls", "fov", fov)

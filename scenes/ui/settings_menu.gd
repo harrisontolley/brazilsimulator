@@ -79,6 +79,10 @@ func _ready() -> void:
 	shade.item_selected.connect(func(k: int):
 		Settings.shadows = k
 		Settings.save())
+	var sea := _options("Water", Settings.WATERS, Settings.water)
+	sea.item_selected.connect(func(k: int):
+		Settings.water = k
+		Settings.save())
 	_check("Blood and gore", Settings.gore, func(on: bool):
 		Settings.gore = on
 		Settings.save())

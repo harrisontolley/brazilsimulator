@@ -16,7 +16,39 @@ const BLOCK_B_Z := 111.0
 const FOOT_Z := 131.0
 const FAVELA_Z := 137.0
 const BACK_Z := 185.0
-const WORLD_AABB := AABB(Vector3(-400, -5, -120), Vector3(800, 90, 330))
+const WORLD_AABB := AABB(Vector3(-400, -20, -480), Vector3(800, 105, 690))
+
+## Still water. The sand is flat down to SHORE_Z and falls away from there, so the sea
+## starts a few metres further out, where the bed first dips under this.
+const SEA_Y := -0.35
+## The seabed as [z, height] going out: a paddling shelf, the drop, then the deep.
+const SEABED: Array[Vector2] = [Vector2(-38, 0), Vector2(-50, -1.2), Vector2(-80, -6), Vector2(-200, -12), Vector2(-470, -14)]
+## Where the bed goes under: the water's edge on a calm day.
+const WATER_Z := -41.5
+## As far out as anyone gets, and where the current starts turning them back.
+const SEA_EDGE_Z := -470.0
+const SEA_SOFT_Z := -435.0
+const SEA_SOFT_X := 290.0
+## The yacht lies at anchor here, bow toward +x: centre, and half its length and beam.
+const YACHT_POS := Vector3(70, 0, -215)
+const YACHT_HALF := Vector2(23, 4.6)
+## How much of a jet ski's hull sits under the water.
+const SKI_DRAFT := 0.2
+## The swell, as [direction x, direction z, wavenumber, speed in radians a second, height,
+## peakedness]. The sea shader is handed this same table, so what is drawn is what floats.
+const WAVES: Array = [
+	[0.148, 0.989, 0.185, 1.35, 0.28, 1.6],
+	[-0.399, 0.917, 0.33, 1.8, 0.14, 1.3],
+	[0.8, 0.6, 0.57, 2.36, 0.07, 1.0],
+	[-0.919, 0.394, 0.97, 3.08, 0.035, 1.0],
+]
+
+## The clock the waves run on: the match clock, kept ticking after the whistle.
+static var sea_t := 0.0
+## How rough the weather is making it, 0..1.
+static var sea_storm := 0.0
+## Whether this player's camera is under the surface.
+static var cam_under := false
 
 ## Upper z edge of each band. Even bands are open, odd ones are building rows.
 const EDGES: Array[float] = [BLOCK_A_Z, RUA_Z, BLOCK_B_Z, FOOT_Z, FAVELA_Z]
@@ -81,6 +113,73 @@ static func lot_over(row: int, x0: float, x1: float) -> Dictionary:
 		if lot.row == row and x1 > lot.x0 + 0.05 and x0 < lot.x1 - 0.05:
 			return lot
 	return {}
+
+
+## Height of the seabed at z. It only varies with distance from the shore.
+static func seabed_y(z: float) -> float:
+	if z >= SEABED[0].x:
+		return 0.0
+	for k in range(1, SEABED.size()):
+		var b := SEABED[k]
+		if z >= b.x:
+			var a := SEABED[k - 1]
+			return lerpf(a.y, b.y, (a.x - z) / (a.x - b.x))
+	return SEABED[SEABED.size() - 1].y
+
+
+## How much of the full swell reaches (x, z): it dies away up the beach, is damped in the
+## lee of the yacht (so the decks need not rock), and builds in a storm.
+static func wave_amp(x: float, z: float) -> float:
+	var shore := lerpf(0.18, 1.0, smoothstep(0.0, 50.0, SHORE_Z - z))
+	var calm := lerpf(0.3, 1.0, smoothstep(26.0, 70.0, Vector2(x - YACHT_POS.x, z - YACHT_POS.z).length()))
+	return shore * calm * (1.0 + 1.5 * sea_storm)
+
+
+## Height of the water surface at (x, z) at time t.
+static func wave_y_at(x: float, z: float, t: float) -> float:
+	var h := 0.0
+	for w in WAVES:
+		var s: float = 0.5 + 0.5 * sin((w[0] * x + w[1] * z) * w[2] - w[3] * t)
+		h += w[4] * (2.0 * pow(s, w[5]) - 1.0)
+	return SEA_Y + h * wave_amp(x, z)
+
+
+## Height of the water surface at (x, z) now.
+static func wave_y(x: float, z: float) -> float:
+	return wave_y_at(x, z, sea_t)
+
+
+## Which way the surface tilts at (x, z): its rise per metre along x and along z.
+static func wave_slope(x: float, z: float) -> Vector2:
+	var h := wave_y(x, z)
+	return Vector2(wave_y(x + 0.5, z) - h, wave_y(x, z + 0.5) - h) * 2.0
+
+
+## Hands a material the shape of the sea: anything drawn on the water needs the same waves.
+static func sea_params(m: ShaderMaterial) -> void:
+	m.set_shader_parameter("shore_z", SHORE_Z)
+	m.set_shader_parameter("sea_y", SEA_Y)
+	m.set_shader_parameter("yacht_xz", Vector2(YACHT_POS.x, YACHT_POS.z))
+	var wa: Array = []
+	var wb: Array = []
+	for w in WAVES:
+		wa.append(Vector4(w[0], w[1], w[2], w[3]))
+		wb.append(Vector2(w[4], w[5]))
+	m.set_shader_parameter("wave_a", wa)
+	m.set_shader_parameter("wave_b", wb)
+	m.set_shader_parameter("seabed", SEABED)
+
+
+## Is p in the sea: out past the water's edge and not up on something above it?
+static func wet(p: Vector3) -> bool:
+	return p.z < WATER_Z and p.y < SEA_Y + 0.5
+
+
+## How far under the surface p is; negative above it.
+static func depth(p: Vector3) -> float:
+	if p.z >= WATER_Z + 3.0:
+		return -1.0
+	return wave_y(p.x, p.z) - p.y
 
 
 ## Rounded hills behind the city as [centre, radii], filled in by the world as it builds them.

@@ -30,6 +30,12 @@ static func run(g: Node, what: String) -> bool:
 			await _hudfit(g)
 		"perf":
 			await _perf(g)
+		"swim":
+			await _swim(g)
+		"swimlook":
+			await _swimlook(g)
+		"jetski":
+			await _jetski(g)
 		"arsenal", "shotgun", "sniper", "rocket", "grenade", "molotov":
 			await _arsenal(g, what)
 		_:
@@ -716,3 +722,206 @@ static func _perf(g: Node) -> void:
 	var ms: float = await _frame_ms(g, 100)
 	out.append("player %.2f" % [all - ms])
 	g.debug_result("perf", true, "ms a frame: " + ", ".join(out))
+
+
+static func _wait(g: Node, seconds: float) -> void:
+	await g.get_tree().create_timer(seconds).timeout
+
+
+static func _keys_up() -> void:
+	for a in ["move_forward", "move_back", "move_left", "move_right", "sprint", "jump", "crouch", "dive", "attack"]:
+		Input.action_release(a)
+
+
+## Waits until `check` says so, or for `limit` seconds. How long it took, or -1.
+static func _until(g: Node, limit: float, check: Callable) -> float:
+	var t := 0.0
+	while t < limit:
+		if check.call():
+			return t
+		await g.get_tree().process_frame
+		t += g.get_process_delta_time()
+	return -1.0
+
+
+## Into the sea and back: wading, floating, ducking under, running out of breath, coming up,
+## going in off a height, and walking out up the beach.
+static func _swim(g: Node) -> void:
+	var p = g.local_player
+	var bad: Array = []
+	p.global_position = Vector3(0, 0.1, -39)
+	p.rotation.y = 0.0
+	p.rig.rotation.x = 0.0
+	await _wait(g, 0.4)
+	Input.action_press("move_forward")
+	var waded := await _until(g, 15.0, func(): return p.mv == p.MV_SWIM)
+	if waded < 0.0:
+		bad.append("never floated, z %.1f y %.2f mv %d" % [p.global_position.z, p.global_position.y, p.mv])
+	var in_z: float = p.global_position.z
+	await _wait(g, 2.0)
+	var sea: float = Layout.wave_y(p.global_position.x, p.global_position.z)
+	var ride: float = sea - p.global_position.y
+	if absf(ride - p.FLOAT) > 0.3:
+		bad.append("floating %.2f under the surface" % ride)
+	if p.head_under():
+		bad.append("head under while swimming on top")
+	if p.can_attack():
+		bad.append("can still attack")
+	var slow: float = p.hspeed()
+	Input.action_press("sprint")
+	await _wait(g, 1.5)
+	var quick: float = p.hspeed()
+	Input.action_release("sprint")
+	if quick < slow + 1.0:
+		bad.append("crawl no faster: %.1f vs %.1f" % [quick, slow])
+	# Under.
+	Input.action_press("crouch")
+	var ducked := await _until(g, 3.0, func(): return p.head_under())
+	await _wait(g, 1.5)
+	var down: float = Layout.wave_y(p.global_position.x, p.global_position.z) - p.global_position.y
+	if ducked < 0.0 or down < 1.5:
+		bad.append("did not dive: %.2f down" % down)
+	# Out of breath.
+	g._air[p.id] = 0.6
+	var hp0: float = p.st.hp
+	await _wait(g, 2.5)
+	var lost: float = hp0 - p.st.hp
+	if lost < DB.DROWN_DMG:
+		bad.append("no drowning: lost %.0f" % lost)
+	Input.action_release("crouch")
+	Input.action_release("move_forward")
+	Input.action_press("jump")
+	var up := await _until(g, 8.0, func(): return not p.head_under())
+	Input.action_release("jump")
+	if up < 0.0:
+		bad.append("never surfaced")
+	await _wait(g, 1.5)
+	var hp1: float = p.st.hp
+	await _wait(g, 1.5)
+	if p.st.hp < hp1:
+		bad.append("still drowning on the surface")
+	# In from a height: straight under, then back up without touching anything.
+	p.global_position = Vector3(40, 7.0, -120)
+	p.velocity = Vector3.ZERO
+	await _until(g, 1.0, func(): return p.mv != p.MV_SWIM)
+	var hit := await _until(g, 4.0, func(): return p.mv == p.MV_SWIM)
+	var went_under := await _until(g, 1.0, func(): return p.head_under())
+	var back := await _until(g, 8.0, func(): return p.mv == p.MV_SWIM and not p.head_under())
+	if hit < 0.0 or went_under < 0.0 or back < 0.0:
+		bad.append("drop in: hit %.1f under %.1f back %.1f" % [hit, went_under, back])
+	# A running dive off the sand.
+	p.global_position = Vector3(-60, 0.1, -37)
+	p.rotation.y = 0.0
+	await _wait(g, 0.3)
+	Input.action_press("move_forward")
+	Input.action_press("sprint")
+	await _until(g, 6.0, func(): return p.global_position.z < -47.0)
+	Input.action_press("dive")
+	await _wait(g, 0.1)
+	Input.action_release("dive")
+	var dived := await _until(g, 3.0, func(): return p.mv == p.MV_SWIM)
+	if dived < 0.0:
+		bad.append("dive did not end in the water: mv %d z %.1f" % [p.mv, p.global_position.z])
+	_keys_up()
+	await _wait(g, 2.0)
+	# And home.
+	p.rotation.y = PI
+	Input.action_press("move_forward")
+	Input.action_press("sprint")
+	var out := await _until(g, 40.0, func(): return p.mv != p.MV_SWIM and p.is_on_floor() and p.global_position.z > Layout.WATER_Z)
+	_keys_up()
+	if out < 0.0:
+		bad.append("never walked out: z %.1f mv %d" % [p.global_position.z, p.mv])
+	g.debug_result("swim", bad.is_empty(), "afloat after %.1f s at z %.1f riding %.2f, crawl %.1f vs %.1f m/s, dived %.2f m, drowning took %.0f, dry after %.1f s  %s" % [waded, in_z, ride, quick, slow, down, lost, out, "; ".join(bad)])
+
+
+## Every way of swimming, photographed from the side: for looking at, not for passing.
+static func _swimlook(g: Node) -> void:
+	var p = g.local_player
+	var cam := _camera(g, Vector3.ZERO, Vector3.FORWARD, 30.0)
+	var shoot := func(name: String, high := 0.7):
+		var at: Vector3 = p.global_position
+		cam.look_at_from_position(at + Vector3(3.6, high, 1.2), at + Vector3(0, 0.35, -0.3))
+		await _snap(g, name)
+	p.global_position = Vector3(0, -1.0, -100)
+	p.rotation.y = 0.0
+	p.rig.rotation.x = 0.0
+	await _wait(g, 2.0)
+	await shoot.call("swim_tread")
+	Input.action_press("move_forward")
+	for k in 4:
+		await _wait(g, 0.9 + 0.31 * k)
+		await shoot.call("swim_breast%d" % k)
+	Input.action_press("sprint")
+	await _wait(g, 1.5)
+	for k in 4:
+		await _wait(g, 0.23)
+		await shoot.call("swim_crawl%d" % k)
+	Input.action_release("sprint")
+	Input.action_press("crouch")
+	await _wait(g, 0.35)
+	await shoot.call("swim_duck")
+	await _wait(g, 0.8)
+	Input.action_release("crouch")
+	for k in 4:
+		await _wait(g, 0.3)
+		await shoot.call("swim_under%d" % k, -0.3)
+	Input.action_press("sprint")
+	await _wait(g, 1.2)
+	await shoot.call("swim_dart", -0.3)
+	_keys_up()
+	await _wait(g, 1.2)
+	await shoot.call("swim_hang", -0.3)
+	p.global_position = Vector3(0, 0.1, -42.5)
+	await _wait(g, 0.5)
+	Input.action_press("move_forward")
+	await _wait(g, 0.9)
+	await shoot.call("swim_wade")
+	_keys_up()
+	g.debug_result("swimlook", true)
+
+
+## A jet ski from the row in the shallows: on, out to sea flat out, back in until it grounds,
+## off; then onto another from the water.
+static func _jetski(g: Node) -> void:
+	var p = g.local_player
+	var bad: Array = []
+	p.global_position = Vector3(-30, -0.4, -45.8)
+	p.rotation.y = 0.0
+	await _wait(g, 0.6)
+	g.interact()
+	var on := await _until(g, 2.0, func(): return p.mv == p.MV_RIDE and g.motos.on_ski(p.id))
+	if on < 0.0:
+		bad.append("did not get on: mv %d" % p.mv)
+	Input.action_press("move_forward")
+	await _wait(g, 5.0)
+	var fast: float = p.hspeed()
+	var out_z: float = p.global_position.z
+	var off: float = p.global_position.y - (Layout.wave_y(p.global_position.x, p.global_position.z) - g.motos.DRAFT)
+	if fast < 18.0 or out_z > -90.0:
+		bad.append("slow: %.1f m/s, got to z %.0f" % [fast, out_z])
+	if absf(off) > 0.9:
+		bad.append("%.2f m off the water" % off)
+	# Round and back up the beach.
+	Input.action_press("move_left")
+	await _until(g, 6.0, func(): return absf(angle_difference(p.rotation.y, PI)) < 0.25)
+	Input.action_release("move_left")
+	var beached := await _until(g, 20.0, func(): return p.global_position.z > -46.0 and p.hspeed() < 2.5)
+	var at_z: float = p.global_position.z
+	if beached < 0.0 or at_z > -30.0:
+		bad.append("did not ground: z %.1f at %.1f m/s" % [at_z, p.hspeed()])
+	_keys_up()
+	g.interact()
+	var down := await _until(g, 2.0, func(): return p.mv != p.MV_RIDE and g.motos.bike_of(p.id) < 0)
+	if down < 0.0:
+		bad.append("did not get off")
+	# From the water.
+	var spot: Vector3 = g.motos.pos[g.motos.SPOTS.size() + 6]
+	p.global_position = Vector3(spot.x + 1.5, -1.0, spot.z)
+	await _until(g, 3.0, func(): return p.mv == p.MV_SWIM)
+	await _wait(g, 0.5)
+	g.interact()
+	var swum := await _until(g, 2.0, func(): return p.mv == p.MV_RIDE and g.motos.on_ski(p.id))
+	if swum < 0.0:
+		bad.append("could not climb on from the water: mv %d" % p.mv)
+	g.debug_result("jetski", bad.is_empty(), "on after %.1f s, %.1f m/s out to z %.0f riding %.2f off the surface, grounded at z %.1f, off %.1f, on from the water %.1f  %s" % [on, fast, out_z, off, at_z, down, swum, "; ".join(bad)])

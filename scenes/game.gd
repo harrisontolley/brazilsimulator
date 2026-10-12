@@ -20,6 +20,7 @@ const Hud := preload("res://scenes/ui/hud.gd")
 const Kit := preload("res://scenes/characters/char_kit.gd")
 const Layout := preload("res://scenes/world/layout.gd")
 const CombatFx := preload("res://scenes/fx/combat_fx.gd")
+const SeaFx := preload("res://scenes/fx/sea_fx.gd")
 const Interact := preload("res://scenes/player/interact.gd")
 const Threats := preload("res://scenes/world/threats.gd")
 const Casino := preload("res://scenes/world/casino.gd")
@@ -58,6 +59,7 @@ var dogs: Node3D
 var shots: Node3D
 var hud: CanvasLayer
 var fx: Node3D
+var sea_fx: Node3D
 var interaction: Node
 var threats: Node3D
 var casino: Node
@@ -74,6 +76,7 @@ var _od_t := 0.0
 var _last_attack := {}
 var _last_ping := {}
 var _respawn := {}
+var _air := {}          # pid -> seconds of breath left
 var _last_hit := {}
 var _till_ready := {}   # vendor index -> match time its till is full again
 var _reload := {}       # pid -> [weapon, seconds left]
@@ -132,6 +135,8 @@ func _ready() -> void:
 	add_child(_drops_root)
 	fx = CombatFx.new()
 	add_child(fx)
+	sea_fx = SeaFx.new()
+	add_child(sea_fx)
 	hud = Hud.new()
 	add_child(hud)
 	interaction = Interact.new()
@@ -1032,6 +1037,7 @@ func _players_data() -> Array:
 func _srv_start_match() -> void:
 	MatchState.seed_value = randi()
 	_respawn.clear()
+	_air.clear()
 	_till_ready.clear()
 	_bicho_round = 0
 	police.reset()
@@ -1056,6 +1062,7 @@ func _srv_start_match() -> void:
 func _on_peer_left(pid: int) -> void:
 	ready_peers.erase(pid)
 	_respawn.erase(pid)
+	_air.erase(pid)
 	motos.srv_release(pid)
 	if players.has(pid):
 		bcast("cl_despawn", [pid])
@@ -1159,6 +1166,18 @@ func _srv_tick_player(p: CharacterBody3D, delta: float, od_tick: bool) -> void:
 		if st.ko <= 0.0:
 			st.ko = 0.0
 			dirty = true
+	# Breath: it goes while the head is under and comes back fast in the air. Out of it, the
+	# sea starts taking health instead.
+	var air: float = _air.get(p.id, DB.BREATH)
+	if p.head_under() and not st.dead:
+		air -= delta
+		if air <= 0.0:
+			air += 1.0
+			srv_damage(p.id, DB.DROWN_DMG, -1)
+			send(p.id, "cl_toast", ["You are drowning!  Space to swim up"])
+	else:
+		air = minf(DB.BREATH, air + delta * 3.0)
+	_air[p.id] = air
 	if st.jail > 0.0:
 		st.jail -= delta
 		if st.jail <= 0.0:
@@ -1168,6 +1187,7 @@ func _srv_tick_player(p: CharacterBody3D, delta: float, od_tick: bool) -> void:
 		_respawn[p.id] -= delta
 		if _respawn[p.id] <= 0.0:
 			_respawn.erase(p.id)
+			_air.erase(p.id)
 			st.dead = false
 			st.hp = 100.0
 			dirty = true
@@ -1521,7 +1541,7 @@ func _srv_kill(p: CharacterBody3D, attacker: int) -> void:
 func srv_attack(origin: Vector3, dir: Vector3, charge := 0.0) -> void:
 	var pid := Net.sender()
 	var p = players.get(pid)
-	if p == null or not p.can_fight() or dir.length_squared() < 0.5:
+	if p == null or not p.can_attack() or dir.length_squared() < 0.5:
 		return
 	if p.is_raging() and p.st.equipped != "fists":
 		# Too far gone for anything with moving parts.
@@ -1765,6 +1785,11 @@ func _ray_hit(o: Vector3, d: Vector3, max_t: float, grow: float, exclude: int) -
 	var wall := get_world_3d().direct_space_state.intersect_ray(q)
 	if not wall.is_empty():
 		best.t = o.distance_to(wall.position)
+	# Water stops a bullet within a stride or two of where it goes in.
+	if d.y < -0.01 and o.y > Layout.SEA_Y:
+		var t_in := (o.y - Layout.SEA_Y) / -d.y
+		if t_in < best.t and (o + d * t_in).z < Layout.WATER_Z:
+			best.t = minf(best.t, t_in + 1.5)
 	# Inmates and people outside cannot reach each other through the walls.
 	var inside: bool = players.has(exclude) and players[exclude].st.jail > 0.0
 	for pid in players:
@@ -2086,7 +2111,7 @@ func _offer_near(p, out: Array) -> void:
 			out.append(Interact.offer(&"rob_player", at, "go through %s's pockets" % v.pname, pid, 3, 0.8))
 	var bike: int = motos.free_near(at)
 	if bike >= 0:
-		out.append(Interact.offer(&"mount", at, "take the moto", bike, 2))
+		out.append(Interact.offer(&"mount", at, "take the jet ski" if motos.kind[bike] == motos.SKI else "take the moto", bike, 2))
 	var best := -1
 	var best_d := PICKUP_RANGE
 	for id in drops:

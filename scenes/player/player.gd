@@ -9,7 +9,7 @@ const CharRig := preload("res://scenes/characters/char_rig.gd")
 const Layout := preload("res://scenes/world/layout.gd")
 const Places := preload("res://scenes/world/places.gd")
 
-enum { MV_GROUND, MV_AIR, MV_SLIDE, MV_WALLRUN, MV_DIVE, MV_RIDE, MV_CROUCH }
+enum { MV_GROUND, MV_AIR, MV_SLIDE, MV_WALLRUN, MV_DIVE, MV_RIDE, MV_CROUCH, MV_SWIM }
 
 const WALK := 4.5
 const SPRINT := 7.0
@@ -59,6 +59,25 @@ const RIDE_SAND := 12.0
 const RIDE_ACCEL := 13.0
 const RIDE_BRAKE := 24.0
 const RIDE_STEER := 2.0
+## Swimming: breaststroke and crawl on top, and the same pair under water.
+const SWIM_SPEED := 2.4
+const SWIM_FAST := 4.3
+const SWIM_UNDER := 2.8
+const SWIM_UNDER_FAST := 4.1
+const SWIM_ACCEL := 7.0
+## How far below the surface a floating body's feet-end sits, and how far below it has to be
+## before the head has gone under.
+const FLOAT := 0.55
+const SWIM_HEAD := 0.8
+## Water this deep takes you off your feet; this shallow and you can stand again.
+const SWIM_IN := 1.0
+const SWIM_OUT := 0.85
+const SWIM_EYE := 0.78
+const CLIMB_TIME := 0.42
+## A jet ski: quicker than a bike on sand, turns on its tail, and stops dead on the beach.
+const SKI_SPEED := 24.0
+const SKI_ACCEL := 11.0
+const SKI_STEER := 2.3
 const ROB_RANGE := 4.0
 const HEAD := Vector3(0, 1.3, 0)
 ## Kit characters are adult-sized; the players are kids.
@@ -115,6 +134,23 @@ var _wall_side := 1.0
 var _wall_last := Vector3.ZERO
 var _wall_last_d := 0.0
 
+var _swim_under := false
+var _plunge_t := 0.0
+var _climb_t := -1.0
+var _climb_from := Vector3.ZERO
+var _climb_to := Vector3.ZERO
+var _edge_told := false
+## Seconds of breath left, as this machine reckons it. The host keeps the count that matters.
+var air := DB.BREATH
+var _was_m := MV_GROUND
+var _was_under := false
+var _vel := Vector3.ZERO
+var _step_i := 0
+var _bubble_t := 0.0
+
+var _on_ski := false
+var _ski_sea := 0.0
+var _ski_wet := true
 var _ride_spd := 0.0
 var _ride_steer := 0.0
 var _ram_cd := 0.0
@@ -366,7 +402,17 @@ func is_loved() -> bool:
 
 ## Standing in the sea, which is the one thing that cools an overheating body down.
 func in_sea() -> bool:
-	return global_position.z < Layout.SHORE_Z
+	return Layout.wet(global_position)
+
+
+func swimming() -> bool:
+	return (mv if is_local else net_mv & 7) == MV_SWIM
+
+
+## Swimming with the head below the surface: holding a breath.
+func head_under() -> bool:
+	var p := global_position
+	return swimming() and p.y + SWIM_HEAD < Layout.wave_y(p.x, p.z)
 
 
 ## The drugs in this player's pockets, in hotbar order.
@@ -387,6 +433,11 @@ func can_fight() -> bool:
 	return can_act() and st.get("hide", -1) < 0
 
 
+## Able to use what is in hand: not something to try while keeping afloat.
+func can_attack() -> bool:
+	return can_fight() and not swimming()
+
+
 ## Out in the world where the police, the bikes and the shops are: alive and not inside.
 func at_large() -> bool:
 	return can_act() and st.jail <= 0.0
@@ -401,7 +452,9 @@ func ground_speed() -> float:
 func eye() -> Vector3:
 	var m: int = mv if is_local else net_mv & 7
 	var h := HEAD.y
-	if m == MV_CROUCH:
+	if m == MV_SWIM:
+		h = SWIM_EYE
+	elif m == MV_CROUCH:
 		h = DUCK_HEAD
 	elif m == MV_SLIDE or m == MV_DIVE:
 		h = CROUCH_HEAD
@@ -413,7 +466,7 @@ func stance() -> int:
 	if st.ko > 0.0:
 		return Kit.STANCE_BACK
 	var m: int = mv if is_local else net_mv & 7
-	return Kit.STANCE_CROUCH if m == MV_CROUCH or m == MV_SLIDE or m == MV_DIVE else Kit.STANCE_STAND
+	return Kit.STANCE_CROUCH if m == MV_CROUCH or m == MV_SLIDE or m == MV_DIVE or m == MV_SWIM else Kit.STANCE_STAND
 
 
 ## Bent double and creeping (or keeping still): much harder for a cop to pick out.
@@ -508,6 +561,18 @@ func _physics_process(delta: float) -> void:
 			knock(-global_basis.z * 3.0 + Vector3(0, 5.0, 0))
 			Net.game.to_server("srv_crash", [], Net.game.motos)
 		return
+
+	# The sea: afloat, or going in, or only wading.
+	var sea := Layout.wave_y(global_position.x, global_position.z)
+	var deep := sea - global_position.y if global_position.z < Layout.WATER_Z + 3.0 else -1.0
+	if mv == MV_SWIM:
+		_swim(iv, active, jump_held, jump_tap, crouch, sea, delta)
+		return
+	if deep > SWIM_IN or (deep > 0.6 and not is_on_floor() and _no_footing(sea)):
+		_enter_water()
+		return
+	if deep > 0.15:
+		top *= lerpf(1.0, 0.45, clampf(deep / SWIM_IN, 0.0, 1.0))
 
 	var grounded := is_on_floor()
 	if grounded:
@@ -717,12 +782,151 @@ func _spirit(iv: Vector2, delta: float) -> void:
 	_fly.y = maxf(_fly.y, 0.3 - global_position.y - HEAD.y)
 
 
+# --- swimming ---
+
+## Is the bottom here too far down to stand on with a head above `sea`?
+func _no_footing(sea: float) -> bool:
+	var from := global_position + Vector3(0, 0.3, 0)
+	var q := PhysicsRayQueryParameters3D.create(from, Vector3(from.x, sea - SWIM_IN - 0.15, from.z), 1)
+	return get_world_3d().direct_space_state.intersect_ray(q).is_empty()
+
+
+## Off the feet and into the water. Walking in just floats you; falling or diving in carries
+## you under on the line you arrived on.
+func _enter_water() -> void:
+	var hard := velocity.y < -3.5 or mv == MV_DIVE
+	mv = MV_SWIM
+	_set_crouch(true)
+	_swim_under = hard
+	_plunge_t = 0.55 if hard else 0.0
+	_climb_t = -1.0
+	if hard:
+		velocity.x *= 0.72
+		velocity.z *= 0.72
+		velocity.y = maxf(velocity.y * 0.55, -7.5)
+		rig.dip = 0.16
+	else:
+		velocity.y *= 0.3
+
+
+func _leave_water(to: int) -> void:
+	mv = to
+	_swim_under = false
+	_climb_t = -1.0
+	_air_jumps = AIR_JUMPS
+	if not _set_crouch(false):
+		mv = MV_CROUCH
+
+
+## Afloat. On the surface the keys swim you about where you face; Ctrl (or Q) ducks under,
+## and down there you go where you look, Space up and Ctrl down, until the surface again.
+func _swim(iv: Vector2, active: bool, jump_held: bool, jump_tap: bool, crouch: bool, sea: float, delta: float) -> void:
+	if _climb_t >= 0.0:
+		_climb(delta)
+		return
+	var d := sea - global_position.y
+	_plunge_t -= delta
+	if d < 0.2 or global_position.z > Layout.WATER_Z + 3.0:
+		# Lifted clear of it: carried off, or thrown.
+		_leave_water(MV_AIR)
+		return
+	if _plunge_t <= 0.0 and can_act() and (sea - Layout.seabed_y(global_position.z) < SWIM_OUT or (is_on_floor() and d < 0.95 and not _swim_under)):
+		# Shallow enough to put the feet down.
+		_leave_water(MV_GROUND)
+		return
+	var fast := active and Input.is_action_pressed("sprint")
+	if _swim_under:
+		var b: Basis = rig.cam.global_basis
+		var wish := b * Vector3(iv.x, 0, iv.y) + Vector3.UP * ((1.0 if jump_held else 0.0) - (1.0 if crouch else 0.0))
+		wish = wish.limit_length(1.0)
+		if _plunge_t > 0.0:
+			# Still spending the speed of the dive.
+			velocity = velocity.move_toward(Vector3.ZERO, 5.5 * delta) + wish * 4.0 * delta
+		else:
+			# Left alone, a body with air in it drifts up.
+			var want := wish * (SWIM_UNDER_FAST if fast else SWIM_UNDER) * speed_mult() if wish != Vector3.ZERO else Vector3(0, 0.75, 0)
+			velocity = velocity.move_toward(want, SWIM_ACCEL * delta)
+		# Nothing swims up out of the top of the sea.
+		if d <= FLOAT and velocity.y > 0.0:
+			velocity.y = 0.0
+		if d < FLOAT + 0.14 and velocity.y >= -0.05 and _plunge_t <= 0.0 and not crouch:
+			_swim_under = false
+	else:
+		var wish := global_basis * Vector3(iv.x, 0, iv.y)
+		wish.y = 0.0
+		wish = wish.normalized()
+		var h := Vector3(velocity.x, 0, velocity.z).move_toward(wish * (SWIM_FAST if fast else SWIM_SPEED) * speed_mult(), SWIM_ACCEL * delta)
+		velocity.x = h.x
+		velocity.z = h.z
+		# Riding the swell: sprung to the surface, so a wave lifts you rather than swallowing you.
+		velocity.y = move_toward(velocity.y, clampf((d - FLOAT) * 7.0, -2.5, 3.5), 26.0 * delta)
+		if active and (crouch or Input.is_action_just_pressed("dive")):
+			# Duck dive: head down, heels up, gone.
+			_swim_under = true
+			velocity.y = minf(velocity.y, -2.8)
+			velocity += -global_basis.z * 1.2
+		elif active and (jump_tap or (is_on_wall() and iv.y < -0.1)):
+			_try_climb(sea)
+	_sea_edge(delta)
+	floor_snap_length = 0.0
+	move_and_slide()
+
+
+## Something to haul out onto, right in front and not far above the water? Then up it.
+func _try_climb(sea: float) -> void:
+	var fwd := -global_basis.z
+	fwd.y = 0.0
+	fwd = fwd.normalized()
+	var over := global_position + fwd * 0.8
+	var q := PhysicsRayQueryParameters3D.create(Vector3(over.x, sea + 1.5, over.z), Vector3(over.x, sea - 0.4, over.z), 1)
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if hit.is_empty() or hit.normal.y < 0.7 or hit.position.y > sea + 1.45:
+		return
+	# Nothing in the way where the body will end up.
+	var clear := PhysicsRayQueryParameters3D.create(hit.position + Vector3(0, 0.2, 0), hit.position + Vector3(0, STAND_H, 0), 1)
+	if not get_world_3d().direct_space_state.intersect_ray(clear).is_empty():
+		return
+	_climb_t = 0.0
+	_climb_from = global_position
+	_climb_to = hit.position + Vector3(0, 0.02, 0)
+	velocity = Vector3.ZERO
+
+
+## Hauling out: up the side first, then over the edge.
+func _climb(delta: float) -> void:
+	_climb_t += delta
+	var k := clampf(_climb_t / CLIMB_TIME, 0.0, 1.0)
+	var up := smoothstep(0.0, 0.7, k)
+	var along := smoothstep(0.45, 1.0, k)
+	global_position = Vector3(lerpf(_climb_from.x, _climb_to.x, along), lerpf(_climb_from.y, _climb_to.y, up), lerpf(_climb_from.z, _climb_to.z, along))
+	if k >= 1.0:
+		velocity = Vector3.ZERO
+		_leave_water(MV_GROUND)
+
+
+## Too far out, and the current brings you back whether you like it or not.
+func _sea_edge(delta: float) -> void:
+	var p := global_position
+	var over := Vector3(maxf(absf(p.x) - Layout.SEA_SOFT_X, 0.0) * -signf(p.x), 0, maxf(Layout.SEA_SOFT_Z - p.z, 0.0))
+	if over == Vector3.ZERO:
+		_edge_told = false
+		return
+	global_position += over.normalized() * minf(over.length() / 10.0, 1.0) * 7.0 * delta
+	if not _edge_told:
+		_edge_told = true
+		Net.game.hud.toast("The current is too strong out here")
+
+
 # --- riding ---
 
 ## Called when the server puts this (local) player on a bike.
 func start_ride() -> void:
 	_set_crouch(false)
 	_ride_spd = minf(hspeed(), RIDE_SAND)
+	_on_ski = Net.game.motos.on_ski(id)
+	_ski_sea = Layout.wave_y(global_position.x, global_position.z)
+	_swim_under = false
+	_climb_t = -1.0
 	mv = MV_RIDE
 
 
@@ -740,7 +944,16 @@ func ride_lean() -> float:
 
 ## Throttle and brake on W / S, steer with A / D or by looking. Hitting a wall at speed throws you.
 func _ride(active: bool, delta: float) -> void:
+	if _on_ski:
+		_ride_water(active, delta)
+		return
 	var iv := Input.get_vector("move_left", "move_right", "move_forward", "move_back") if active else Vector2.ZERO
+	if Layout.depth(global_position) > 0.75:
+		# Motorbikes do not float.
+		_ride_spd = 0.0
+		Net.game.to_server("srv_dismount", [], Net.game.motos)
+		Net.game.hud.toast("The sea got into the engine")
+		return
 	var paved := global_position.z > Layout.ROAD_Z and global_position.y < 1.0
 	var top := RIDE_ROAD if paved else RIDE_SAND
 	if iv.y < -0.1:
@@ -784,6 +997,64 @@ func _ride(active: bool, delta: float) -> void:
 			_ram_cd = 0.35
 			_ride_spd *= 0.8
 			Net.game.to_server("srv_ram", [hit], Net.game.motos)
+
+
+## A jet ski. It only goes where there is water under it: the hull sits on the swell, leaves
+## it off the back of a wave taken fast, and on sand it is a heavy thing to push.
+func _ride_water(active: bool, delta: float) -> void:
+	var iv := Input.get_vector("move_left", "move_right", "move_forward", "move_back") if active else Vector2.ZERO
+	var p := global_position
+	var sea := Layout.wave_y(p.x, p.z) - Layout.SKI_DRAFT
+	var afloat := sea - Layout.seabed_y(p.z) > 0.25 and p.z < Layout.WATER_Z + 2.0
+	var on_water := afloat and p.y <= sea + 0.05
+	if not afloat:
+		# Beached. It can be backed off, slowly.
+		_ride_spd = move_toward(_ride_spd, -1.6 if iv.y > 0.1 else 0.0, 45.0 * delta)
+	elif not on_water:
+		pass
+	elif iv.y < -0.1:
+		_ride_spd = move_toward(_ride_spd, SKI_SPEED * speed_mult(), SKI_ACCEL * delta)
+	elif iv.y > 0.1:
+		_ride_spd = move_toward(_ride_spd, -3.0, 16.0 * delta)
+	else:
+		_ride_spd = move_toward(_ride_spd, 0.0, 6.5 * delta)
+	# It steers with its jet: nothing at a standstill, everything flat out.
+	var grip := clampf(absf(_ride_spd) / 6.0, 0.0, 1.0) * signf(_ride_spd) * (1.0 if on_water or not afloat else 0.25)
+	rotate_y(-iv.x * SKI_STEER * grip * delta)
+	_ride_steer = lerpf(_ride_steer, -iv.x * 0.4 * absf(grip), minf(1.0, 7.0 * delta))
+
+	var fwd := -global_basis.z
+	fwd.y = 0.0
+	fwd = fwd.normalized()
+	velocity.x = fwd.x * _ride_spd
+	velocity.z = fwd.z * _ride_spd
+	# The water holds it up and no more: when the wave drops away faster than the hull falls,
+	# it flies.
+	var rising := (sea - _ski_sea) / maxf(delta, 0.0001)
+	_ski_sea = sea
+	velocity.y -= GRAVITY * delta
+	if afloat and p.y <= sea + 0.05:
+		velocity.y = maxf(velocity.y, clampf(rising, -6.0, 6.0) + (sea - p.y) * 14.0)
+		if active and Input.is_action_just_pressed("jump") and _ride_spd > 4.0:
+			velocity.y = maxf(velocity.y, 4.4)
+	if on_water and not _ski_wet and absf(_ride_spd) > 6.0:
+		# Back down off a wave.
+		Net.game.sea_fx.splash(p + fwd * 0.8, 0.7, fwd * _ride_spd)
+		Sfx.play("splash", p, -4.0, 1.2)
+		rig.dip = 0.08
+	_ski_wet = on_water
+	floor_snap_length = 0.0
+	var before := absf(_ride_spd)
+	_sea_edge(delta)
+	move_and_slide()
+	var after := Vector2(get_real_velocity().x, get_real_velocity().z).length()
+	if before > 9.0 and after < before * 0.35 and afloat:
+		# Into the side of something.
+		_ride_spd = 0.0
+		knock(-fwd * 4.0 + Vector3(0, 5.0, 0))
+		Net.game.to_server("srv_crash", [], Net.game.motos)
+		return
+	_ride_spd = minf(_ride_spd, after + 2.0) if _ride_spd > 0.0 else _ride_spd
 
 
 ## Thrown through the air by something big: a bus, a crash.
@@ -1009,8 +1280,14 @@ func _animate(delta: float) -> void:
 		_turn = lerpf(_turn, angle_difference(_yaw_was, rotation.y) / delta, k)
 	_yaw_was = rotation.y
 
+	if delta > 0.0:
+		_vel = _vel.lerp(moved / delta, minf(1.0, 14.0 * delta))
 	var m: int = mv if is_local else net_mv & 7
 	var side: float = _wall_side if is_local else (1.0 if net_mv & 8 else -1.0)
+	var under := head_under()
+	if m == MV_SWIM:
+		side = 1.0 if under else -1.0
+	_anim.wade = clampf(Layout.depth(global_position) / SWIM_IN, 0.0, 1.0) if m == MV_GROUND or m == MV_CROUCH else 0.0
 	if not is_local and (net_mv >> 5) & 3 != _hops_seen:
 		_hops_seen = (net_mv >> 5) & 3
 		_anim.jump(CharRig.DOUBLE if net_mv & 128 else CharRig.HOP)
@@ -1025,16 +1302,18 @@ func _animate(delta: float) -> void:
 		pose = Kit.RIDE
 	elif m == MV_SLIDE:
 		pose = Kit.SLIDE
-	elif m == MV_DIVE:
+	elif m == MV_DIVE or m == MV_SWIM:
 		pose = Kit.DIVE
 	elif m == MV_CROUCH:
 		pose = Kit.CROUCH
 	elif m == MV_AIR:
 		pose = Kit.JUMP
-	var held: int = DB.ITEMS[st.equipped].get("held", Kit.HELD_NONE)
+	# Both hands are busy in the water: whatever was in them is tucked away.
+	var held: int = DB.ITEMS[st.equipped].get("held", Kit.HELD_NONE) if m != MV_SWIM else Kit.HELD_NONE
 	var aim: float = rig.rotation.x if is_local else net_pitch
 	_anim.update(delta, m, CharRig.DEAD if st.dead else (CharRig.OUT if out else CharRig.ALIVE), _spd, _vy, _turn, aim, side, held, net_byte() & 16 != 0)
 	_anim.apply(_mats)
+	_water_fx(m, under, delta)
 
 	# Wall runners tip over with their feet toward the wall; riders and runners bank into a turn.
 	_bank = lerpf(_bank, clampf(_turn * _spd * 0.012, -0.35, 0.35), minf(1.0, 8.0 * delta))
@@ -1045,6 +1324,8 @@ func _animate(delta: float) -> void:
 		roll = side * 0.4
 	elif m == MV_RIDE:
 		roll = ride_lean()
+	elif m == MV_SWIM:
+		roll = clampf(_turn * 0.06, -0.3, 0.3)
 	elif m == MV_GROUND:
 		roll = _bank * 0.5
 	_vis.rotation.z = lerp_angle(_vis.rotation.z, roll, minf(1.0, 10.0 * delta))
@@ -1054,7 +1335,7 @@ func _animate(delta: float) -> void:
 	# Anyone standing in a hole is that much shorter.
 	var deep: float = Places.depth_at(global_position) if (_pit >= 0 or not is_local) and global_position.y < 0.6 else 0.0
 	_sink = lerpf(_sink, deep, minf(1.0, 9.0 * delta))
-	_vis.position.y = -_sink
+	_vis.position.y = _anim.lift - _sink
 
 	# Everything another player needs to know about you is worn on the body.
 	var flags := clampi(st.heat, 0, 3) << Kit.HEAT_SHIFT
@@ -1079,6 +1360,54 @@ func _animate(delta: float) -> void:
 	var data := Kit.custom(pose, 0.0, flags, _ev, _prev, _pose_t, held)
 	_body.set_instance_custom_data(0, data)
 	_held.set_instance_custom_data(0, data)
+
+
+## The splashes this body makes: going in, coming up, each stroke, each step in the shallows.
+## Every machine works these out for itself from what it can see the body doing.
+func _water_fx(m: int, under: bool, delta: float) -> void:
+	var fx = Net.game.sea_fx
+	var p := global_position
+	var fwd := -global_basis.z
+	if m == MV_SWIM and _was_m != MV_SWIM:
+		var big := clampf(_vel.length() / 9.0, 0.3, 1.4)
+		fx.splash(p, big, _vel)
+		Sfx.play("splash" if big > 0.5 else "plop", p, lerpf(-8.0, 3.0, minf(big, 1.0)))
+		if under:
+			fx.bubbles(p + Vector3(0, 0.3, 0), int(10 * big) + 4, _vel * 0.3)
+	elif m != MV_SWIM and _was_m == MV_SWIM and not st.dead:
+		fx.splash(p, 0.3)
+		Sfx.play("plop", p, -6.0)
+	if m == MV_SWIM and under != _was_under and _was_m == MV_SWIM:
+		fx.splash(p + fwd * 0.3, 0.35 if under else 0.45, _vel)
+		Sfx.play("plop", p, -4.0)
+		if not under and air < DB.BREATH * 0.6 and is_local:
+			Sfx.play("gasp", p + Vector3(0, 0.6, 0), -2.0)
+	if m == MV_SWIM and not st.dead:
+		if _anim.catch:
+			if under:
+				fx.bubbles(p + fwd * 0.5 + Vector3(0, 0.4, 0), 3, _vel * 0.2)
+			else:
+				# A hand going in ahead, and the wash off the shoulders when it is a sprint.
+				var hand := p + fwd * 0.7 + global_basis.x * (0.25 if _step_i % 2 == 0 else -0.25)
+				fx.splash(hand, 0.14 + minf(_spd, 4.5) * 0.03, _vel)
+				if _spd > 3.0:
+					fx.foam(p - fwd * 0.6, 1.3, 1.6)
+				Sfx.play("plop", p, -15.0 + minf(_spd, 4.5) * 1.6, 1.3)
+				_step_i += 1
+		_bubble_t -= delta
+		if under and _bubble_t <= 0.0:
+			# Breath let out a little at a time.
+			_bubble_t = randf_range(1.1, 2.0)
+			fx.bubbles(p + fwd * 0.55 + Vector3(0, 0.45, 0), 4)
+			Sfx.play("bubbles", p, -12.0)
+	elif (m == MV_GROUND or m == MV_CROUCH) and _anim.wade > 0.1 and _spd > 1.0:
+		var step := int(_anim.phase / PI)
+		if step != _step_i:
+			_step_i = step
+			fx.splash(p + fwd * 0.3, 0.12 + 0.2 * _anim.wade, _vel)
+			Sfx.play("plop", p, -14.0 + 6.0 * _anim.wade, 1.15)
+	_was_m = m
+	_was_under = under
 
 
 ## Plays a punch / recoil (attack) or a flinch on this player's body.
@@ -1120,6 +1449,17 @@ func play(what: String, seconds: float) -> void:
 
 func _animate_viewmodel() -> void:
 	_vm.visible = rig.first_person() and not st.dead and not scoped
+	if mv == MV_SWIM:
+		# Your own hands, pulling the water past.
+		for held in _vm_guns:
+			_vm_guns[held].visible = false
+		var u := fposmod(_anim.stroke / TAU, 1.0)
+		var pull := smoothstep(0.0, 0.35, u) * (1.0 - smoothstep(0.4, 0.6, u))
+		var go := minf(_vel.length() / SWIM_SPEED, 1.0)
+		_vm_r.rotation.x = 0.0
+		_vm_r.position = Vector3(0.16 + 0.3 * pull * go, -0.3 - 0.12 * pull * go, -0.8 + 0.35 * pull * go)
+		_vm_l.position = Vector3(-0.16 - 0.3 * pull * go, -0.3 - 0.12 * pull * go, -0.8 + 0.35 * pull * go)
+		return
 	var gun: bool = DB.is_gun(st.equipped)
 	var long_gun: bool = DB.ITEMS[st.equipped].get("held", 0) >= Kit.HELD_SHOTGUN and gun
 	for held in _vm_guns:
@@ -1170,13 +1510,13 @@ func _local_process(delta: float) -> void:
 	if _near_t <= 0.0:
 		_near_t = 0.1
 		g.crowd.refresh_near(global_position)
-	target_npc = g.crowd.pick_near(head, dir, ROB_RANGE) if can_fight() and mv != MV_RIDE else -1
+	target_npc = g.crowd.pick_near(head, dir, ROB_RANGE) if can_attack() and mv != MV_RIDE else -1
 	snatch_npc = g.crowd.pick_snatch(global_position, -global_basis.z) if can_fight() and mv == MV_RIDE and _ride_spd > 6.0 else -1
 
 	# Meth: sniper zoom while high. Whatever else is in the blood shakes or sways the view.
 	var aiming := captured and Input.is_action_pressed("aim")
 	var glass: float = DB.ITEMS[st.equipped].get("scope", 0.0)
-	scoped = aiming and glass > 0.0 and can_fight() and mv != MV_RIDE
+	scoped = aiming and glass > 0.0 and can_attack() and mv != MV_RIDE
 	rig.scoped = scoped
 	rig.fov_target = (Settings.fov / glass if scoped else (20.0 if is_sniper() else Settings.fov * 0.73)) if aiming else Settings.fov
 	rig.shake = _fx_sum("shake")
@@ -1188,10 +1528,15 @@ func _local_process(delta: float) -> void:
 	# Speed reads through the camera: wider view, a lean off the wall, a low head in a slide.
 	rig.fov_boost = 0.0 if aiming else clampf((hspeed() - SPRINT) * 1.6, 0.0, 22.0)
 	rig.height_target = ((DUCK_HEAD if mv == MV_CROUCH else CROUCH_HEAD) if _crouched else HEAD.y) - _sink
+	if mv == MV_SWIM:
+		rig.height_target = 0.5 if _swim_under else SWIM_EYE
+	# Breath: spent with the head under, got back three times as fast in the air.
+	air = maxf(0.0, air - delta) if head_under() else minf(DB.BREATH, air + delta * 3.0)
 	match mv:
 		MV_WALLRUN: rig.roll_target = _wall_side * 0.22
 		MV_SLIDE: rig.roll_target = 0.05
 		MV_RIDE: rig.roll_target = _ride_steer * 0.5
+		MV_SWIM: rig.roll_target = clampf(-velocity.dot(global_basis.x) * 0.012, -0.08, 0.08)
 		_: rig.roll_target = clampf(-velocity.dot(global_basis.x) * 0.004, -0.05, 0.05)
 	rig.roll_target += sin(Kit.now() * 1.3) * _fx_sum("sway")
 	if scoped:
@@ -1203,7 +1548,7 @@ func _local_process(delta: float) -> void:
 	_attack_t -= delta
 	_rob_t -= delta
 	robbing = false
-	if captured and can_fight():
+	if captured and can_attack():
 		var w: Dictionary = DB.ITEMS[st.equipped]
 		var kind := DB.kind_of(st.equipped)
 		# The point on the line of sight level with the head: where the blow starts from.

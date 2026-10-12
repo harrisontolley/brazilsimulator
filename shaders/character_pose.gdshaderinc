@@ -19,7 +19,7 @@ uniform vec4 rig0 = vec4(0.0);  // arm_l, spread
 uniform vec4 rig1 = vec4(0.0);  // arm_r, lean
 uniform vec4 rig2 = vec4(0.0);  // leg_l, leg_r
 uniform vec4 rig3 = vec4(0.0);  // head, rise, pitch
-uniform vec4 rig4 = vec4(0.0);  // brow, shift, squash, unused
+uniform vec4 rig4 = vec4(0.0);  // brow, shift, squash, roll
 
 const float HALF_PI = 1.5707963;
 
@@ -775,7 +775,9 @@ void char_vertex(inout vec3 p, inout vec3 n, float propf, float partf, vec4 cd, 
 
 	Pose q;
 	float squash = 0.0;
+	float roll = 0.0;
 	if (rigged) {
+		roll = rig4.w;
 		q = Pose(rig0.xyz, rig1.xyz, rig2.xy, rig2.zw, rig0.w, rig1.w, rig3.xy, rig3.z, rig3.w, rig4.x, rig4.y);
 		squash = rig4.z;
 	} else {
@@ -883,6 +885,8 @@ void char_vertex(inout vec3 p, inout vec3 n, float propf, float partf, vec4 cd, 
 	float sq = flinch * 0.1 + squash;
 	p.y *= 1.0 - sq;
 	p.xz *= 1.0 + sq * 0.6;
+	// A swimmer turns about their own length: the shoulder comes up as the arm comes over.
+	ry(p, n, vec3(0.0), roll);
 	rx(p, n, vec3(0.0), q.pitch);
 	p.y += abs(sin(q.pitch)) * 0.17;
 	// Centre a lying body on its spot instead of hinging at the feet.

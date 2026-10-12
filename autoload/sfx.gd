@@ -5,6 +5,8 @@ extends Node
 ## The four ambient beds (surf, crowd, traffic, rain) are mixed here from where the local
 ## player is standing.
 
+const Layout := preload("res://scenes/world/layout.gd")
+
 const RATE := 16000
 const VOICES := 32
 ## How many different syllables people mumble in.
@@ -20,6 +22,8 @@ var _beds := {}
 var _rng := RandomNumberGenerator.new()
 var _task := -1
 var _horn_t := 0.0
+var _muffled := false
+var _low: AudioEffectLowPassFilter
 
 
 func _ready() -> void:
@@ -31,7 +35,7 @@ func _ready() -> void:
 		p.attenuation_filter_cutoff_hz = 20500.0
 		add_child(p)
 		_pool.append(p)
-	for bed in ["surf", "crowd", "traffic", "rain"]:
+	for bed in ["surf", "crowd", "traffic", "rain", "deep"]:
 		var p := AudioStreamPlayer.new()
 		p.volume_db = -80.0
 		add_child(p)
@@ -99,10 +103,12 @@ func _start(p: AudioStreamPlayer3D) -> void:
 
 func _process(delta: float) -> void:
 	var g = Net.game
-	var levels := {"surf": 0.0, "crowd": 0.0, "traffic": 0.0, "rain": 0.0}
+	var levels := {"surf": 0.0, "crowd": 0.0, "traffic": 0.0, "rain": 0.0, "deep": 0.0}
 	if g != null and g.local_player != null:
 		var at: Vector3 = g.local_player.global_position
-		levels.surf = clampf(1.0 - (at.z + 38.0) / 110.0, 0.05, 1.0) * 0.55
+		# Loudest where the waves break; out at sea it is a wash, up in the city a murmur.
+		var off: float = at.z - Layout.SHORE_Z
+		levels.surf = (clampf(1.0 - off / 110.0, 0.05, 1.0) if off > 0.0 else clampf(1.0 + off / 160.0, 0.4, 1.0)) * 0.55
 		levels.crowd = clampf(g.crowd.near.size() / 30.0, 0.0, 1.0) * 0.5
 		var flow: float = g.traffic.flow(MatchState.time)
 		levels.traffic = clampf(1.0 - absf(at.z - 61.0) / 55.0, 0.0, 1.0) * clampf(1.0 - at.y / 60.0, 0.2, 1.0) * (0.25 + 0.5 * flow)
@@ -115,6 +121,9 @@ func _process(delta: float) -> void:
 			var vp: Vector3 = v.body.global_position
 			if absf(vp.x - at.x) < 90.0:
 				play("horn", vp + Vector3(0, 1, 0), -4.0, _rng.randf_range(0.8, 1.25))
+	_muffle(Layout.cam_under)
+	if Layout.cam_under:
+		levels.deep = 0.9
 	for bed in _beds:
 		var p: AudioStreamPlayer = _beds[bed]
 		var want: float = levels[bed]
@@ -126,6 +135,19 @@ func _process(delta: float) -> void:
 			p.play()
 		elif v <= 0.002 and p.playing:
 			p.stop()
+
+
+## Under water everything loses its top end. (The bed that plays down there is already dull.)
+func _muffle(on: bool) -> void:
+	if on == _muffled:
+		return
+	_muffled = on
+	if _low == null:
+		_low = AudioEffectLowPassFilter.new()
+		_low.cutoff_hz = 520.0
+		_low.resonance = 0.7
+		AudioServer.add_bus_effect(0, _low)
+	AudioServer.set_bus_effect_enabled(0, AudioServer.get_bus_effect_count(0) - 1, on)
 
 
 # --- synthesis (runs on a worker thread) ---
@@ -185,6 +207,13 @@ func _build() -> void:
 	made["smash"] = _wav(_smash(), false)
 	made["fire"] = _wav(_fire(), true)
 	made["throw"] = _wav(_throw(), false)
+	# The sea: going in, pulling through it, coming up for air, and the two-stroke of a jet ski.
+	made["splash"] = _wav(_splash(0.9, 0.22, 21), false)
+	made["plop"] = _wav(_splash(0.28, 0.07, 22), false)
+	made["gasp"] = _wav(_gasp(), false)
+	made["bubbles"] = _wav(_bubbles(), false)
+	made["deep"] = _wav(_deep(), true)
+	made["ski"] = _wav(_ski(), true)
 	made["tick"] = _wav(_tick(1500.0), false)
 	made["tick_kill"] = _wav(_tick(900.0), false)
 	for k in BABBLE:
@@ -242,6 +271,81 @@ func _hiss(f: PackedFloat32Array, rng: RandomNumberGenerator, at: float, decay: 
 	for i in n:
 		y += soft * (rng.randf_range(-1.0, 1.0) - y)
 		f[start + i] += y * exp(-float(i) / RATE / decay) * amp
+
+
+## Water thrown up and falling back: a slap, then spray that takes `tail` seconds to settle.
+func _splash(seconds: float, tail: float, seed_value: int) -> PackedFloat32Array:
+	var f := _buf(seconds)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_value
+	_tone(f, 0.0, 95.0, 45.0, 0.05, 0.9)
+	_hiss(f, rng, 0.0, 0.03, 1.0, 0.5)
+	_hiss(f, rng, 0.02, tail, 0.8, 0.28)
+	_hiss(f, rng, 0.05, tail * 0.6, 0.35, 0.8)
+	# Drops coming back down.
+	for k in int(seconds * 22.0):
+		var at := 0.08 + rng.randf() * maxf(seconds - 0.2, 0.05)
+		_tone(f, at, rng.randf_range(900.0, 2600.0), rng.randf_range(1400.0, 3200.0), 0.006, 0.12 * (1.0 - at / seconds))
+	return f
+
+
+## Breaking the surface with empty lungs.
+func _gasp() -> PackedFloat32Array:
+	var f := _buf(0.6)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 23
+	var lo := 0.0
+	var hi := 0.0
+	for i in f.size():
+		var t := float(i) / RATE
+		var x := rng.randf_range(-1.0, 1.0)
+		lo += 0.32 * (x - lo)
+		hi += 0.06 * (x - hi)
+		# The breath in, rising, with a catch of voice in it.
+		var env := smoothstep(0.0, 0.08, t) * (1.0 - smoothstep(0.3, 0.55, t))
+		f[i] = ((lo - hi) * 0.9 + sin(TAU * lerpf(260.0, 420.0, t / 0.5) * t) * 0.12) * env
+	return f
+
+
+func _bubbles() -> PackedFloat32Array:
+	var f := _buf(0.7)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 24
+	for k in 16:
+		var hz := rng.randf_range(260.0, 900.0)
+		_tone(f, rng.randf() * 0.55, hz, hz * 1.7, 0.014, rng.randf_range(0.2, 0.6))
+	return f
+
+
+## What the sea sounds like from inside it: a low press on the ears, slowly breathing.
+func _deep() -> PackedFloat32Array:
+	var f := _buf(4.0)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 25
+	var y := 0.0
+	var z := 0.0
+	for i in f.size():
+		var t := float(i) / RATE
+		y += 0.012 * (rng.randf_range(-1.0, 1.0) - y)
+		z += 0.2 * (y - z)
+		f[i] = z * (0.7 + 0.3 * sin(TAU * t / 4.0)) + sin(TAU * 48.0 * t) * 0.01 * (0.5 + 0.5 * sin(TAU * t / 2.0))
+	return f
+
+
+## A jet ski: a small engine at full shout with water going through it.
+func _ski() -> PackedFloat32Array:
+	var f := _buf(1.0)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 26
+	var y := 0.0
+	for i in f.size():
+		var t := float(i) / RATE
+		y += 0.3 * (rng.randf_range(-1.0, 1.0) - y)
+		var buzz := 0.0
+		for h in range(1, 6):
+			buzz += sin(TAU * 92.0 * h * t + sin(TAU * 31.0 * t) * 0.6) / h
+		f[i] = buzz * 0.5 * (0.75 + 0.25 * sin(TAU * 46.0 * t)) + y * 0.35
+	return f
 
 
 func _surf() -> PackedFloat32Array:

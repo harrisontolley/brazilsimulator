@@ -159,8 +159,9 @@ func _fly(id: int, s: Dictionary, server: bool) -> void:
 		s.vel = Vector3(s.vel.x * -0.12, 0.5, s.vel.z * -0.12)
 	else:
 		s.pos = to
-	if s.pos.y < -3.0:
-		s.pos.y = -3.0
+	var bed := Layout.seabed_y(s.pos.z) - 0.3
+	if s.pos.y < bed:
+		s.pos.y = bed
 		s.vel = Vector3.ZERO
 		s.rest = true
 	if s.kind == GRENADE and s.t >= s.fuse:
@@ -176,6 +177,10 @@ func _srv_go_off(id: int, s: Dictionary) -> void:
 	g.bcast("cl_gone", [id], self)
 	if s.kind == MOLOTOV:
 		var at: Vector3 = s.pos
+		if Layout.wet(at):
+			# Petrol on the sea: a hiss and nothing else.
+			g.bcast("cl_sound", ["splash", at])
+			return
 		at.y = maxf(Layout.terrace_y(at.z), 0.0) if at.y < Layout.terrace_y(at.z) + 1.2 else at.y
 		fires.append([at, def.blast, MatchState.time + def.burn, s.owner, def.damage, 0.0])
 		g.bcast("cl_fire", [at, def.blast, def.burn], self)
