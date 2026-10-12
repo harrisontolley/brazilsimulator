@@ -25,6 +25,7 @@ const Interact := preload("res://scenes/player/interact.gd")
 const Threats := preload("res://scenes/world/threats.gd")
 const Casino := preload("res://scenes/world/casino.gd")
 const Yacht := preload("res://scenes/world/yacht.gd")
+const Roleta := preload("res://scenes/world/roleta.gd")
 const SeaPatrol := preload("res://scenes/police/sea_patrol.gd")
 const Prison := preload("res://scenes/world/prison.gd")
 const Places := preload("res://scenes/world/places.gd")
@@ -66,6 +67,7 @@ var interaction: Node
 var threats: Node3D
 var casino: Node
 var yacht: Node3D
+var roleta: Node3D
 var sea_patrol: Node3D
 var prison: Node
 var local_player: CharacterBody3D
@@ -124,6 +126,9 @@ func _ready() -> void:
 	yacht = Yacht.new()
 	yacht.name = "Yacht"
 	add_child(yacht)
+	roleta = Roleta.new()
+	roleta.name = "Roleta"
+	add_child(roleta)
 	sea_patrol = SeaPatrol.new()
 	sea_patrol.name = "SeaPatrol"
 	add_child(sea_patrol)
@@ -965,6 +970,7 @@ func srv_client_ready(pname: String) -> void:
 	for id in drops:
 		drop_data.append([id, drops[id].pos, drops[id].money, drops[id].items])
 	cl_init.rpc_id(pid, MatchState.seed_value, MatchState.duration, MatchState.time, MatchState.ended, _players_data(), crowd.snapshot(), drop_data, motos.snapshot(), events.snapshot())
+	roleta.cl_sync.rpc_id(pid, roleta.results)
 	ready_peers.append(pid)
 	bcast("cl_spawn", [pid, pname.left(16), DB.spawn_point(), Player.fresh_state()])
 
@@ -994,6 +1000,7 @@ func cl_match_start(seed_value: int, duration: float, pdata: Array) -> void:
 	traffic.setup(seed_value)
 	motos.reset()
 	yacht.reset()
+	roleta.reset()
 	sea_patrol.reset()
 	if local_player != null:
 		local_player.stop_ride()
@@ -1076,6 +1083,7 @@ func _on_peer_left(pid: int) -> void:
 	_respawn.erase(pid)
 	_air.erase(pid)
 	motos.srv_release(pid)
+	roleta.srv_left(pid)
 	if players.has(pid):
 		bcast("cl_despawn", [pid])
 
@@ -2098,6 +2106,7 @@ func _setup_interact() -> void:
 	interaction.on(&"dice", func(_a: Dictionary) -> void: hud.open_dice())
 	interaction.on(&"slot", func(_a: Dictionary) -> void: hud.open_slot())
 	interaction.on(&"roulette", func(_a: Dictionary) -> void: hud.open_roulette())
+	interaction.on(&"wheel", func(_a: Dictionary) -> void: hud.open_wheel())
 	interaction.on(&"blackjack", func(_a: Dictionary) -> void: hud.open_blackjack())
 	interaction.on(&"cage", Callable(), casino.srv_safe)
 	interaction.on(&"yacht_safe", Callable(), yacht.srv_safe)

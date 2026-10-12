@@ -128,6 +128,7 @@ var _idle := PackedByteArray()     # Kit pose when standing about (dancers, drum
 var _afloat := PackedByteArray()   # 1: on a boat, with nowhere to walk to
 var _gun := PackedByteArray()      # 1: carries a pistol openly (the boca's soldiers)
 var _grp := PackedInt32Array()     # activity group they belong to, -1 once they have left it
+var _stand_grp := -1               # the group of everybody past COUNT (Places.stands)
 var _sit := PackedByteArray()      # 1: sitting down
 var _gest := PackedByteArray()     # 1: the one doing the talking
 var _babble: Node3D
@@ -198,7 +199,9 @@ func setup(seed_value: int) -> void:
 	near.clear()
 	_leave_ptr = 0
 
-	count = COUNT
+	# Whoever the world asked for by name comes after everybody else, with dice of their own.
+	var stands: Array = Places.stands
+	count = COUNT + stands.size()
 	pos.resize(count)
 	_home.resize(count)
 	_w_dir.resize(count)
@@ -258,12 +261,26 @@ func setup(seed_value: int) -> void:
 
 	var sea_rng := RandomNumberGenerator.new()
 	sea_rng.seed = seed_value ^ 0x5EA
+	var stand_rng := RandomNumberGenerator.new()
+	stand_rng.seed = seed_value ^ 0x70DA
+	_stand_grp = acts.adopt(stands[0].pos, COUNT, stands.size()) if not stands.is_empty() else -1
 	for i in count:
 		# Where they spend the day decides a lot about who they are.
-		var spot: Dictionary = planned[i] if i < planned.size() else _spot(rng)
+		var spot: Dictionary
+		if i >= COUNT:
+			var s: Dictionary = stands[i - COUNT]
+			spot = {"p": s.pos, "walk": 0.0, "dir": Basis(Vector3.UP, s.yaw) * Vector3.FORWARD, "far": 1.0, "yaw": s.yaw, "idle": s.idle, "grp": _stand_grp, "stay": true}
+			if s.arch != "":
+				spot["arch"] = s.arch
+			spot.merge(s.opts)
+		elif i < planned.size():
+			spot = planned[i]
+		else:
+			spot = _spot(rng)
+			spot.p = Layout.off_wheel(spot.p, 1.0)
 		# People on the water draw their looks from dice of their own, so that putting them
-		# there changes nobody on land.
-		var r: RandomNumberGenerator = sea_rng if spot.get("afloat", false) else rng
+		# there changes nobody on land. So do the ones added at the end.
+		var r: RandomNumberGenerator = stand_rng if i >= COUNT else (sea_rng if spot.get("afloat", false) else rng)
 		var roll := r.randf()
 		var ai := 0
 		for k in DB.ARCHETYPES.size():
@@ -1351,6 +1368,10 @@ func _resume(i: int) -> void:
 	elif off.length() < 1.5:
 		_home[i] = _origin[i]
 		_lying[i] = 1 if _was[i] & 2 else 0
+		if i >= COUNT:
+			# Back where they were put, facing the way they were, and under orders again.
+			_grp[i] = _stand_grp
+			_yaw[i] = _w_yaw[i]
 		_place(i, _home[i])
 
 
@@ -1393,7 +1414,7 @@ func _walk_to(from: Vector3, to: Vector3) -> PackedVector3Array:
 @rpc("authority", "call_remote", "reliable")
 func cl_shelter(t0: float) -> void:
 	for i in count:
-		if state[i] != AMBIENT or _walker[i] == 1 or _afloat[i] == 1 or pos[i].y > 1.0 or pos[i].z > 38.0 or (i * 7919) % 100 >= 65:
+		if state[i] != AMBIENT or _walker[i] == 1 or _afloat[i] == 1 or i >= COUNT or pos[i].y > 1.0 or pos[i].z > 38.0 or (i * 7919) % 100 >= 65:
 			continue
 		var to_z := 42.0 + (i * 31) % 80 * 0.1
 		var to := Nav.nearest_free(Vector3(pos[i].x + ((i * 13) % 9 - 4) * 0.6, 0.0, to_z))

@@ -216,6 +216,8 @@ func _build() -> void:
 	made["ski"] = _wav(_ski(), true)
 	made["tick"] = _wav(_tick(1500.0), false)
 	made["tick_kill"] = _wav(_tick(900.0), false)
+	made["bell"] = _wav(_bell(), false)
+	made["roll"] = _wav(_roll(), true)
 	for k in BABBLE:
 		made["babble%d" % k] = _wav(_syllable(k), false)
 	_adopt.call_deferred(made)
@@ -626,6 +628,32 @@ func _tick(hz: float) -> PackedFloat32Array:
 	var f := _buf(0.09)
 	_tone(f, 0.0, hz, hz * 0.8, 0.012, 0.8)
 	_tone(f, 0.0, hz * 2.0, hz * 1.9, 0.006, 0.4)
+	return f
+
+
+## A croupier's bell: struck once and left to ring.
+func _bell() -> PackedFloat32Array:
+	var f := _buf(1.4)
+	_tone(f, 0.0, 1180.0, 1180.0, 0.22, 0.7)
+	_tone(f, 0.0, 2390.0, 2390.0, 0.12, 0.35)
+	_tone(f, 0.0, 3560.0, 3560.0, 0.06, 0.2)
+	_tone(f, 0.0, 400.0, 300.0, 0.01, 0.5)
+	return f
+
+
+## A ball running round a wooden track, to loop: a hollow rumble with the grain in it.
+func _roll() -> PackedFloat32Array:
+	var f := _buf(1.0)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 41
+	var lo := 0.0
+	var mid := 0.0
+	for i in f.size():
+		var t := float(i) / RATE
+		var x := rng.randf_range(-1.0, 1.0)
+		lo += 0.03 * (x - lo)
+		mid += 0.3 * (x - mid)
+		f[i] = lo * 3.0 + (mid - lo) * 0.25 * (0.6 + 0.4 * sin(TAU * 12.0 * t)) + sin(TAU * 96.0 * t) * 0.05
 	return f
 
 
