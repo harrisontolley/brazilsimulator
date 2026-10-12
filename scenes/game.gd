@@ -111,6 +111,12 @@ func _ready() -> void:
 			events.force(a.trim_prefix("--event="))
 		elif a.begins_with("--time="):
 			MatchState.time = float(a.trim_prefix("--time="))
+		elif a == "--novsync":
+			DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+		elif a.begins_with("--tp="):
+			_debug_tp(a.trim_prefix("--tp="))
+		elif multiplayer.is_server() and (a.begins_with("--heat=") or a.begins_with("--money=") or a.begins_with("--give=")):
+			_debug_state(a)
 
 
 func _exit_tree() -> void:
@@ -123,10 +129,39 @@ func _debug_shot(path: String) -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--wait="):
 			wait = float(a.trim_prefix("--wait="))
+	var vp := get_viewport().get_viewport_rid()
+	RenderingServer.viewport_set_measure_render_time(vp, true)
 	await get_tree().create_timer(wait).timeout
-	print("fps %d  script %.1f ms  physics %.1f ms  draws %d  objects %d" % [Engine.get_frames_per_second(), Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0, Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0, Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME), Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME)])
+	print("fps %d  script %.1f ms  physics %.1f ms  gpu %.2f ms  draws %d  objects %d" % [Engine.get_frames_per_second(), Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0, Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0, RenderingServer.viewport_get_measured_render_time_gpu(vp), Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME), Performance.get_monitor(Performance.RENDER_TOTAL_OBJECTS_IN_FRAME)])
 	get_viewport().get_texture().get_image().save_png(path)
 	get_tree().quit()
+
+
+## Puts the local player somewhere: x,y,z[,yaw] in metres and degrees.
+func _debug_tp(spec: String) -> void:
+	var v := spec.split_floats(",")
+	local_player.global_position = Vector3(v[0], v[1], v[2])
+	if v.size() > 3:
+		local_player.rotation.y = deg_to_rad(v[3])
+
+
+## Host player state from the command line: --heat=N, --money=N, --give=item:n.
+func _debug_state(a: String) -> void:
+	var st: Dictionary = local_player.st
+	if a.begins_with("--heat="):
+		st.heat = int(a.trim_prefix("--heat="))
+	elif a.begins_with("--money="):
+		st.money = int(a.trim_prefix("--money="))
+	else:
+		var kv := a.trim_prefix("--give=").split(":")
+		_give(st, kv[0], int(kv[1]) if kv.size() > 1 else 1)
+	push_state(local_player)
+
+
+## How a scripted test reports: one line a shell can grep, and the exit code to match.
+func debug_result(test: String, ok: bool, detail := "") -> void:
+	print("RESULT %s %s %s" % [test, "ok" if ok else "fail", detail])
+	get_tree().quit(0 if ok else 1)
 
 
 ## Scripted bits of play, for checking a feature without a hand on the keyboard.
