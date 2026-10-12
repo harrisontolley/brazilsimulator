@@ -8,6 +8,10 @@ extends Node3D
 ## Looks and animation come from the shared character kit: each NPC is one instance
 ## whose pose and props are set here on state changes and played by the shader.
 
+## Host only: NPC i was hurt, or killed, by player `attacker` (-1 if by nobody in particular).
+signal npc_hit(i: int, attacker: int)
+signal npc_died(i: int, attacker: int)
+
 const Kit := preload("res://scenes/characters/char_kit.gd")
 const Layout := preload("res://scenes/world/layout.gd")
 const Activities := preload("res://scenes/crowd/activities.gd")
@@ -121,6 +125,7 @@ var _look := PackedInt32Array()    # Kit clothing flags from the archetype
 var _tier := PackedByteArray()     # wealth tier still on show (drops to 0 once robbed)
 var _ev := PackedFloat32Array()    # Kit one-shot event time
 var _idle := PackedByteArray()     # Kit pose when standing about (dancers, drummers)
+var _afloat := PackedByteArray()   # 1: on a boat, with nowhere to walk to
 var _gun := PackedByteArray()      # 1: carries a pistol openly (the boca's soldiers)
 var _grp := PackedInt32Array()     # activity group they belong to, -1 once they have left it
 var _sit := PackedByteArray()      # 1: sitting down
@@ -226,6 +231,7 @@ func setup(seed_value: int) -> void:
 	_ev.resize(count)
 	_idle.resize(count)
 	_gun.resize(count)
+	_afloat.resize(count)
 	_grp.resize(count)
 	_sit.resize(count)
 	_gest.resize(count)
@@ -333,7 +339,8 @@ func setup(seed_value: int) -> void:
 
 		# A few stragglers never leave; everyone else drains out over the match.
 		# People with a job to do indoors, or nowhere else they are allowed to be, stay put.
-		var stays := rng.randf() < (0.5 if _grp[i] >= 0 else (0.04 if p.z < Layout.WALK_Z else 0.6)) or (_grp[i] >= 0 and Places.room_at(p) >= 0)
+		var stays: bool = rng.randf() < (0.5 if _grp[i] >= 0 else (0.04 if p.z < Layout.WALK_Z else 0.6)) or (_grp[i] >= 0 and Places.room_at(p) >= 0) or spot.get("stay", false)
+		_afloat[i] = 1 if spot.get("afloat", false) else 0
 		_leave_t[i] = INF if stays else MatchState.duration * lerpf(0.1, 0.82, pow(rng.randf(), 0.8))
 		order.append([_leave_t[i], i])
 
@@ -372,16 +379,27 @@ func setup(seed_value: int) -> void:
 			"traficante":
 				top = Color(0.1, 0.1, 0.1)
 				look = Kit.F_SHORTS | Kit.F_SHIRTLESS | Kit.F_SHADES | Kit.F_CHAIN
+			"socialite":
+				# Not much, in a loud colour.
+				top = Color.from_hsv(rng.randf(), rng.randf_range(0.55, 0.95), 1.0) if rng.randf() < 0.8 else Color(0.97, 0.97, 0.97)
+				look = Kit.F_SHORTS | Kit.F_TANK | Kit.F_SHIRTLESS
+				if rng.randf() < 0.45:
+					look |= Kit.F_SHADES
+				if rng.randf() < 0.12:
+					look |= Kit.F_HAT
+			"magnata":
+				top = Color(0.97, 0.97, 0.95)
+				look = Kit.F_SHORTS | Kit.F_SHIRTLESS | Kit.F_SHADES | Kit.F_SUNBURN
 			_:
 				top = Color(0.09, 0.09, 0.11) if rng.randf() < 0.7 else Color(0.95, 0.95, 0.95)
 				look = Kit.F_SUIT | Kit.F_SHADES
 		if _lying[i] == 1 and rng.randf() < 0.5:
 			look |= Kit.F_SHADES
-		top.a = rng.randf()
+		top.a = rng.randf() * 0.999 + a.get("build", 0)
 		tops.append(top)
 		_look[i] = look | spot.get("look", 0)
 		# The boca's soldiers carry rifles, and carry them where everyone can see.
-		_gun[i] = Kit.HELD_RIFLE if a.id == "traficante" else 0
+		_gun[i] = spot.get("gun", Kit.HELD_RIFLE if a.id == "traficante" else 0)
 
 	_plan_rounds(rng)
 	order.sort_custom(func(x, y): return x[0] < y[0])
@@ -951,7 +969,7 @@ func _down(i: int) -> bool:
 func stance(i: int) -> int:
 	if state[i] == KO:
 		return Kit.STANCE_BACK
-	if _lying[i] == 1 and state[i] == AMBIENT:
+	if (_lying[i] == 1 or _idle[i] == Kit.SUNBATHE) and state[i] == AMBIENT:
 		return Kit.STANCE_TOWEL
 	if state[i] == COWER:
 		return Kit.STANCE_CROUCH
@@ -1370,7 +1388,7 @@ func _walk_to(from: Vector3, to: Vector3) -> PackedVector3Array:
 @rpc("authority", "call_remote", "reliable")
 func cl_shelter(t0: float) -> void:
 	for i in count:
-		if state[i] != AMBIENT or _walker[i] == 1 or pos[i].y > 1.0 or pos[i].z > 38.0 or (i * 7919) % 100 >= 65:
+		if state[i] != AMBIENT or _walker[i] == 1 or _afloat[i] == 1 or pos[i].y > 1.0 or pos[i].z > 38.0 or (i * 7919) % 100 >= 65:
 			continue
 		var to_z := 42.0 + (i * 31) % 80 * 0.1
 		var to := Nav.nearest_free(Vector3(pos[i].x + ((i * 13) % 9 - 4) * 0.6, 0.0, to_z))
@@ -1465,6 +1483,12 @@ func _srv_flee(i: int, threat: Vector3, vanish := false, delay := 0.0) -> void:
 	_hostile.erase(i)
 	_calm.erase(i)
 	_gawk.erase(i)
+	if _afloat[i] == 1:
+		# On a boat there is nowhere to run: down on the deck with the hands over the head.
+		_cower[i] = MatchState.time + 25.0
+		if state[i] != COWER:
+			_srv_set(i, COWER)
+		return
 	var from := pos[i]
 	var pts := PackedVector3Array([from])
 	var room := Places.room_at(from)
@@ -1649,6 +1673,13 @@ func _srv_hostile(i: int, delta: float) -> void:
 		_srv_duel_tick(i, h, delta)
 		return
 	var p = g.players.get(h.target)
+	var hold: bool = h.get("hold", false)
+	if hold:
+		# On a post: there until whoever it is has been dealt with or has gone.
+		h.until = 1.0
+		if p == null or not p.can_fight() or p.global_position.distance_to(pos[i]) > h.get("range", 25.0) + 30.0:
+			srv_stand_down(i)
+			return
 	if p == null or not p.can_fight() or h.until <= 0.0:
 		_srv_flee(i, pos[i] - Vector3(0, 0, 1))
 		return
@@ -1656,12 +1687,12 @@ func _srv_hostile(i: int, delta: float) -> void:
 	var dy := absf(to.y)
 	to.y = 0.0
 	var d := to.length()
-	if d > 60.0:
+	if d > 60.0 and not hold:
 		_srv_flee(i, p.global_position)
 		return
 	var step := pos[i]
 	# Streets have to be gone round; nobody up on a terrace gives chase at all.
-	if d > (12.0 if h.shooter else 1.5) and pos[i].y < 1.0:
+	if d > (12.0 if h.shooter else 1.5) and pos[i].y < 1.0 and _afloat[i] == 0:
 		# The street plan says which corner to make for; the grid gets them there round the furniture.
 		var goal: Vector3 = p.global_position
 		var via: Vector3 = Places.route(pos[i], goal, Layout.next_point) if Places.room_at(pos[i]) >= 0 or Places.room_at(goal) >= 0 else Layout.next_point(pos[i], goal)
@@ -1671,11 +1702,18 @@ func _srv_hostile(i: int, delta: float) -> void:
 	h.cd -= delta
 	if h.cd > 0.0:
 		return
-	if h.shooter and d < 25.0:
-		h.cd = 1.2
-		var hit := randf() < 0.55
+	var reach: float = h.get("range", 25.0)
+	if h.shooter and d < reach:
 		var from := pos[i] + Vector3(0, 1.3, 0)
-		var to_pt: Vector3 = p.global_position + Vector3(0, 1.0, 0) + (Vector3.ZERO if hit else Vector3(randf_range(-1, 1), randf_range(0.5, 1.5), randf_range(-1, 1)))
+		var chest: Vector3 = p.global_position + Vector3(0, 0.5 if p.swimming() else 1.0, 0)
+		if not g._clear(from, chest):
+			# Nothing to shoot at but a wall. Look again in a moment.
+			h.cd = 0.3
+			return
+		h.cd = 1.2
+		# Easy up close, a matter of luck at the far end of the range; harder still at a head in the water.
+		var hit := randf() < 0.55 * clampf(1.35 - d / reach, 0.3, 1.0) * (0.25 if p.head_under() else (0.6 if p.swimming() else 1.0))
+		var to_pt: Vector3 = chest + (Vector3.ZERO if hit else Vector3(randf_range(-1, 1), randf_range(0.5, 1.5), randf_range(-1, 1)))
 		g.bcast("cl_fx", [from, to_pt, false, DB.WHO_NPC, i, DB.WHO_PLAYER if hit else DB.WHO_NONE, h.target, 0, "fuzil" if _gun[i] == Kit.HELD_RIFLE else "pistol"])
 		Crime.report_noise(pos[i], 80.0, -1)
 		if hit:
@@ -1708,6 +1746,23 @@ func _srv_duel_tick(i: int, h: Dictionary, delta: float) -> void:
 		srv_damage_npc(other, 35.0, -1)
 		if state[other] == DEAD and randf() < 0.5:
 			g.srv_add_drop(pos[other] + Vector3(0.8, 0, 0.5), 0, {"pistol": 1, "ammo": 6})
+
+
+## Puts NPC i on guard against player `pid`: gun out, firing whenever there is a clear line
+## inside `reach`, and never giving chase or giving up while they are about.
+func srv_guard(i: int, pid: int, reach: float) -> void:
+	if state[i] != AMBIENT and state[i] != HOSTILE and state[i] != COWER:
+		return
+	_hostile[i] = {"target": pid, "cd": randf_range(0.4, 1.1), "until": 1.0, "shooter": true, "hold": true, "range": reach}
+	if state[i] != HOSTILE:
+		_srv_set(i, HOSTILE)
+
+
+## Guard i goes back to standing about.
+func srv_stand_down(i: int) -> void:
+	_hostile.erase(i)
+	if state[i] == HOSTILE:
+		_srv_set(i, AMBIENT)
 
 
 ## Every NPC of archetype `kind` within r of `at` goes for player `pid`, guns out if they have them.
@@ -1882,10 +1937,12 @@ func srv_damage_npc(i: int, dmg: float, attacker: int, zone := 0, ko := false) -
 		g.bcast("cl_ko", [pos[i] + Vector3(0, 0.7, 0), DB.KO_NPC])
 		return true
 	hp[i] -= dmg
+	npc_hit.emit(i, attacker)
 	if hp[i] <= 0.0:
 		_hostile.erase(i)
 		_ko.erase(i)
 		_srv_set(i, DEAD)
+		npc_died.emit(i, attacker)
 		# A killing is seen from further off than a scuffle.
 		srv_panic(pos[i], 24.0, FRIGHT_SHOTS, attacker)
 		_bodies.append(pos[i])
@@ -1894,7 +1951,7 @@ func srv_damage_npc(i: int, dmg: float, attacker: int, zone := 0, ko := false) -
 		if money[i] > 0:
 			g.srv_add_drop(pos[i], money[i], {})
 			money[i] = 0
-	elif state[i] != HOSTILE and state[i] != KO:
+	elif state[i] != HOSTILE and state[i] != KO and state[i] < DEAD:
 		var p = g.players.get(attacker)
 		_srv_react(i, attacker, p.global_position if p != null else pos[i])
 	return false

@@ -95,6 +95,11 @@ const _PROP_HELD := 64
 const _PROP_CUP := 41
 const _PROP_PHONE := 42
 const _PROP_SPADE := 43
+const _PROP_WOMAN := 44
+const _PROP_BIG := 45
+## Builds of body, carried as the whole part of an instance colour's alpha.
+const BUILD_WOMAN := 1
+const BUILD_BIG := 2
 
 # How a body is arranged, for working out where its head is (see zones()).
 const STANCE_STAND := 0
@@ -166,6 +171,7 @@ const _CASH := 14
 const _STRIPE := 15
 const _SACK := 16
 const _WATCH := 17
+const _SWIM := 19  # swimwear: the instance's own colour
 const _VCOL := 18  # colour carried by the vertex itself (held weapons)
 
 static var _mesh: ArrayMesh
@@ -391,6 +397,15 @@ static func _build() -> void:
 	_box(Vector3(0.245, 0.71, -0.06), Vector3(0.075, 0.14, 0.018), _FORE_R, _BLACK, _PROP_PHONE)
 	_box(Vector3(0.245, 0.42, -0.06), Vector3(0.03, 0.72, 0.03), _FORE_R, _SACK, _PROP_SPADE)
 	_box(Vector3(0.245, 0.0, -0.06), Vector3(0.17, 0.22, 0.03), _FORE_R, _WHITE, _PROP_SPADE)
+
+	# A woman: hair down past the shoulders, and a bikini top.
+	_ell(Vector3(0, 1.4, 0.11), Vector3(0.2, 0.32, 0.12), _HEAD, _HAIR, _PROP_WOMAN, 8, 5)
+	_ell(Vector3(0, 1.2, 0), Vector3(0.21, 0.04, 0.142), _TORSO, _SWIM, _PROP_WOMAN, 10, 2)
+	for side in [-1.0, 1.0]:
+		_ell(Vector3(side * 0.085, 1.21, -0.105), Vector3(0.08, 0.07, 0.065), _TORSO, _SWIM, _PROP_WOMAN, 6, 4)
+	# A big man: a belly out over the waistband, and not much left on top.
+	_ell(Vector3(0, 1.0, -0.1), Vector3(0.25, 0.25, 0.23), _TORSO, _TOP, _PROP_BIG, 10, 6)
+	_ell(Vector3(0, 1.7, -0.01), Vector3(0.185, 0.125, 0.18), _HEAD, _SKIN, _PROP_BIG, 8, 4)
 
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)

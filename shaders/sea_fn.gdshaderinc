@@ -22,7 +22,10 @@ uniform vec3 shallow : source_color = vec3(0.1, 0.74, 0.7);
 uniform vec3 deep : source_color = vec3(0.0, 0.2, 0.42);
 
 float sea_hash(vec2 p) {
-	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+	// Whole numbers in, so the same corner gets the same answer whichever cell asks.
+	uvec2 q = uvec2(ivec2(floor(p + 0.5))) * uvec2(1597334673u, 3812015801u);
+	uint n = (q.x ^ q.y) * 1597334673u;
+	return float(n) * (1.0 / 4294967295.0);
 }
 
 float sea_noise(vec2 p) {

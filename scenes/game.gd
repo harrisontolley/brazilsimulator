@@ -24,6 +24,7 @@ const SeaFx := preload("res://scenes/fx/sea_fx.gd")
 const Interact := preload("res://scenes/player/interact.gd")
 const Threats := preload("res://scenes/world/threats.gd")
 const Casino := preload("res://scenes/world/casino.gd")
+const Yacht := preload("res://scenes/world/yacht.gd")
 const Prison := preload("res://scenes/world/prison.gd")
 const Places := preload("res://scenes/world/places.gd")
 const WeaponKit := preload("res://scenes/weapons/weapon_kit.gd")
@@ -63,6 +64,7 @@ var sea_fx: Node3D
 var interaction: Node
 var threats: Node3D
 var casino: Node
+var yacht: Node3D
 var prison: Node
 var local_player: CharacterBody3D
 
@@ -117,6 +119,9 @@ func _ready() -> void:
 	dogs = Dogs.new()
 	dogs.name = "Dogs"
 	add_child(dogs)
+	yacht = Yacht.new()
+	yacht.name = "Yacht"
+	add_child(yacht)
 	shots = Shots.new()
 	shots.name = "Shots"
 	add_child(shots)
@@ -983,6 +988,7 @@ func cl_match_start(seed_value: int, duration: float, pdata: Array) -> void:
 	dogs.setup(seed_value, crowd)
 	traffic.setup(seed_value)
 	motos.reset()
+	yacht.reset()
 	if local_player != null:
 		local_player.stop_ride()
 	for id in drops.keys():
@@ -1972,7 +1978,12 @@ func _give(st: Dictionary, item: String, n: int) -> void:
 
 
 func srv_add_drop(pos: Vector3, money: int, items: Dictionary) -> void:
-	bcast("cl_drop_add", [_next_drop, Vector3(pos.x, 0.0, pos.z), money, items])
+	# On whatever is under it: a deck, a terrace, the sand. Dropped in the sea, it floats.
+	var hit := get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(pos + Vector3(0, 1.2, 0), pos - Vector3(0, 30, 0), 1))
+	var y: float = hit.position.y if not hit.is_empty() else 0.0
+	if pos.z < Layout.WATER_Z:
+		y = maxf(y, Layout.SEA_Y - 0.1)
+	bcast("cl_drop_add", [_next_drop, Vector3(pos.x, y, pos.z), money, items])
 	_next_drop += 1
 
 
@@ -2076,6 +2087,7 @@ func _setup_interact() -> void:
 	interaction.on(&"roulette", func(_a: Dictionary) -> void: hud.open_roulette())
 	interaction.on(&"blackjack", func(_a: Dictionary) -> void: hud.open_blackjack())
 	interaction.on(&"cage", Callable(), casino.srv_safe)
+	interaction.on(&"yacht_safe", Callable(), yacht.srv_safe)
 	interaction.on(&"clothes", Callable(), _srv_clothes)
 	interaction.on(&"vendor", _use_vendor)
 	interaction.on(&"hide", Callable(), _srv_hide)

@@ -100,7 +100,11 @@ func _build_sea(rng: RandomNumberGenerator) -> void:
 	var xf: Array = []
 	var tint: Array = []
 	for i in 14:
-		_boat_home.append([Vector3(rng.randf_range(-420, 420), 0.35, rng.randf_range(-260, -95)), rng.randf() * TAU, rng.randf_range(0.8, 1.6)])
+		var home := Vector3(rng.randf_range(-420, 420), 0.35, rng.randf_range(-260, -95))
+		# Nobody anchors on top of the yacht.
+		if home.distance_to(Layout.YACHT_POS) < 60.0:
+			home.x -= 120.0
+		_boat_home.append([home, rng.randf() * TAU, rng.randf_range(0.8, 1.6)])
 		xf.append(Transform3D())
 		tint.append(Color.from_hsv(rng.randf(), rng.randf_range(0.3, 0.8), 0.9))
 	_boats = _free_multi(hull, xf, tint)

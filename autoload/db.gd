@@ -141,6 +141,9 @@ const ARCHETYPES := [
 	{"id": "guarda", "weight": 0.0, "money": [40, 120], "resistance": 0.95, "fight": 1.0, "shoot": 0.0, "gun": 0.0, "hp": 140.0, "melee": 18.0, "scale": 1.1, "width": 1.2},
 	{"id": "seguranca", "weight": 0.0, "money": [100, 300], "resistance": 0.9, "fight": 1.0, "shoot": 0.7, "gun": 0.5, "hp": 130.0, "melee": 18.0, "scale": 1.12, "width": 1.3},
 	{"id": "malandro", "weight": 0.0, "money": [80, 300], "resistance": 0.55, "fight": 0.95, "shoot": 0.15, "gun": 0.3, "hp": 90.0, "melee": 13.0, "scale": 1.02, "width": 1.1},
+	# The yacht: the girls on deck, and the men whose money it is.
+	{"id": "socialite", "weight": 0.0, "money": [80, 400], "resistance": 0.1, "fight": 0.0, "shoot": 0.0, "gun": 0.0, "hp": 40.0, "melee": 0.0, "scale": 0.97, "width": 0.86, "build": 1},
+	{"id": "magnata", "weight": 0.0, "money": [2500, 6000], "resistance": 0.35, "fight": 0.0, "shoot": 0.0, "gun": 0.0, "hp": 60.0, "melee": 0.0, "scale": 1.02, "width": 1.42, "build": 2},
 	{"id": "traficante", "weight": 0.0, "money": [250, 900], "resistance": 0.6, "fight": 0.9, "shoot": 0.85, "gun": 0.6, "hp": 100.0, "melee": 14.0, "scale": 1.05, "width": 1.15},
 ]
 

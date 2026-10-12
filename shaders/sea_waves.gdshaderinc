@@ -21,7 +21,7 @@ void fragment() {
 	float dist = length(VERTEX);
 	vec2 slope = sea_slope(wp.xz, dist);
 	// Chop: two sheets of ripples sliding across each other, fading with distance.
-	float near = 1.0 / (1.0 + dist * 0.035);
+	float near = 1.0 / (1.0 + dist * 0.05);
 	float c0 = sea_chop(wp.xz);
 	slope += vec2(sea_chop(wp.xz + vec2(0.12, 0.0)) - c0, sea_chop(wp.xz + vec2(0.0, 0.12)) - c0) * (2.2 + 2.0 * sea_storm) * near;
 	vec3 n = normalize(vec3(-slope.x, 1.0, -slope.y));
@@ -30,8 +30,9 @@ void fragment() {
 	}
 	NORMAL = normalize((VIEW_MATRIX * vec4(n, 0.0)).xyz);
 
-	float h = wp.y - sea_y;
-	float under = max(wp.y - sea_bed(wp.z), 0.0);
+	// Worked out afresh for every pixel: taken from the mesh, the foam would follow its triangles.
+	float h = sea_h(wp.xz, 0.0);
+	float under = max(sea_y + h - sea_bed(wp.z), 0.0);
 	// Clear over the sand, then green, then the blue of deep water.
 	vec3 body = mix(shallow, deep, 1.0 - exp(-under * 0.22));
 	body = mix(body, vec3(0.16, 0.22, 0.26), sea_storm * 0.6);
@@ -74,7 +75,8 @@ void fragment() {
 	ALBEDO = mix(body, vec3(0.96), foam);
 	ALPHA = FRONT_FACING ? max(mix(0.5, 0.97, thick), foam) : 0.7;
 #endif
-	ROUGHNESS = mix(0.06, 0.6, foam) + 0.1 * sea_storm;
+	// Far off, a mirror-smooth sea is all glitter: let it go matt toward the horizon.
+	ROUGHNESS = mix(0.06, 0.6, foam) + 0.1 * sea_storm + 0.3 * smoothstep(60.0, 500.0, dist);
 	SPECULAR = 0.6;
 	METALLIC = 0.0;
 }

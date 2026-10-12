@@ -36,6 +36,8 @@ static func run(g: Node, what: String) -> bool:
 			await _swimlook(g)
 		"jetski":
 			await _jetski(g)
+		"yacht":
+			await _yacht(g)
 		"arsenal", "shotgun", "sniper", "rocket", "grenade", "molotov":
 			await _arsenal(g, what)
 		_:
@@ -925,3 +927,77 @@ static func _jetski(g: Node) -> void:
 	if swum < 0.0:
 		bad.append("could not climb on from the water: mv %d" % p.mv)
 	g.debug_result("jetski", bad.is_empty(), "on after %.1f s, %.1f m/s out to z %.0f riding %.2f off the surface, grounded at z %.1f, off %.1f, on from the water %.1f  %s" % [on, fast, out_z, off, at_z, down, swum, "; ".join(bad)])
+
+
+## The yacht: who is aboard, the warning, swimming up the ramp, what the guards do about it,
+## what the guests do, a dead guard's gun, and the safe.
+static func _yacht(g: Node) -> void:
+	var p = g.local_player
+	var y = g.yacht
+	var crowd = g.crowd
+	var bad: Array = []
+	await _wait(g, 1.0)
+	var girls := 0
+	var rich := 0
+	for i in y.aboard:
+		var id: String = DB.ARCHETYPES[crowd.arch[i]].id
+		girls += 1 if id == "socialite" else 0
+		rich += 1 if id == "magnata" else 0
+	if y.guards.size() != 8 or girls < 18 or rich != 3:
+		bad.append("aboard %d: %d guards, %d girls, %d rich" % [y.aboard.size(), y.guards.size(), girls, rich])
+	# Swimming in from astern: warned, not shot.
+	p.st.hp = 100000.0
+	p.global_position = y.at + Vector3(y.X_PLAT - 30.0, -0.9, 0)
+	p.rotation.y = -PI / 2.0
+	await _wait(g, 1.5)
+	var warned: bool = y._warned.has(p.id) and not y._alarm.has(p.id)
+	if not warned or p.st.hp < 100000.0:
+		bad.append("warning: warned %s alarm %s lost %.0f" % [y._warned.has(p.id), y._alarm.has(p.id), 100000.0 - p.st.hp])
+	# Up the ramp and aboard.
+	p.global_position = y.at + Vector3(y.X_PLAT - 7.0, -0.9, 0)
+	Input.action_press("move_forward")
+	var boarded := await _until(g, 10.0, func(): return y.on_board(p.global_position) and p.mv != p.MV_SWIM)
+	_keys_up()
+	if boarded < 0.0:
+		bad.append("could not get aboard: at %s mv %d" % [p.global_position - y.at, p.mv])
+	var alarmed := await _until(g, 2.0, func(): return y._alarm.has(p.id))
+	var hp0: float = p.st.hp
+	await _wait(g, 6.0)
+	var shot: float = hp0 - p.st.hp
+	var armed := 0
+	for i in y.guards:
+		armed += 1 if crowd.state[i] == crowd.HOSTILE else 0
+	var scared := 0
+	for i in y.aboard:
+		if not y.guards.has(i) and crowd.state[i] != crowd.AMBIENT:
+			scared += 1
+	if alarmed < 0.0 or shot < 14.0 or armed < 6 or scared < 12:
+		bad.append("alarm %.1f, shot for %.0f, %d guards up, %d guests scared" % [alarmed, shot, armed, scared])
+	# Up the stairs to the after deck.
+	p.global_position = y.at + Vector3(-20.5, y.LOW_Y + 0.1, 3.3)
+	p.rotation.y = -PI / 2.0
+	Input.action_press("move_forward")
+	var climbed := await _until(g, 6.0, func(): return p.global_position.y > y.MAIN_Y - 0.1 and p.is_on_floor())
+	_keys_up()
+	if climbed < 0.0:
+		bad.append("stairs: stuck at %s" % (p.global_position - y.at))
+	# A guard dies and leaves his gun where he fell.
+	var before: int = g.drops.size()
+	var guard: int = y.guards[2]
+	crowd.srv_damage_npc(guard, 9999.0, p.id)
+	await _wait(g, 0.4)
+	var gun_y := -99.0
+	for id in g.drops:
+		var d: Dictionary = g.drops[id]
+		if d.pos.distance_to(crowd.pos[guard]) < 2.5 and not d.items.is_empty():
+			gun_y = d.pos.y
+	if g.drops.size() <= before or absf(gun_y - y.MAIN_Y) > 0.4:
+		bad.append("guard's gun: %d drops, at y %.2f" % [g.drops.size() - before, gun_y])
+	# The safe pays once.
+	var m0: int = p.st.money
+	y.srv_safe(p, {}, 0)
+	y.srv_safe(p, {}, 0)
+	var paid: int = p.st.money - m0
+	if paid != y.SAFE_TAKE or p.st.heat < 2:
+		bad.append("safe paid %d, heat %d" % [paid, p.st.heat])
+	g.debug_result("yacht", bad.is_empty(), "%d aboard (%d guards, %d girls, %d rich); warned %s; aboard after %.1f s, alarm %.1f, shot for %.0f in 6 s by %d guards, %d guests scared; stairs %.1f s; gun at y %.2f; safe %d  %s" % [y.aboard.size(), y.guards.size(), girls, rich, warned, boarded, alarmed, shot, armed, scared, climbed, gun_y, paid, "; ".join(bad)])

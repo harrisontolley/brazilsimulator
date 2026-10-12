@@ -87,6 +87,7 @@ const int P_AIM_LONG = 61;
 const int P_AIM_SHOULDER = 62;
 const int P_PREACH = 63;
 
+const int PART_TORSO = 0;
 const int PART_HEAD = 1;
 const int PART_ARM_L = 2;
 const int PART_FORE_L = 3;
@@ -106,6 +107,11 @@ const int HELD_LAUNCHER = 8;
 const int PROP_CUP = 41;
 const int PROP_PHONE = 42;
 const int PROP_SPADE = 43;
+// Things only some builds of body have: a woman's long hair and bikini, a big man's belly.
+const int PROP_WOMAN = 44;
+const int PROP_BIG = 45;
+const int BUILD_WOMAN = 1;
+const int BUILD_BIG = 2;
 // Whatever is in the right hand: PROP_HELD + its held id.
 const int PROP_HELD = 64;
 
@@ -697,7 +703,13 @@ bool lying(int id) {
 	return id == P_SUNBATHE || id == P_DEAD || id == P_DOWN || id == P_KO || id == P_TACKLED || id == P_PUSHUP || id == P_CRAWL;
 }
 
-bool prop_shown(int prop, int flags, int held, int pose) {
+bool prop_shown(int prop, int flags, int held, int pose, int build) {
+	if (prop == PROP_WOMAN) {
+		return build == BUILD_WOMAN;
+	}
+	if (prop == PROP_BIG) {
+		return build == BUILD_BIG;
+	}
 	if (prop == 0) {
 		return true;
 	}
@@ -741,7 +753,11 @@ void rz(inout vec3 p, inout vec3 n, vec3 o, float a) {
 }
 
 // Poses one vertex. dead_k: 0..1 how far a corpse has fallen. hit_k: 0..1 hit flash.
-void char_vertex(inout vec3 p, inout vec3 n, float propf, float partf, vec4 cd, float seed, out float dead_k, out float hit_k) {
+// `look` is the instance colour's alpha: the whole part is the build of the body, and the
+// fraction is the seed everything else about the look is drawn from.
+void char_vertex(inout vec3 p, inout vec3 n, float propf, float partf, vec4 cd, float look, out float dead_k, out float hit_k) {
+	int build = int(floor(look + 0.0001));
+	float seed = fract(look);
 	int word = int(cd.x + 0.5);
 	int pose = word & 63;
 	int prev = (word >> 6) & 63;
@@ -752,11 +768,18 @@ void char_vertex(inout vec3 p, inout vec3 n, float propf, float partf, vec4 cd, 
 	int prop = int(propf + 0.5);
 	dead_k = 0.0;
 	hit_k = 0.0;
-	if (!prop_shown(prop, flags, held, pose)) {
+	if (!prop_shown(prop, flags, held, pose, build)) {
 		// Prop not worn: fold it into a point inside the chest. A zero normal keeps the outline off it.
 		p = vec3(0.0, 1.05, 0.0);
 		n = vec3(0.0);
 		return;
+	}
+
+	if (build == BUILD_WOMAN && part == PART_TORSO && prop == 0) {
+		// Drawn in at the waist.
+		float w = 1.0 - 0.22 * (1.0 - smoothstep(0.0, 0.17, abs(p.y - 1.0)));
+		p.x *= w;
+		p.z *= mix(1.0, w, 0.5);
 	}
 
 	float t = now;

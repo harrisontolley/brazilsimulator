@@ -60,8 +60,10 @@ static func add_seat(pos: Vector3, yaw: float, room := -1, table := -1) -> int:
 	return seats.size() - 1
 
 
-static func add_spot(pos: Vector3, yaw: float, poses: Array, arch := "", room := -1) -> void:
-	spots.append({"pos": pos, "yaw": yaw, "poses": poses, "arch": arch, "room": room})
+## `opts` goes straight into the crowd's own description of whoever stands here: `stay`
+## (never goes home), `afloat` (nowhere to walk to), `gun` (a Kit.HELD_* carried openly).
+static func add_spot(pos: Vector3, yaw: float, poses: Array, arch := "", room := -1, opts := {}) -> void:
+	spots.append({"pos": pos, "yaw": yaw, "poses": poses, "arch": arch, "room": room, "opts": opts})
 
 
 static func add_use(kind: StringName, pos: Vector3, prompt: String, arg := 0, hold := 0.0, jail := 0) -> void:

@@ -245,6 +245,7 @@ func _plan_spots() -> void:
 			g["poses"] = []
 		g.poses.append(s.poses)
 		_member(g, s.pos, s.yaw, s.poses[0], s.arch)
+		_specs[_specs.size() - 1].merge(s.get("opts", {}))
 
 
 ## A spot on the promenade, the avenida pavement or the back street, clear of everything.
