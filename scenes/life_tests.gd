@@ -53,6 +53,14 @@ static func run(g: Node, what: String) -> bool:
 			await _roleta(g)
 		"roletanet":
 			await _roleta_net(g)
+		"pvpnet":
+			await _pvp_net(g)
+		"lagcomp":
+			await _lag_comp(g)
+		"cheats":
+			await _cheats(g)
+		"cheatnet":
+			await _cheat_net(g)
 		"emotes":
 			await _emotes(g)
 		"emoteshots":
@@ -1416,6 +1424,405 @@ static func _roleta_net(g: Node) -> void:
 	if spun < 0.0 or ball.distance_to(want) > 0.5 or absf(w._t - MatchState.time) > 0.3:
 		bad.append("spin: heard after %.1f, ball %.2f m from where it should be, clock out by %.2f" % [spun, ball.distance_to(want), w._t - MatchState.time])
 	g.debug_result("roletanet", bad.is_empty(), "told after %.1f s, answered in %.2f s, round %d came up %d  %s" % [told, answered, r, w.result_of(r), "; ".join(bad)])
+
+
+## The F5 menu, as the host: every kind of request does what it says on the button, and the
+## panel opens and shuts. (A joined player's requests take the same road; see cheatnet.)
+static func _cheats(g: Node) -> void:
+	var bad: Array = []
+	var me = g.local_player
+	var st: Dictionary = me.st
+	g.police.set_process(false)
+	await _wait(g, 1.0)
+
+	g.srv_cheat("give", "pistol")
+	if not st.inv.has("pistol") or st.equipped != "pistol" or st.mag.get("pistol", 0) != DB.ITEMS.pistol.mag or st.ammo < 40:
+		bad.append("give: pistol %s, equipped %s, mag %s, ammo %d" % [st.inv.has("pistol"), st.equipped, st.mag.get("pistol"), st.ammo])
+	g.srv_cheat("give_all")
+	for w in DB.MELEE + DB.GUNS + DB.HEAVY + DB.THROWN:
+		if not st.inv.has(w):
+			bad.append("give_all: no %s" % w)
+	g.srv_cheat("give", "grenade")
+	if st.inv.get("grenade", 0) < 5:
+		bad.append("give: grenades %d" % st.inv.get("grenade", 0))
+	g.srv_cheat("high", "weed")
+	if not st.drugs.has("weed") or st.drugs.weed.phase != "high":
+		bad.append("high: %s" % str(st.drugs.get("weed")))
+	g.srv_cheat("sober")
+	if not st.drugs.is_empty():
+		bad.append("sober: still %s" % str(st.drugs))
+
+	var cash: int = st.money
+	g.srv_cheat("money", "", 10000)
+	if st.money != cash + 10000:
+		bad.append("money: %d -> %d" % [cash, st.money])
+
+	# Made of iron, then not.
+	st.hp = 100.0
+	st.ko = 0.0
+	g.srv_cheat("god")
+	g.srv_damage(me.id, 40.0, -1)
+	g.srv_floor(me.id, 5.0)
+	if st.hp != 100.0 or st.ko > 0.0 or not st.get("god", false):
+		bad.append("god: hp %.0f ko %.1f" % [st.hp, st.ko])
+	g.srv_cheat("god")
+	g.srv_damage(me.id, 40.0, -1)
+	if st.get("god", false) or (st.hp >= 100.0 and st.ko <= 0.0):
+		bad.append("god off: still unhurt")
+	g.srv_cheat("heal")
+	if st.hp != 100.0:
+		bad.append("heal: %.0f" % st.hp)
+
+	g.srv_cheat("heat", "", 3)
+	if st.heat != 3:
+		bad.append("heat 3: %d" % st.heat)
+	g.srv_cheat("heat", "", 0)
+	if st.heat != 0:
+		bad.append("heat 0: %d" % st.heat)
+
+	# Somewhere to be, then things appear where the tester is looking.
+	var spot: Vector3 = DB.HOSPITAL_POS
+	g.srv_cheat("tp", "%.1f,%.1f,%.1f" % [spot.x, spot.y + 0.5, spot.z])
+	await _wait(g, 0.3)
+	if me.global_position.distance_to(spot) > 2.0:
+		bad.append("tp: %.1f m off" % me.global_position.distance_to(spot))
+
+	var free_before := 0
+	for i in g.motos.pos.size():
+		if g.motos.kind[i] == g.motos.MOTO and g.motos.rider[i] == 0 and g.motos.pos[i].distance_to(me.global_position) < 6.0:
+			free_before += 1
+	g.srv_cheat("moto")
+	var near := 0
+	for i in g.motos.pos.size():
+		if g.motos.kind[i] == g.motos.MOTO and g.motos.rider[i] == 0 and g.motos.pos[i].distance_to(me.global_position) < 6.0:
+			near += 1
+	if near != free_before + 1:
+		bad.append("moto: %d near before, %d after" % [free_before, near])
+	g.srv_cheat("ski")
+	# Not in the sea themselves, so it is put out in the shallows straight off the beach.
+	var out_x: float = (me.global_position - me.global_basis.z * 3.0).x
+	var ski := false
+	for i in g.motos.pos.size():
+		if g.motos.kind[i] == g.motos.SKI and g.motos.rider[i] == 0 and absf(g.motos.pos[i].x - out_x) < 0.1 and absf(g.motos.pos[i].z + 47.5) < 0.1:
+			ski = true
+	if not ski:
+		bad.append("ski: none off the beach")
+
+	var ahead: Vector3 = me.global_position - me.global_basis.z * 3.0
+	g.srv_cheat("npc", "mafia", 0)
+	var folk := false
+	for i in g.crowd.count:
+		if DB.ARCHETYPES[g.crowd.arch[i]].id == "mafia" and g.crowd.state[i] == g.Crowd.AMBIENT and g.crowd.pos[i].distance_to(ahead) < 1.0:
+			folk = true
+	if not folk:
+		bad.append("npc: no mafia at %s" % str(ahead))
+	g.srv_cheat("dog", "mean", 1)
+	var dog := false
+	for i in g.dogs.dogs.size():
+		if g.dogs.pos[i].distance_to(ahead) < 1.0:
+			dog = true
+	if not dog:
+		bad.append("dog: none at %s" % str(ahead))
+
+	g.srv_cheat("time", "", 82)
+	if absf(MatchState.time - 0.82 * MatchState.duration) > 1.0:
+		bad.append("time: %.0f of %.0f" % [MatchState.time, MatchState.duration])
+	# Nobody can ask for what is not there.
+	var inv_before: Dictionary = st.inv.duplicate()
+	g.srv_cheat("give", "no_such_thing")
+	g.srv_cheat("nonsense")
+	if st.inv != inv_before:
+		bad.append("junk request changed the inventory")
+
+	# The panel: opens on its key, is full of buttons, and puts everything back on closing.
+	var hud = g.hud
+	hud.toggle_cheats()
+	await _wait(g, 0.3)
+	var buttons := _buttons_under(hud._cheats)
+	if not hud.cheats_open or buttons < 80:
+		bad.append("panel: open %s, %d buttons" % [hud.cheats_open, buttons])
+	hud.toggle_cheats()
+	await _wait(g, 0.2)
+	if hud.cheats_open or hud._cheats != null and is_instance_valid(hud._cheats) and not hud._cheats.is_queued_for_deletion():
+		bad.append("panel: still up after the second press")
+	g.debug_result("cheats", bad.is_empty(), "%d buttons  %s" % [buttons, "; ".join(bad)])
+
+
+## The F5 menu from a joined player: its requests reach the host, which does them to the
+## one who asked and sends the new state back. Two peers (host: --host --test=cheatnet; the
+## other: --join=IP --test=cheatnet). Each side reports for itself.
+static func _cheat_net(g: Node) -> void:
+	var bad: Array = []
+	var me = g.local_player
+	var spot: Vector3 = DB.HOSPITAL_POS
+	if g.multiplayer.is_server():
+		var joined := await _until(g, 90.0, func(): return _other_peer(g) >= 0)
+		if joined < 0.0:
+			g.debug_result("cheatnet", false, "host: nobody joined")
+			return
+		var cp = g.players[_other_peer(g)]
+		var got := await _until(g, 40.0, func(): return cp.st.inv.has("smg") and cp.st.money >= 5000 and cp.st.get("god", false))
+		if got < 0.0:
+			bad.append("joiner's requests never arrived: %s money %d" % [str(cp.st.inv.keys()), cp.st.money])
+		if me.st.inv.has("smg") or me.st.money != 0:
+			bad.append("the host got what the joiner asked for")
+		await _until(g, 15.0, func(): return _other_peer(g) < 0)
+		g.debug_result("cheatnet", bad.is_empty(), "host: joiner served after %.1f s  %s" % [got, "; ".join(bad)])
+		return
+
+	var armed := await _until(g, 90.0, func(): return g.players.has(1))
+	if armed < 0.0:
+		g.debug_result("cheatnet", false, "joiner: never saw the host")
+		return
+	await _wait(g, 1.0)
+	g.to_server("srv_cheat", ["give", "smg", 0])
+	g.to_server("srv_cheat", ["money", "", 5000])
+	g.to_server("srv_cheat", ["god", "", 0])
+	g.to_server("srv_cheat", ["tp", "%.1f,%.1f,%.1f" % [spot.x, spot.y + 0.5, spot.z], 0])
+	var served := await _until(g, 30.0, func(): return me.st.inv.has("smg") and me.st.equipped == "smg" and me.st.money >= 5000 and me.st.get("god", false))
+	if served < 0.0:
+		bad.append("state never came back: %s %s money %d" % [str(me.st.inv.keys()), me.st.equipped, me.st.money])
+	var moved := await _until(g, 10.0, func(): return me.global_position.distance_to(spot) < 3.0)
+	if moved < 0.0:
+		bad.append("never taken to the hospital: %.0f m off" % me.global_position.distance_to(spot))
+	g.debug_result("cheatnet", bad.is_empty(), "joiner: served after %.1f s, moved after %.1f  %s" % [served, moved, "; ".join(bad)])
+
+
+static func _buttons_under(n: Node) -> int:
+	var c := 1 if n is Button else 0
+	for k in n.get_children():
+		c += _buttons_under(k)
+	return c
+
+
+## Arms somebody else's body from the host's side: the gun, a full magazine, spare rounds.
+static func _arm_peer(g: Node, p, item: String) -> void:
+	g._give(p.st, item, 1)
+	p.st.mag[item] = DB.ITEMS[item].mag
+	g._give(p.st, DB.feed_of(item), 40)
+	p.st.equipped = item
+	g._last_attack.clear()
+	g._reload.clear()
+	g.push_state(p)
+
+
+## The other peer's id, once there is one.
+static func _other_peer(g: Node) -> int:
+	for id in g.players:
+		if id != g.multiplayer.get_unique_id():
+			return id
+	return -1
+
+
+## Two real peers (host: --host --test=pvpnet; the other: --join=IP --test=pvpnet), over the
+## network path a player's own shots take. The joiner shoots the host dead and hears about
+## it; the host shoots the joiner dead and both come back; then a move sent from before a
+## teleport arrives and must not be believed. Each side reports for itself.
+static func _pvp_net(g: Node) -> void:
+	var bad: Array = []
+	var host: bool = g.multiplayer.is_server()
+	var me = g.local_player
+	if host:
+		var joined := await _until(g, 90.0, func(): return _other_peer(g) >= 0)
+		if joined < 0.0:
+			g.debug_result("pvpnet", false, "host: nobody joined")
+			return
+		var cid := _other_peer(g)
+		var cp = g.players[cid]
+		g.crowd.debug_only([])
+		# Shooting a man dead gets you arrested, and the jailed cannot be reached from outside.
+		g.police.set_process(false)
+		var base := _clearing(11.0)
+		var stand := base + Vector3(0, 0.05, 0)
+		var across := base + Vector3(0, 0.05, 8)
+		me.global_position = stand
+		g.srv_teleport(cid, across)
+		_arm_peer(g, cp, "pistol")
+		await _wait(g, 2.5)
+		# The joiner's turn: three rounds is a dead man.
+		var slain := await _until(g, 15.0, func(): return me.st.dead)
+		if slain < 0.0:
+			bad.append("shot dead by the joiner: never (hp %.0f)" % me.st.hp)
+		elif cp.st.kills != 1:
+			bad.append("joiner's kills %d, not 1" % cp.st.kills)
+		var back := await _until(g, 15.0, func(): return not me.st.dead)
+		if back < 0.0:
+			bad.append("host never came back")
+		# And the host's.
+		await _wait(g, 1.0)
+		me.global_position = stand
+		g.srv_teleport(cid, across)
+		_arm(g, "pistol")
+		await _wait(g, 1.5)
+		for k in 5:
+			if cp.st.dead:
+				break
+			var from: Vector3 = me.eye()
+			var to: Vector3 = cp.global_position + Vector3(0, 1.0, 0)
+			g._last_attack.clear()
+			g.srv_attack(from, (to - from).normalized())
+			await _wait(g, 0.3)
+		var down := await _until(g, 5.0, func(): return cp.st.dead)
+		if down < 0.0:
+			bad.append("joiner not shot dead by the host (hp %.0f jail %.1f hide %s ko %.1f at %s net %s, host eye %s can_attack %s equipped %s mag %s)" % [cp.st.hp, cp.st.jail, cp.st.get("hide", -1), cp.st.ko, cp.global_position, cp.net_pos, me.eye(), me.can_attack(), me.st.equipped, me.st.mag])
+		elif me.st.kills != 1:
+			bad.append("host's kills %d, not 1" % me.st.kills)
+		var up := await _until(g, 15.0, func(): return not cp.st.dead)
+		if up < 0.0:
+			bad.append("joiner never came back")
+		await _wait(g, 2.0)
+		# A move that left before the joiner heard it had been teleported.
+		var far_seen := false
+		g.srv_teleport(cid, base + Vector3(0, 0.05, 6))
+		var t := 0.0
+		while t < 2.5 and is_instance_valid(cp):
+			await g.get_tree().process_frame
+			t += g.get_process_delta_time()
+			if is_instance_valid(cp):
+				far_seen = far_seen or cp.net_pos.x > 200.0
+		if far_seen:
+			bad.append("took a move from before the teleport for where the joiner was")
+		# Let the joiner say its piece and go.
+		await _until(g, 15.0, func(): return _other_peer(g) < 0)
+		g.debug_result("pvpnet", bad.is_empty(), "host: dead after %.1f s, back after %.1f, joiner dead after %.1f, back after %.1f  %s" % [slain, back, down, up, "; ".join(bad)])
+		return
+
+	# The joiner.
+	var armed := await _until(g, 90.0, func(): return me.st.equipped == "pistol" and g.players.has(1))
+	if armed < 0.0:
+		g.debug_result("pvpnet", false, "joiner: never armed")
+		return
+	await _wait(g, 1.0)
+	var gap: float = me.global_position.distance_to(g.players[1].global_position)
+	if gap < 5.0 or gap > 12.0:
+		bad.append("not %s apart as put: %.1f" % ["8 m", gap])
+	var mag0: int = me.st.mag.pistol
+	for k in 5:
+		var from: Vector3 = me.eye()
+		var to: Vector3 = g.players[1].global_position + Vector3(0, 1.0, 0)
+		g.to_server("srv_attack", [from, (to - from).normalized()])
+		g.predict_shot(me, me.st.equipped)
+		await _wait(g, 0.35)
+	var told := await _until(g, 3.0, func(): return g.hud._feed_log.any(func(e): return e[0].text.begins_with("Killed")))
+	if told < 0.0:
+		bad.append("never told it had killed")
+	if me.st.mag.pistol >= mag0:
+		bad.append("magazine did not go down: %d" % me.st.mag.pistol)
+	await _wait(g, 1.0)
+	# Pictures go by unreliable packets; one lost at the start of a burst is not a fault.
+	if g._predicted.size() > 1:
+		bad.append("%d of its own shots never matched a round coming back (mag %d of %d)" % [g._predicted.size(), me.st.mag.pistol, mag0])
+	# The host's turn.
+	var shot := await _until(g, 20.0, func(): return me.st.dead)
+	if shot < 0.0:
+		bad.append("never shot dead by the host")
+	var alive := await _until(g, 15.0, func(): return not me.st.dead)
+	if alive < 0.0:
+		bad.append("never came back")
+	await _wait(g, 1.0)
+	var seq0: int = me.tp_seq
+	var moved := await _until(g, 30.0, func(): return me.tp_seq != seq0)
+	if moved < 0.0:
+		bad.append("never teleported")
+	for k in 5:
+		g.srv_move.rpc_id(1, Vector3(300, 0, 0), 0.0, 0, 0.0, seq0)
+		await _wait(g, 0.07)
+	await _wait(g, 1.0)
+	g.debug_result("pvpnet", bad.is_empty(), "joiner: killed after %.1f s, dead after %.1f, back after %.1f  %s" % [told, shot, alive, "; ".join(bad)])
+
+
+## Where the lagcomp runner is at wall-clock `t`: a triangle wave along x, 7 m/s, `half`
+## metres either side of `x0`. [x, +1 going right or -1 going left].
+static func _runner(x0: float, half: float, t: float) -> Array:
+	var period := 4.0 * half / 7.0
+	var u := fposmod(t, period) / period
+	if u < 0.5:
+		return [x0 + half * (4.0 * u - 1.0), 1.0]
+	return [x0 + half * (3.0 - 4.0 * u), -1.0]
+
+
+## Does a shot at a runner land where the runner looked to be? Two peers (--host / --join=IP,
+## both --test=lagcomp). The host runs back and forth at 7 m/s; the joiner shoots at the
+## picture of him it has, with a revolver that cannot miss what it points at. The host counts
+## what got through. Without the rewind it is about one in twelve.
+static func _lag_comp(g: Node) -> void:
+	var host: bool = g.multiplayer.is_server()
+	var me = g.local_player
+	if host:
+		var joined := await _until(g, 90.0, func(): return _other_peer(g) >= 0)
+		if joined < 0.0:
+			g.debug_result("lagcomp", false, "host: nobody joined")
+			return
+		var cid := _other_peer(g)
+		var cp = g.players[cid]
+		g.crowd.debug_only([])
+		g.police.set_process(false)
+		var base := _clearing(16.0)
+		me.st.hp = 100000.0
+		g.push_state(me)
+		me.global_position = Vector3(base.x, 0.05, base.z)
+		g.srv_teleport(cid, base + Vector3(0, 0.05, 9))
+		_arm_peer(g, cp, "revolver")
+		await _wait(g, 2.5)
+		var fired := 0
+		var t := 0.0
+		while t < 22.0 and _other_peer(g) >= 0:
+			await g.get_tree().process_frame
+			var dt: float = g.get_process_delta_time()
+			t += dt
+			var at := _runner(base.x, 10.0, Time.get_unix_time_from_system())
+			me.global_position = Vector3(at[0], me.global_position.y, base.z)
+			me.velocity = Vector3.ZERO
+			me.rotation.y = -PI / 2.0 if at[1] > 0.0 else PI / 2.0
+			var left: int = cp.st.mag.get("revolver", 6)
+			fired += 6 - left
+			cp.st.mag["revolver"] = 6
+			g._reload.clear()
+		var hits := int(roundf((100000.0 - me.st.hp) / DB.ITEMS.revolver.damage))
+		# Judged on the spot where he was, this is nearly all of them; at the host's own place
+		# now it is one in twelve. The line is drawn well clear of both.
+		var ok: bool = fired >= 12 and hits >= int(ceilf(fired * 0.5))
+		await _until(g, 10.0, func(): return _other_peer(g) < 0)
+		g.debug_result("lagcomp", ok, "host: %d of %d shots at a runner landed (wanted at least half); rewind was %.0f ms of which the link's round trip %.0f" % [hits, fired, 1000.0 * minf(Net.rtt(cid) + g.VIEW_LAG, g.MAX_REWIND), 1000.0 * Net.rtt(cid)])
+		return
+
+	var armed := await _until(g, 90.0, func(): return me.st.equipped == "revolver" and g.players.has(1))
+	if armed < 0.0:
+		g.debug_result("lagcomp", false, "joiner: never armed")
+		return
+	await _wait(g, 1.5)
+	var shots := 0
+	var seen: Array = []
+	var since := 0.0
+	var t := 0.0
+	var base := _clearing(16.0)
+	var lag_sum := 0.0
+	var lag_n := 0
+	while shots < 16 and t < 50.0:
+		await g.get_tree().process_frame
+		var dt: float = g.get_process_delta_time()
+		t += dt
+		since += dt
+		var at: Vector3 = g.players[1].global_position
+		# How far behind the host's real place the picture is, while he is mid-run.
+		var real := _runner(base.x, 10.0, Time.get_unix_time_from_system())
+		if absf(real[0] - base.x) < 6.0:
+			lag_sum += (real[0] - at.x) * real[1] / 7.0
+			lag_n += 1
+		seen.append([t, at])
+		while seen.size() > 2 and seen[0][0] < t - 0.2:
+			seen.pop_front()
+		var speed: float = (at - seen[0][1]).length() / maxf(t - seen[0][0], 0.05)
+		# Only at him on the move, as he is shown.
+		if speed > 5.0 and since >= 0.6:
+			since = 0.0
+			var from: Vector3 = me.eye()
+			var to: Vector3 = at + Vector3(0, 0.9, 0)
+			g.to_server("srv_attack", [from, (to - from).normalized()])
+			g.predict_shot(me, me.st.equipped)
+			shots += 1
+	await _wait(g, 1.0)
+	g.debug_result("lagcomp", shots >= 16, "joiner: fired %d at him running; his picture runs %.0f ms behind him" % [shots, 1000.0 * lag_sum / maxf(lag_n, 1)])
 
 
 ## What is wrong with the emotes as sums, before anybody dances one: a pose that is not a

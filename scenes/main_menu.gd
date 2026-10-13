@@ -6,6 +6,7 @@ const UI := preload("res://scenes/ui/ui_kit.gd")
 var _name: LineEdit
 var _ip: LineEdit
 var _status: Label
+var _join_btn: Button
 var _box: VBoxContainer
 var _settings: Control
 
@@ -54,14 +55,14 @@ func _ready() -> void:
 	box.add_child(host_btn)
 
 	_ip = LineEdit.new()
-	_ip.placeholder_text = "Host IP"
+	_ip.placeholder_text = "Host IP (or IP:port)"
 	_ip.text = Settings.last_ip
 	box.add_child(_ip)
 
-	var join_btn := Button.new()
-	join_btn.text = "Join match"
-	join_btn.pressed.connect(_join)
-	box.add_child(join_btn)
+	_join_btn = Button.new()
+	_join_btn.text = "Join match"
+	_join_btn.pressed.connect(_join)
+	box.add_child(_join_btn)
 
 	var settings_btn := Button.new()
 	settings_btn.text = "Settings"
@@ -77,7 +78,12 @@ func _ready() -> void:
 	_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(_status)
 
-	Net.join_failed.connect(func(): _status.text = "Could not connect.")
+	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	# Why the last match or join ended, if it did not end well.
+	_status.text = Net.last_error
+	Net.join_failed.connect(func(reason: String):
+		_status.text = reason
+		_join_btn.disabled = false)
 
 	# Quick launch: godot --path . -- --host | --join=IP [--name=X]
 	for a in OS.get_cmdline_user_args():
@@ -108,8 +114,10 @@ func _host() -> void:
 func _join() -> void:
 	_apply_name()
 	_status.text = "Connecting..."
+	_join_btn.disabled = true
 	if not Net.join(_ip.text.strip_edges()):
-		_status.text = "Could not connect."
+		_status.text = Net.last_error if Net.last_error != "" else "Could not connect."
+		_join_btn.disabled = false
 
 
 func _apply_name() -> void:

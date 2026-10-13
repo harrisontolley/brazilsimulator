@@ -45,6 +45,16 @@ const FX_THROW := 4
 const FX_LAUNCH := 8
 
 const END_SCREEN_TIME := 15.0
+## How far back a client's shot is judged, beyond its round trip: the host's body reaches the
+## client's screen after the relay's batching and the smoothing the client puts on it. That is
+## measured at 105-120 ms on a link with no delay (the lagcomp test prints it).
+const VIEW_LAG := 0.11
+const MAX_REWIND := 0.35
+const POSE_KEEP := 0.6
+## A shot may come this many ms sooner than the weapon allows (packets bunch up), and the
+## ms by which earlier shots came late can be spent on it, up to FIRE_BANK.
+const FIRE_SLACK := 60.0
+const FIRE_BANK := 150.0
 const PICKUP_RANGE := 2.6
 const VENDOR_RANGE := 4.5
 const PICKUP_COUNT := 30
@@ -85,6 +95,11 @@ var _end_t := 0.0
 var _od_t := 0.0
 var _emote_hit := {}  # peer id -> the st.emote_n of the killing emote that has already landed
 var _last_attack := {}
+var _fire_bank := {}    # pid -> ms of lateness in their shots that a bunched-up one may spend
+var _pose_hist := {}    # pid -> [[seconds, position, yaw], ...], oldest first
+var _tp_seq := {}       # pid -> teleports sent; their moves must carry it to be believed
+var _my_tp_seq := 0     # client: the last of those it was told about
+var _predicted: Array = []  # msec of shots this client has already played the bang for
 var _last_ping := {}
 var _respawn := {}
 var _air := {}          # pid -> seconds of breath left
@@ -175,6 +190,8 @@ func _ready() -> void:
 		Crime.noise.connect(_on_noise)
 		_make_player(1, Net.local_name, DB.spawn_point())
 		_srv_start_match()
+		Net.upnp_changed.connect(_announce_host)
+		_announce_host.call_deferred()
 	else:
 		srv_client_ready.rpc_id(1, Net.local_name)
 
@@ -202,6 +219,23 @@ func _ready() -> void:
 func _exit_tree() -> void:
 	if Net.game == self:
 		Net.game = null
+	if Net.upnp_changed.is_connected(_announce_host):
+		Net.upnp_changed.disconnect(_announce_host)
+
+
+## Tells the host what to give a friend, once the router has had its say: the best address
+## goes on the clipboard so it can be pasted straight into a message.
+func _announce_host() -> void:
+	if Net.upnp_state == "working" or hud == null:
+		return
+	var addrs: Array = Net.join_addresses()
+	if addrs.is_empty():
+		hud.toast("No network address found. Are you online?")
+		return
+	DisplayServer.clipboard_set(addrs[0].addr)
+	hud.toast("Friend joins with %s (copied). Esc shows more." % addrs[0].addr)
+	if Net.upnp_state == "failed" or Net.upnp_state == "natted":
+		hud.toast("Router would not open the port: Esc says what to do.")
 
 
 func _debug_shot(path: String) -> void:
@@ -300,6 +334,9 @@ func _debug_traffic() -> void:
 ## Scripted bits of play, for checking a feature without a hand on the keyboard.
 func _debug_test(what: String) -> void:
 	await get_tree().create_timer(0.6).timeout
+	# A client may still be being let in.
+	while local_player == null:
+		await get_tree().process_frame
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	local_player.rig.zoom(2)
 	match what:
@@ -1227,7 +1264,8 @@ func to_server(method: StringName, args: Array = [], node: Node = self) -> void:
 @rpc("any_peer", "call_remote", "reliable")
 func srv_client_ready(pname: String) -> void:
 	var pid := Net.sender()
-	if players.has(pid):
+	# Only a peer that passed Net's version handshake gets a body.
+	if players.has(pid) or not Net.verified.has(pid):
 		return
 	var drop_data: Array = []
 	for id in drops:
@@ -1307,6 +1345,7 @@ func _make_player(id: int, pname: String, pos: Vector3) -> CharacterBody3D:
 	_players_root.add_child(p)
 	if p.is_local:
 		local_player = p
+		p.tp_seq = _my_tp_seq
 	return p
 
 
@@ -1349,6 +1388,10 @@ func _on_peer_left(pid: int) -> void:
 	_air.erase(pid)
 	motos.srv_release(pid)
 	roleta.srv_left(pid)
+	crowd.srv_left(pid)
+	police.srv_left(pid)
+	for table in [_last_attack, _fire_bank, _pose_hist, _tp_seq, _last_ping, _last_hit, _reload, _ko_immune, _robbed, _larica, _emote_hit]:
+		table.erase(pid)
 	if players.has(pid):
 		bcast("cl_despawn", [pid])
 
@@ -1364,11 +1407,13 @@ func _process(delta: float) -> void:
 		turn.rotation.y = spin * 1.6 + id
 		turn.position.y = 0.3 + sin(spin * 2.5 + id) * 0.08
 	_trip(delta)
+	_expire_predictions()
 	if multiplayer.is_server():
 		_srv_process(delta)
 
 
 func _srv_process(delta: float) -> void:
+	_record_poses()
 	if MatchState.ended:
 		_end_t -= delta
 		if _end_t <= 0.0:
@@ -1417,6 +1462,32 @@ func _srv_process(delta: float) -> void:
 		for pid in ready_peers:
 			if pid != 1:
 				cl_clock.rpc_id(pid, MatchState.time)
+
+
+## Where everybody was over the last half second, as the host saw them, so that a shot from
+## somebody who saw them a moment ago can be judged against that moment.
+func _record_poses() -> void:
+	var now := Time.get_ticks_msec() / 1000.0
+	for pid in players:
+		var p = players[pid]
+		var h: Array = _pose_hist.get(pid, [])
+		h.append([now, p.global_position, p.rotation.y if p.is_local else p.net_yaw])
+		while h.size() > 2 and h[0][0] < now - POSE_KEEP:
+			h.pop_front()
+		_pose_hist[pid] = h
+
+
+## [position, yaw] of `p` as it was `ago` seconds back.
+func _pose_ago(p, ago: float) -> Array:
+	var h: Array = _pose_hist.get(p.id, [])
+	var t := Time.get_ticks_msec() / 1000.0 - ago
+	if ago <= 0.0 or h.is_empty() or t >= h[h.size() - 1][0]:
+		return [p.global_position, p.rotation.y if p.is_local else p.net_yaw]
+	for i in range(h.size() - 1, 0, -1):
+		if h[i - 1][0] <= t:
+			var k := inverse_lerp(h[i - 1][0], h[i][0], t)
+			return [h[i - 1][1].lerp(h[i][1], k), lerp_angle(h[i - 1][2], h[i][2], k)]
+	return [h[0][1], h[0][2]]
 
 
 func _srv_tick_player(p: CharacterBody3D, delta: float, od_tick: bool) -> void:
@@ -1657,8 +1728,12 @@ func _trip(delta: float) -> void:
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
-func srv_move(pos: Vector3, yaw: float, mv: int, pitch: float) -> void:
-	var p = players.get(Net.sender())
+func srv_move(pos: Vector3, yaw: float, mv: int, pitch: float, seq: int) -> void:
+	var pid := Net.sender()
+	var p = players.get(pid)
+	# Sent before they heard they had been moved: where they were, not where they are.
+	if seq != _tp_seq.get(pid, 0):
+		return
 	if p != null and not p.is_local:
 		p.net_pos = pos
 		p.net_yaw = yaw
@@ -1708,14 +1783,19 @@ func srv_teleport(pid: int, pos: Vector3) -> void:
 		return
 	p.net_pos = pos
 	p.global_position = pos
-	send(pid, "cl_teleport", [pos])
+	_tp_seq[pid] = _tp_seq.get(pid, 0) + 1
+	# Nothing from before the move is a fair witness to where they were.
+	_pose_hist.erase(pid)
+	send(pid, "cl_teleport", [pos, _tp_seq[pid]])
 
 
 @rpc("authority", "call_remote", "reliable")
-func cl_teleport(pos: Vector3) -> void:
+func cl_teleport(pos: Vector3, seq: int) -> void:
+	_my_tp_seq = seq
 	if local_player != null:
 		local_player.global_position = pos
 		local_player.velocity = Vector3.ZERO
+		local_player.tp_seq = seq
 
 
 @rpc("authority", "call_remote", "reliable")
@@ -1823,7 +1903,7 @@ func _srv_emote_watchers() -> void:
 ## Hurts a player. A bare fist to the head may put them out cold instead; returns whether it did.
 func srv_damage(pid: int, amount: float, attacker: int, zone := 0, weapon := {}) -> bool:
 	var p = players.get(pid)
-	if p == null or p.st.dead or MatchState.ended or p.st.get("hide", -1) >= 0:
+	if p == null or p.st.dead or MatchState.ended or p.st.get("hide", -1) >= 0 or p.st.get("god", false):
 		return false
 	# Nobody keeps dancing through that.
 	p.st.emote = -1
@@ -1845,7 +1925,7 @@ func srv_damage(pid: int, amount: float, attacker: int, zone := 0, weapon := {})
 ## Puts a player on the floor for `seconds`: tackled, not hurt.
 func srv_floor(pid: int, seconds: float) -> void:
 	var p = players.get(pid)
-	if p == null or p.st.dead:
+	if p == null or p.st.dead or p.st.get("god", false):
 		return
 	p.st.ko = maxf(p.st.ko, seconds)
 	_ko_immune[pid] = MatchState.time + seconds + DB.KO_IMMUNE
@@ -1928,14 +2008,33 @@ func srv_attack(origin: Vector3, dir: Vector3, charge := 0.0) -> void:
 	var item: String = p.st.equipped
 	var w = DB.ITEMS[item]
 	var now := Time.get_ticks_msec()
-	if now - _last_attack.get(pid, 0) < w.cooldown * 1000.0 - 60.0:
-		return
+	var cool: float = w.cooldown * 1000.0
+	var gap := float(now - _last_attack.get(pid, 0))
+	var bank: float = _fire_bank.get(pid, 0.0)
+	if gap < cool - FIRE_SLACK:
+		# Early. Fine if earlier ones came late enough to make up for it (a bunch of
+		# packets let go at once), not if this is somebody firing faster than the gun can.
+		var short := cool - FIRE_SLACK - gap
+		if short > bank:
+			return
+		bank -= short
+	else:
+		bank = minf(bank + maxf(0.0, gap - cool), FIRE_BANK)
+	_fire_bank[pid] = bank
 	_last_attack[pid] = now
 
 	dir = dir.normalized()
 	# Trust the client's line only as far as its own head: no shooting from round a corner.
 	var eye: Vector3 = p.eye()
-	if origin.distance_to(eye) > 1.5 or not _clear(eye, origin):
+	# The server's copy of a remote body is smoothed and so behind; the newest packet is not.
+	if not p.is_local:
+		eye += p.net_pos - p.global_position
+	# How far back to look for whoever they were aiming at: the host sees what is, a client
+	# sees what was, by its round trip and the lag on the picture.
+	var rewind := 0.0 if pid == 1 else minf(Net.rtt(pid) + VIEW_LAG, MAX_REWIND)
+	# A runner is further from the old copy of themselves than a stander.
+	var slack: float = 1.5 + (p.ground_speed() + 3.0) * rewind
+	if origin.distance_to(eye) > slack or not _clear(eye, origin):
 		origin = eye
 	var kind := DB.kind_of(item)
 	if kind == "thrown":
@@ -1971,7 +2070,7 @@ func srv_attack(origin: Vector3, dir: Vector3, charge := 0.0) -> void:
 	var struck := false
 	for k in w.get("pellets", 1):
 		var d := (dir + Vector3(randf_range(-1, 1), randf_range(-1, 1), randf_range(-1, 1)) * spread).normalized()
-		struck = _srv_strike(p, item, origin, d, reach, k) or struck
+		struck = _srv_strike(p, item, origin, d, reach, k, rewind) or struck
 	if kind != "melee":
 		Crime.report_noise(origin, 90.0, pid)
 		Crime.report_crime(origin, pid, 3)
@@ -1986,14 +2085,14 @@ func srv_attack(origin: Vector3, dir: Vector3, charge := 0.0) -> void:
 
 ## One blow or one round from `p` along `dir`: what it meets, and what that does to it.
 ## `k` is which pellet of the shot this is. Returns whether it struck somebody.
-func _srv_strike(p, item: String, origin: Vector3, dir: Vector3, reach: float, k: int) -> bool:
+func _srv_strike(p, item: String, origin: Vector3, dir: Vector3, reach: float, k: int, rewind := 0.0) -> bool:
 	var pid: int = p.id
 	var w = DB.ITEMS[item]
 	var mode := FX_PELLET if k > 0 else 0
 	var struck := false
 	var from := origin
 	for pass_k in w.get("pierce", 0) + 1:
-		var hit := _ray_hit(from, dir, reach, 0.35 if w.melee else 0.0, pid)
+		var hit := _ray_hit(from, dir, reach, 0.35 if w.melee else 0.0, pid, rewind)
 		# A football in the way takes the hit instead, and takes off.
 		var ball_t: float = balls.srv_strike(from, dir, hit.t, pid, 1.0 if w.melee else 1.5)
 		if ball_t >= 0.0:
@@ -2055,6 +2154,9 @@ func _srv_strike(p, item: String, origin: Vector3, dir: Vector3, reach: float, k
 				if sea_patrol.srv_damage(hit.id, dmg, pid):
 					res |= DB.FX_KILL
 		bcast("cl_fx", [from if pass_k > 0 else origin, from + dir * hit.t, w.melee, DB.WHO_PLAYER, pid, hit.type, hit.id, res, item, mode | (FX_THROUGH if pass_k > 0 else 0)])
+		if hit.type != DB.WHO_NONE:
+			# The picture can be lost on the way; the marker and the kill line must not be.
+			send(pid, "cl_hit", [res, hit.type, hit.id])
 		if p.st.jail > 0.0 and w.melee and hit.type != DB.WHO_NONE:
 			prison.srv_fight(p, from + dir * hit.t, res & DB.FX_KO != 0)
 		if hit.type == DB.WHO_NONE:
@@ -2160,7 +2262,7 @@ func _clear(a: Vector3, b: Vector3) -> bool:
 
 
 ## First thing the ray meets: {type (DB.WHO_*), id, t, zone (DB.ZONE_*)}. `grow` fattens bodies.
-func _ray_hit(o: Vector3, d: Vector3, max_t: float, grow: float, exclude: int) -> Dictionary:
+func _ray_hit(o: Vector3, d: Vector3, max_t: float, grow: float, exclude: int, rewind := 0.0) -> Dictionary:
 	var best := {"type": DB.WHO_NONE, "id": -1, "t": max_t, "zone": DB.ZONE_BODY}
 	var q := PhysicsRayQueryParameters3D.create(o, o + d * max_t, 1)
 	var wall := get_world_3d().direct_space_state.intersect_ray(q)
@@ -2177,7 +2279,8 @@ func _ray_hit(o: Vector3, d: Vector3, max_t: float, grow: float, exclude: int) -
 		var p = players[pid]
 		if pid == exclude or p.st.dead or p.st.get("hide", -1) >= 0 or (p.st.jail > 0.0) != inside:
 			continue
-		var h: Array = Kit.ray_hit(o, d, best.t, p.global_position, p.rotation.y if p.is_local else p.net_yaw, Player.BODY_SCALE, p.stance(), grow)
+		var pose: Array = _pose_ago(p, rewind)
+		var h: Array = Kit.ray_hit(o, d, best.t, pose[0], pose[1], Player.BODY_SCALE, p.stance(), grow)
 		if h[0] >= 0.0:
 			best = {"type": DB.WHO_PLAYER, "id": pid, "t": h[0], "zone": h[1]}
 	var c: Array = police.ray_pick(o, d, best.t, grow)
@@ -2251,8 +2354,10 @@ func cl_fx(from: Vector3, to: Vector3, melee: bool, src_type: int, src_id: int, 
 	fx.strike(from, to, melee, hit_type != DB.WHO_NONE, item, lead)
 	if hit_type != DB.WHO_NONE:
 		fx.wound(from, to, hit_type, res, melee)
+	# This client played the bang and the kick itself when the trigger was pulled.
+	var heard: bool = mine and lead and not melee and mode & FX_THROUGH == 0 and _take_prediction()
 	if not melee:
-		if lead:
+		if lead and not heard:
 			Sfx.play(w.get("sound", "shot"), from, 4.0)
 	elif hit_type != DB.WHO_NONE:
 		Sfx.play(w.get("sound", "punch"), to)
@@ -2263,18 +2368,52 @@ func cl_fx(from: Vector3, to: Vector3, melee: bool, src_type: int, src_id: int, 
 		Sfx.play("headshot", to, 2.0)
 	if res & DB.FX_KO:
 		Sfx.play("ko", to, 3.0)
-	if mine:
-		if not melee and lead:
-			local_player.recoil()
-		if hit_type != DB.WHO_NONE:
-			hud.hit_marker(res & DB.FX_HEAD != 0, res & (DB.FX_KILL | DB.FX_KO) != 0)
-			if res & (DB.FX_KILL | DB.FX_KO):
-				var who := "a dog"
-				match hit_type:
-					DB.WHO_PLAYER: who = players[hit_id].pname if players.has(hit_id) else "somebody"
-					DB.WHO_COP, DB.WHO_SEACOP: who = "a policeman"
-					DB.WHO_NPC: who = "a " + DB.ARCHETYPES[crowd.arch[hit_id]].id
-				hud.feed("%s %s%s" % ["Knocked out" if res & DB.FX_KILL == 0 else "Killed", who, "  (head)" if res & DB.FX_HEAD else ""], Color(1.0, 0.82, 0.12) if res & DB.FX_HEAD else Color(0.97, 0.91, 0.78))
+	if mine and not melee and lead and not heard:
+		local_player.recoil()
+
+
+## Sent reliably to the one who fired: what the round did, for the marker and the kill feed.
+@rpc("authority", "call_remote", "reliable")
+func cl_hit(res: int, hit_type: int, hit_id: int) -> void:
+	if hud == null:
+		return
+	hud.hit_marker(res & DB.FX_HEAD != 0, res & (DB.FX_KILL | DB.FX_KO) != 0)
+	if res & (DB.FX_KILL | DB.FX_KO):
+		var who := "a dog"
+		match hit_type:
+			DB.WHO_PLAYER: who = players[hit_id].pname if players.has(hit_id) else "somebody"
+			DB.WHO_COP, DB.WHO_SEACOP: who = "a policeman"
+			DB.WHO_NPC: who = "a " + DB.ARCHETYPES[crowd.arch[hit_id]].id
+		hud.feed("%s %s%s" % ["Knocked out" if res & DB.FX_KILL == 0 else "Killed", who, "  (head)" if res & DB.FX_HEAD else ""], Color(1.0, 0.82, 0.12) if res & DB.FX_HEAD else Color(0.97, 0.91, 0.78))
+
+
+## A client plays its own gun as the trigger is pulled, not a round trip later. Only for a
+## round the server will most likely allow: in the magazine, and no reload under way.
+func predict_shot(p, item: String) -> void:
+	if multiplayer.is_server() or not DB.is_gun(item) or DB.kind_of(item) == "rocket":
+		return
+	if p.st.mag.get(item, 0) <= 0 or p.reloading():
+		return
+	p.st.mag[item] -= 1
+	_predicted.append(Time.get_ticks_msec())
+	Sfx.play(DB.ITEMS[item].get("sound", "shot"), p.muzzle(), 4.0)
+	p.recoil()
+
+
+## A round the host refused, or whose picture was lost on the way, never comes back.
+func _expire_predictions() -> void:
+	var now := Time.get_ticks_msec()
+	while not _predicted.is_empty() and now - _predicted[0] > 800:
+		_predicted.pop_front()
+
+
+## True if the shot that has just come back was one that was already played here.
+func _take_prediction() -> bool:
+	_expire_predictions()
+	if _predicted.is_empty():
+		return false
+	_predicted.pop_front()
+	return true
 
 
 @rpc("authority", "call_remote", "unreliable")
@@ -2354,6 +2493,200 @@ func _give(st: Dictionary, item: String, n: int) -> void:
 		# A gun comes loaded.
 		if DB.is_gun(item) and not st.mag.has(item):
 			st.mag[item] = DB.ITEMS[item].mag
+
+
+# --- the F5 menu ---
+
+## The one way in for the tester's menu (scenes/ui/cheat_menu.gd): whatever was clicked, done
+## to whoever clicked it. Every player may, in every build, because this is for trying things
+## out with a friend. The host does the work and the answer comes back as a toast.
+@rpc("any_peer", "call_remote", "reliable")
+func srv_cheat(what: String, arg := "", n := 0) -> void:
+	if not multiplayer.is_server():
+		return
+	var pid := Net.sender()
+	var p = players.get(pid)
+	if p == null:
+		return
+	var st: Dictionary = p.st
+	var ahead: Vector3 = p.global_position - p.global_basis.z * 3.0
+	var said := ""
+	match what:
+		"give":
+			if not DB.ITEMS.has(arg):
+				return
+			_cheat_give(st, arg)
+			said = "Got %s" % DB.ITEMS[arg].name
+		"give_all":
+			for w in DB.MELEE + DB.GUNS + DB.HEAVY + DB.THROWN:
+				_cheat_give(st, w, false)
+			said = "Got every weapon"
+		"refill":
+			for feed in ["ammo", "shells", "rounds", "rocket"]:
+				_give(st, feed, 100)
+			for w in st.mag.keys():
+				st.mag[w] = DB.ITEMS[w].mag
+			said = "Ammo refilled"
+		"money":
+			st.money += n
+			said = "+$%d" % n
+		"heal":
+			st.hp = 100.0
+			st.ko = 0.0
+			st.dead = false
+			said = "Healed"
+		"god":
+			st.god = not st.get("god", false)
+			said = "God mode %s" % ("ON" if st.god else "off")
+		"heat":
+			n = clampi(n, 0, 3)
+			st.heat = n
+			p.wanted_t = police.HEAT_STEP_TIME[n]
+			if n == 0:
+				st.vis = 0
+				police.release_chase(pid)
+				police.forget(pid)
+			else:
+				Crime.report_crime(p.global_position, pid, n)
+			said = "Heat %d" % n
+		"sober":
+			st.drugs.clear()
+			st.tol.clear()
+			said = "Sober"
+		"high":
+			if not DB.DRUGS.has(arg):
+				return
+			st.drugs[arg] = {"phase": "high", "t": DB.ITEMS[arg].duration}
+			said = "High on %s" % DB.ITEMS[arg].name
+		"unjail":
+			st.jail = 0.0
+			st.heat = 0
+			st.fug = false
+			said = "Out of jail"
+			srv_teleport(pid, DB.RELEASE_POS)
+		"moto", "ski":
+			said = _cheat_bike(p, what == "ski", ahead)
+		"npc":
+			said = _cheat_npc(p, arg, n != 0, ahead)
+		"dog":
+			if n < 0 or n >= dogs.BREEDS.size() or dogs.debug_dog(n, 2 if arg == "mean" else 0, ahead) < 0:
+				return
+			said = "%s (%s)" % [dogs.BREEDS[n].name, "mean" if arg == "mean" else "friendly"]
+		"drop":
+			srv_add_drop(ahead, n, {})
+			said = "$%d on the ground" % n
+		"boom":
+			srv_explode(p.global_position - p.global_basis.z * 10.0, 6.0, 80.0, pid)
+			said = "Boom"
+		"event":
+			if not events.NAMES.has(arg):
+				return
+			events.force(arg)
+			said = "%s in a second" % arg
+		"time":
+			MatchState.time = clampf(n / 100.0, 0.0, 0.95) * MatchState.duration
+			for peer in ready_peers:
+				if peer != 1:
+					cl_clock.rpc_id(peer, MatchState.time)
+			said = "Time set"
+		"calm":
+			for i in crowd._hostile.keys():
+				crowd.srv_respawn(i, crowd.pos[i])
+			for peer in players.keys():
+				police.release_chase(peer)
+			said = "Crowd calmed, cops stood down"
+		"tp":
+			var at: Vector3
+			if arg.begins_with("player:"):
+				var other = players.get(int(arg.trim_prefix("player:")))
+				if other == null:
+					return
+				at = other.global_position + Vector3(1.5, 0.3, 0)
+			else:
+				var v := arg.split_floats(",")
+				if v.size() < 3:
+					return
+				at = Vector3(v[0], v[1], v[2])
+			srv_teleport(pid, at)
+			said = "Teleported"
+		_:
+			return
+	push_state(p)
+	send(pid, "cl_toast", [said])
+
+
+## Puts an item in a tester's hands. A gun comes with a full magazine and spare rounds of
+## the right sort; a thing that is thrown comes in fives.
+func _cheat_give(st: Dictionary, item: String, equip := true) -> void:
+	var def: Dictionary = DB.ITEMS[item]
+	if DB.is_gun(item):
+		_give(st, item, 1)
+		st.mag[item] = def.mag
+		_give(st, DB.feed_of(item), 40 if DB.feed_of(item) == "ammo" else 10)
+	elif def.type == "ammo":
+		_give(st, item, 100 if item == "ammo" else 20)
+	elif def.get("stack", false):
+		_give(st, item, 5)
+	elif def.type == "weapon":
+		_give(st, item, 1)
+	else:
+		_give(st, item, 5)
+	if equip and def.type == "weapon":
+		st.equipped = item
+
+
+## A parked bike or jet ski that nobody is on, brought to a few steps in front of `p`. The
+## one farthest from every player goes, so nobody has their ride taken from under them.
+func _cheat_bike(p: CharacterBody3D, ski: bool, ahead: Vector3) -> String:
+	var want: int = motos.SKI if ski else motos.MOTO
+	var best := -1
+	var best_d := -1.0
+	for i in motos.pos.size():
+		if motos.kind[i] != want or motos.rider[i] != 0:
+			continue
+		var near := INF
+		for q in players.values():
+			near = minf(near, q.global_position.distance_to(motos.pos[i]))
+		if near > best_d:
+			best = i
+			best_d = near
+	if best < 0:
+		return "None left: everyone is on one"
+	var at := ahead
+	if ski:
+		# On the water, abreast of the beach if the tester is not in it.
+		at = Vector3(ahead.x, 0.0, ahead.z if ahead.z < Layout.WATER_Z else -47.5)
+	bcast("cl_moto", [best, 0, at, p.rotation.y], motos)
+	return "Jet ski %s" % ("ahead" if ahead.z < Layout.WATER_Z else "in the shallows, straight out") if ski else "Motorbike ahead"
+
+
+## Somebody of archetype `id`, brought to a few steps in front of `p`: whoever of that sort
+## has gone home, or failing that the nearest one of them in the crowd.
+func _cheat_npc(p: CharacterBody3D, id: String, hostile: bool, ahead: Vector3) -> String:
+	var k: int = crowd._arch_index(id)
+	if DB.ARCHETYPES[k].id != id:
+		return "No such sort"
+	var pick := -1
+	var best_d := INF
+	for i in crowd.count:
+		if crowd.arch[i] != k:
+			continue
+		if crowd.state[i] == Crowd.GONE:
+			pick = i
+			break
+		if crowd.state[i] == Crowd.AMBIENT:
+			var d: float = crowd.pos[i].distance_to(p.global_position)
+			if d < best_d:
+				pick = i
+				best_d = d
+	if pick < 0:
+		return "Nobody of that sort in this match"
+	crowd.srv_respawn(pick, ahead)
+	if hostile:
+		crowd.srv_provoke(pick, p.id)
+		if crowd.state[pick] != Crowd.HOSTILE:
+			return "%s: not one for a fight" % id
+	return "%s%s" % ["angry " if hostile else "", id]
 
 
 func srv_add_drop(pos: Vector3, money: int, items: Dictionary) -> void:

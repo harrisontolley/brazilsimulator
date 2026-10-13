@@ -786,6 +786,13 @@ func forget(pid: int) -> void:
 	_known.erase(pid)
 
 
+## A player has left the match: nothing is still after them.
+func srv_left(pid: int) -> void:
+	release_chase(pid)
+	_known.erase(pid)
+	_pursuit.erase(pid)
+
+
 ## Called by Game once a suspect is in custody.
 func release_chase(pid: int) -> void:
 	for c in cops:

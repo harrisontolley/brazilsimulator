@@ -192,6 +192,9 @@ var _pit_cd := 0.0
 var _sink := 0.0
 var _reload_t := -10.0
 var _reload_len := 1.0
+## How many times the host has moved this player; sent with every move so that one sent
+## before the news arrived is not taken for where they are.
+var tp_seq := 0
 var _anim: CharRig
 var _mats: Array = []
 var _hops := 0
@@ -611,10 +614,37 @@ func _unhandled_input(e: InputEvent) -> void:
 			rig.zoom(-1)
 		elif e.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			rig.zoom(1)
-		elif not captured and not Net.game.hud.shop_open and not Net.game.hud.menu_open:
+		elif not captured and not Net.game.hud.shop_open and not Net.game.hud.menu_open and not Net.game.hud.cheats_open:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	elif e.is_action_pressed("ui_cancel"):
 		Net.game.hud.open_pause()
+
+
+## The tester's noclip (F5 menu): through everything, steered by where the camera points.
+## Local only; the host just sees where the body goes, as it does for anyone.
+var noclip := false
+
+
+func set_noclip(on: bool) -> void:
+	noclip = on
+	collision_mask = 0 if on else (1 if is_local else 0)
+	velocity = Vector3.ZERO
+	mv = MV_GROUND
+
+
+func _noclip_step(delta: float) -> void:
+	var playing := Controls.playing()
+	var iv := Input.get_vector("move_left", "move_right", "move_forward", "move_back") if playing else Vector2.ZERO
+	var up := 0.0
+	if playing:
+		up = (1.0 if Input.is_action_pressed("jump") else 0.0) - (1.0 if Input.is_action_pressed("crouch") else 0.0)
+	var speed := 40.0 if Input.is_action_pressed("sprint") else 14.0
+	velocity = Vector3.ZERO
+	global_position += (rig.global_basis * Vector3(iv.x, 0.0, iv.y) + Vector3(0.0, up, 0.0)) * speed * delta
+	_send_t -= delta
+	if _send_t <= 0.0 and not multiplayer.is_server():
+		_send_t = 0.05
+		Net.game.srv_move.rpc_id(1, global_position, rotation.y, net_byte(), rig.rotation.x, tp_seq)
 
 
 func _physics_process(delta: float) -> void:
@@ -629,7 +659,10 @@ func _physics_process(delta: float) -> void:
 		_send_t -= delta
 		if _send_t <= 0.0 and not multiplayer.is_server():
 			_send_t = 0.05
-			Net.game.srv_move.rpc_id(1, global_position, rotation.y, net_byte(), rig.rotation.x)
+			Net.game.srv_move.rpc_id(1, global_position, rotation.y, net_byte(), rig.rotation.x, tp_seq)
+		return
+	if noclip:
+		_noclip_step(delta)
 		return
 	var active := Controls.playing() and can_act()
 	if _ladder >= 0:
@@ -1248,7 +1281,7 @@ func _ladder_step(delta: float) -> void:
 	_send_t -= delta
 	if _send_t <= 0.0 and not multiplayer.is_server():
 		_send_t = 0.05
-		Net.game.srv_move.rpc_id(1, global_position, rotation.y, net_byte(), rig.rotation.x)
+		Net.game.srv_move.rpc_id(1, global_position, rotation.y, net_byte(), rig.rotation.x, tp_seq)
 
 
 ## Thrown through the air by something big: a bus, a crash.
@@ -1642,6 +1675,11 @@ func muzzle() -> Vector3:
 	return global_position + Vector3(0, 1.0, 0) + global_basis * (Basis(Vector3.RIGHT, pitch) * Vector3(0.2, 0.0, -0.75))
 
 
+## Whether the reload the host last told this player about is still going.
+func reloading() -> bool:
+	return Kit.now() - _reload_t < _reload_len
+
+
 ## The gun bucks: the view jumps and only mostly comes back.
 func recoil() -> void:
 	var k: float = DB.ITEMS[st.equipped].get("recoil", 0.0) * recoil_mult()
@@ -1789,6 +1827,8 @@ func _local_process(delta: float) -> void:
 			if (pulled or is_raging()) and _attack_t <= 0.0:
 				_attack_t = w.cooldown
 				g.to_server("srv_attack", [from, dir])
+				if not w.melee:
+					g.predict_shot(self, st.equipped)
 				if w.melee:
 					_vm_t = Kit.now()
 					_vm_side = -_vm_side
@@ -1829,7 +1869,7 @@ func _local_process(delta: float) -> void:
 	_send_t -= delta
 	if _send_t <= 0.0 and not multiplayer.is_server():
 		_send_t = 0.05
-		g.srv_move.rpc_id(1, global_position, rotation.y, net_byte(), rig.rotation.x)
+		g.srv_move.rpc_id(1, global_position, rotation.y, net_byte(), rig.rotation.x, tp_seq)
 
 
 # --- emotes ---
@@ -1839,7 +1879,7 @@ func _local_process(delta: float) -> void:
 func _emote_keys(delta: float) -> void:
 	var hud = Net.game.hud
 	var wheel = hud.wheel
-	var down: bool = Controls.playing() and Input.is_action_pressed("emote") and can_act() and not hud.shop_open and not hud.menu_open
+	var down: bool = Controls.playing() and Input.is_action_pressed("emote") and can_act() and not hud.shop_open and not hud.menu_open and not hud.cheats_open
 	if down:
 		_emote_held += delta
 		if _emote_held >= WHEEL_HOLD and not wheel.open:

@@ -47,6 +47,8 @@ func _ready() -> void:
 	_heading("PAUSED" if in_game else "SETTINGS")
 	if in_game:
 		_button("Resume", func(): closed.emit())
+		if multiplayer.is_server():
+			_hosting()
 
 	_heading("Display")
 	var modes := _options("Window", Settings.MODES, Settings.mode)
@@ -115,6 +117,36 @@ func _ready() -> void:
 		_button("Quit game", func(): get_tree().quit())
 	else:
 		_button("Back", func(): closed.emit())
+
+
+## What to tell a friend so they can join: each address with a button that copies it.
+func _hosting() -> void:
+	_heading("Friends join with")
+	var addrs: Array = Net.join_addresses()
+	if addrs.is_empty() and Net.upnp_state != "working":
+		var none := Label.new()
+		none.text = "No network address found. Are you online?"
+		_list.add_child(none)
+	for a in addrs:
+		var row := _row(a.label)
+		var field := LineEdit.new()
+		field.text = a.addr
+		field.editable = false
+		field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(field)
+		var copy := Button.new()
+		copy.text = "Copy"
+		copy.pressed.connect(func():
+			DisplayServer.clipboard_set(a.addr)
+			copy.text = "Copied")
+		row.add_child(copy)
+	var note := Label.new()
+	note.text = Net.upnp_text()
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.custom_minimum_size.x = 440
+	note.add_theme_font_size_override("font_size", 15)
+	note.modulate = Color(1, 1, 1, 0.7)
+	_list.add_child(note)
 
 
 ## Sizes the scrolling part to its contents, or to what the window has room for.

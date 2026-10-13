@@ -2146,6 +2146,11 @@ func _srv_dosed_wake(i: int, dose: Dictionary, pl) -> bool:
 
 # --- server: robbery ---
 
+## A player has left the match: nobody is being robbed by them any more.
+func srv_left(pid: int) -> void:
+	_rob.erase(pid)
+
+
 ## Sent at 10 Hz while a player holds rob on an NPC. `loud` is mic loudness 0..1.
 @rpc("any_peer", "call_remote", "unreliable_ordered")
 func srv_rob(i: int, loud: float) -> void:

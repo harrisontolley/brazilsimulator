@@ -454,7 +454,7 @@ func _land(h: Dictionary) -> void:
 				g.crowd.hp[h.id] -= THROW_DAMAGE
 		else:
 			var v = g.players.get(h.id)
-			if v != null and v.st.hp > THROW_DAMAGE + 5.0:
+			if v != null and v.st.hp > THROW_DAMAGE + 5.0 and not v.st.get("god", false):
 				v.st.hp -= THROW_DAMAGE
 				g.push_state(v)
 	_free_body(h.kind, h.id, h.pos, h.yaw)

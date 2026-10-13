@@ -25,6 +25,7 @@ const SettingsMenu := preload("res://scenes/ui/settings_menu.gd")
 const DrugKit := preload("res://scenes/items/drug_kit.gd")
 const UI := preload("res://scenes/ui/ui_kit.gd")
 const EmoteWheel := preload("res://scenes/ui/emote_wheel.gd")
+const CheatMenu := preload("res://scenes/ui/cheat_menu.gd")
 const Layout := preload("res://scenes/world/layout.gd")
 ## What being under water does to the picture.
 const UNDER_BLUR := 0.9
@@ -54,6 +55,8 @@ var _wheel_bets: Label
 var _wheel_buttons: Array = []
 ## The pause menu (Esc) is up: settings, leave, quit. The match carries on behind it.
 var menu_open := false
+## The tester's menu (F5) is up. It is in no list of controls on purpose.
+var cheats_open := false
 ## The emote wheel, for the player to open and steer.
 var wheel: EmoteWheel
 ## What the emote key would do right now, shown when F has nothing to offer.
@@ -95,6 +98,7 @@ var _target: Label
 var _prompt: Label
 var _result: Label
 var _menu: Control
+var _cheats: Control
 var _hold_bar: ProgressBar
 var _rob_bar: ProgressBar
 var _mic_bar: ProgressBar
@@ -822,7 +826,7 @@ func close_shop() -> void:
 
 ## Esc: the pause menu, with the settings in it.
 func open_pause() -> void:
-	if menu_open:
+	if menu_open or cheats_open:
 		return
 	menu_open = true
 	_menu = SettingsMenu.new()
@@ -840,8 +844,35 @@ func close_pause() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
+## F5: the tester's menu, for trying things out with a friend. A raw key rather than an input
+## action, so it is in no settings list and no help overlay.
+func toggle_cheats() -> void:
+	if cheats_open:
+		close_cheats()
+	elif not menu_open and not shop_open:
+		cheats_open = true
+		_cheats = CheatMenu.new()
+		_cheats.closed.connect(close_cheats)
+		_root.add_child(_cheats)
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func close_cheats() -> void:
+	if not cheats_open:
+		return
+	cheats_open = false
+	_cheats.queue_free()
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
 func _unhandled_input(e: InputEvent) -> void:
-	if menu_open and e.is_action_pressed("ui_cancel"):
+	if e is InputEventKey and e.pressed and not e.echo and e.physical_keycode == KEY_F5:
+		toggle_cheats()
+		get_viewport().set_input_as_handled()
+	elif cheats_open and e.is_action_pressed("ui_cancel"):
+		close_cheats()
+		get_viewport().set_input_as_handled()
+	elif menu_open and e.is_action_pressed("ui_cancel"):
 		close_pause()
 		get_viewport().set_input_as_handled()
 	elif shop_open and (e.is_action_pressed("ui_cancel") or e.is_action_pressed("interact")):
@@ -915,7 +946,7 @@ func _process(delta: float) -> void:
 		loose = w.hip if w.has("scope") and not p.is_aiming() else w.spread
 		loose *= 0.6 if p.is_crouched() else (1.5 if p.mv == p.MV_AIR else 1.0)
 	_reticle.spread = loose / deg_to_rad(maxf(p.rig.cam.fov, 1.0))
-	_reticle.show_cross = not p.scoped and not shop_open and not menu_open and not st.dead and not wheel.open and p.emote() < 0
+	_reticle.show_cross = not p.scoped and not shop_open and not menu_open and not cheats_open and not st.dead and not wheel.open and p.emote() < 0
 	_scope.visible = p.scoped and p.rig.first_person()
 
 	_update_hotbar(p)
@@ -1037,7 +1068,7 @@ func _process(delta: float) -> void:
 			var kills := UI.label(22, UI.SAND, true)
 			kills.text = "%d" % r.st.kills
 			_scores_grid.add_child(kills)
-	_help.visible = Input.is_action_pressed("help") and not _scores.visible and not shop_open and not menu_open
+	_help.visible = Input.is_action_pressed("help") and not _scores.visible and not shop_open and not menu_open and not cheats_open
 
 	_drug_screen(p, delta)
 	_update_pings(p, delta)
