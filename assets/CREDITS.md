@@ -24,7 +24,7 @@ Downloaded from https://github.com/google/fonts/tree/main/ofl/barlowcondensed.
 
 ## Party song (`assets/music/`)
 
-Not included in the repository's licensing and not ours to give away: whoever runs a
-build puts their own copy of the party song in `assets/music/brazil.ogg` (or `.mp3`/`.wav`).
-It is for playing with friends and must not be distributed with the game. With no file there,
-the beach party plays a funk loop synthesized in `autoload/sfx.gd`.
+`brazil.mp3` is "Brazil" by A.M.C. It is not ours and not licensed for this project: it is
+here for playing with friends and nothing more, so take it out before the game goes anywhere
+beyond that. Without a file at `assets/music/brazil.{ogg,mp3,wav}` the beach party plays a
+funk loop synthesized in `autoload/sfx.gd`.

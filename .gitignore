@@ -4,6 +4,3 @@ build/
 
 # Scratch worktrees used by coding agents
 .claude/worktrees/
-
-# The beach party song: private, supplied by whoever runs the build (see assets/CREDITS.md)
-assets/music/
