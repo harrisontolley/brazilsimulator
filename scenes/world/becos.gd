@@ -28,6 +28,8 @@ var plots := {1: [], 3: []}
 
 ## Everyone who asks: [{band, x, z0, z1, mouth, vendor, stands: [crowd index], ...}]
 static var bocas: Array = []
+## Where planks were laid across a lane, for anyone who wants to look at one.
+static var planks: Array = []
 
 var _rng := RandomNumberGenerator.new()
 var _bricks := 0
@@ -54,6 +56,7 @@ func _stand(at: Vector3, yaw: float, idle: int, arch: String, opts: Dictionary, 
 func _ready() -> void:
 	_rng.seed = 5150
 	bocas.clear()
+	planks.clear()
 	_init_kit()
 	var lit := 0
 	for band in [1, 3]:
@@ -202,6 +205,7 @@ func _ladders(band: int, cx: float, z: Vector2) -> void:
 	if left > 0.0 and absf(left - right) < 0.1 and left <= CLIMBABLE and _rng.randf() < 0.75:
 		var pz := mid + _rng.randf_range(-6.0, 6.0)
 		_block(Vector3(cx, left + 0.06, pz), Vector3(Layout.ALLEY_HALF * 2.0 + 1.6, 0.12, 0.8), WOOD.darkened(0.2))
+		planks.append(Vector3(cx, left + 0.06, pz))
 	# Furniture on the roofs either side.
 	for roof in [[-1.0, left], [1.0, right]]:
 		var h: float = roof[1]
@@ -317,7 +321,7 @@ func _cells() -> void:
 		_box(Vector3(wall_x + into * 0.1, 1.0, cz), Vector3(0.06, 0.16, 0.5), Color(0.5, 0.5, 0.52))
 		_box(Vector3(wall_x + into * 0.12, 1.15, cz + 0.3), Vector3(0.1, 0.14, 0.1), Color(0.8, 0.65, 0.1))
 		_glow(Vector3(wall_x + into * 0.15, 2.5, cz), Vector3(0.14, 0.14, 0.14), Color(1.0, 0.1, 0.05))
-		_sign("ENTREGA", Vector3(wall_x + into * 0.02, 2.2, cz), 70, Color(0.9, 0.9, 0.9), -PI / 2.0 * side)
+		_sign("ENTREGA", Vector3(wall_x + into * 0.02, 2.75, cz), 70, Color(0.9, 0.9, 0.9), -PI / 2.0 * side)
 		Places.cells.append({"door": Vector3(wall_x + into * 0.8, 0.0, cz), "face": Vector3(into, 0, 0)})
 
 
