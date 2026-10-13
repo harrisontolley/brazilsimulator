@@ -4,7 +4,7 @@ config_version=5
 [application]
 
 config/name="Brazil Simulator"
-config/version="0.1.1"
+config/version="0.1.2"
 run/main_scene="res://scenes/main_menu.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")
 

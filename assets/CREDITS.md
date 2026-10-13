@@ -21,3 +21,10 @@ CC0 needs no credit; it is given here so the next person knows where they came f
 **Barlow Condensed** (SemiBold and Bold) by Jeremy Tribby and the Barlow Project Authors
 (https://github.com/jpt/barlow), under the SIL Open Font License 1.1: see `assets/fonts/OFL.txt`.
 Downloaded from https://github.com/google/fonts/tree/main/ofl/barlowcondensed.
+
+## Party song (`assets/music/`)
+
+Not included in the repository's licensing and not ours to give away: whoever runs a
+build puts their own copy of the party song in `assets/music/brazil.ogg` (or `.mp3`/`.wav`).
+It is for playing with friends and must not be distributed with the game. With no file there,
+the beach party plays a funk loop synthesized in `autoload/sfx.gd`.

@@ -5,6 +5,7 @@ extends "res://scenes/world/world_kit.gd"
 const Places := preload("res://scenes/world/places.gd")
 const Kit := preload("res://scenes/characters/char_kit.gd")
 const City := preload("res://scenes/world/city.gd")
+const Festa := preload("res://scenes/world/festa.gd")
 
 const SAND := Color(0.86, 0.74, 0.5)
 const LENGTH := 620.0
@@ -55,6 +56,7 @@ func _ready() -> void:
 	_instances(_ball(1.0, 2.0, 8), _vertex_mat(), _balls, _ball_tints)
 	_flush()
 	add_child(City.new())
+	add_child(Festa.new())
 	# Batucada wherever there is a samba circle.
 	for roda in DB.RODAS:
 		var e := Sfx.emitter("samba", 1.0, 7.0, 75.0)

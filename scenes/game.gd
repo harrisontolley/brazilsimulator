@@ -1703,6 +1703,8 @@ func _trip(delta: float) -> void:
 		for pid in players:
 			if players[pid].is_loved():
 				spots.append(players[pid].global_position)
+		# The beach party is always on.
+		spots.append(DB.FESTA_POS)
 		crowd.set_party(spots)
 
 	# Doce: loot that was never there.

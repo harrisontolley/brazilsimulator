@@ -12,8 +12,14 @@ const VOICES := 32
 ## How many different syllables people mumble in.
 const BABBLE := 7
 
+## Where the beach party's song goes, in the order they are tried. Not shipped with the game:
+## whoever has the file drops it here, and without one the party gets a synthesized funk loop.
+const SONG_PATHS := ["res://assets/music/brazil.ogg", "res://assets/music/brazil.mp3", "res://assets/music/brazil.wav"]
+
 ## 0..1, set by whoever knows it is raining.
 var rain := 0.0
+## True when "festa" is the real song and not the stand-in.
+var song_is_file := false
 
 var _streams := {}
 var _pool: Array[AudioStreamPlayer3D] = []
@@ -24,6 +30,7 @@ var _task := -1
 var _horn_t := 0.0
 var _muffled := false
 var _low: AudioEffectLowPassFilter
+var _song: AudioStream
 
 
 func _ready() -> void:
@@ -40,8 +47,37 @@ func _ready() -> void:
 		p.volume_db = -80.0
 		add_child(p)
 		_beds[bed] = p
+	_song = _load_song()
+	song_is_file = _song != null
 	# Synthesis takes a second or two; do it off the main thread while the menu is up.
 	_task = WorkerThreadPool.add_task(_build)
+
+
+## The party song from assets/music, looping, or null if nobody has put one there. Goes
+## through the importer when the file has been imported, and reads the raw file when not.
+func _load_song() -> AudioStream:
+	for path in SONG_PATHS:
+		var stream: AudioStream = null
+		if ResourceLoader.exists(path):
+			stream = load(path) as AudioStream
+		elif FileAccess.file_exists(path):
+			var bytes := FileAccess.get_file_as_bytes(path)
+			match path.get_extension():
+				"ogg":
+					stream = AudioStreamOggVorbis.load_from_buffer(bytes)
+				"mp3":
+					var mp3 := AudioStreamMP3.new()
+					mp3.data = bytes
+					stream = mp3
+		if stream == null:
+			continue
+		if stream is AudioStreamWAV:
+			stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
+			stream.loop_end = int(stream.get_length() * stream.mix_rate)
+		elif "loop" in stream:
+			stream.loop = true
+		return stream
+	return null
 
 
 func _exit_tree() -> void:
@@ -247,6 +283,13 @@ func _build() -> void:
 	made["em_trenzinho"] = _wav(_tune(116.0, [0, 4, 8, 12, 16, 20, 24, 28], [12, 28], 2,
 			{0: 48, 4: 52, 8: 55, 12: 60, 16: 50, 20: 53, 24: 55, 28: 62},
 			{0: 72, 4: 72, 8: 76, 12: 79, 13: 79, 16: 74, 20: 74, 24: 77, 28: 81, 29: 81}), true)
+	# The beach party: the real song if there is one, else a funk loop of our own.
+	if _song != null:
+		made["festa"] = _song
+	else:
+		made["festa"] = _wav(_tune(132.0, [0, 6, 8, 14, 16, 22, 24, 30], [4, 12, 20, 28], 2,
+				{0: 45, 6: 45, 8: 48, 14: 43, 16: 45, 22: 45, 24: 50, 28: 48},
+				{0: 76, 3: 79, 6: 81, 8: 79, 11: 76, 14: 74, 16: 76, 19: 79, 22: 83, 24: 81, 27: 79, 30: 74}), true)
 	made["clap"] = _wav(_clap(), false)
 	made["pou"] = _wav(_pou(), false)
 	made["whoosh"] = _wav(_whoosh(), false)

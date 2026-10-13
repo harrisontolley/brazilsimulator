@@ -214,6 +214,11 @@ const BAILE_POS := Vector3(66, 9, 157)
 const BOCA_POS := Vector3(-120, 12.2, 162.5)
 ## Samba circles on the promenade.
 const RODAS := [Vector3(40, 0, 45.5), Vector3(-195, 0, 45.5), Vector3(215, 0, 45.5)]
+## The beach party: where the booth stands, what is left lying around it, and how many
+## of those the host keeps on the sand.
+const FESTA_POS := Vector3(125, 0, 6)
+const FESTA_LOOT := ["bala", "bala", "bala", "lanca", "doce", "cocaine", "ketamine"]
+const FESTA_STOCK := 8
 const CAMPINHO_POS := Vector3(-46, 15, 172.5)
 ## A clean shirt: nobody is looking for someone dressed like that.
 const CLOTHES_PRICE := 50

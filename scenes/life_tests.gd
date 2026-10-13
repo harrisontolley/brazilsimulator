@@ -11,8 +11,9 @@ const Emotes := preload("res://scenes/characters/emotes.gd")
 
 ## What _cast_of(4242) came to before the wheel was built. The last number is where people on
 ## foot have their lanes, which moved when the alleys were cut and furnished; the first two,
-## who everybody is and who is doing what with whom, are as they always were.
-const CAST := [281228236, 438102235, 2604204798]
+## who everybody is and who is doing what with whom, are as they always were. (It moved
+## again when the beach party's booth and speakers went up on the sand.)
+const CAST := [281228236, 438102235, 2097135075]
 
 
 static func out_dir() -> String:
@@ -67,6 +68,8 @@ static func run(g: Node, what: String) -> bool:
 			await _emote_shots(g)
 		"gallery":
 			await _gallery(g)
+		"festa":
+			await _festa(g)
 		"arsenal", "shotgun", "sniper", "rocket", "grenade", "molotov":
 			await _arsenal(g, what)
 		_:
@@ -1191,6 +1194,59 @@ static func _cast_of(g: Node, seed_value: int) -> Array:
 		if gr.kind <= c.acts.PHOTO:
 			groups.append([gr.kind, gr.n, gr.first, gr.seed])
 	return [hash(dice), hash(groups), hash(far)]
+
+
+## The beach party: people dancing round the booth, drugs lying about that come back when
+## they are taken, the song going, and nothing of the beach's already in the way.
+static func _festa(g: Node) -> void:
+	var c: Vector3 = DB.FESTA_POS
+	var crowd = g.crowd
+	var bad: Array = []
+	if await _until(g, 15.0, func(): return MatchState.running) < 0.0:
+		bad.append("match never started")
+	await _wait(g, 3.0)
+	var dancers := 0
+	for i in crowd.count:
+		if crowd._idle[i] in [Kit.DANCE, Kit.CHEER, Kit.DRINK, Kit.CLAP] and Vector2(crowd.pos[i].x - c.x, crowd.pos[i].z - c.z).length() < 12.0:
+			dancers += 1
+	if dancers < 25:
+		bad.append("only %d people at the party" % dancers)
+
+	var here := func() -> Array:
+		var ids: Array = []
+		for id in g.drops:
+			var d: Dictionary = g.drops[id]
+			if d.money == 0 and d.pos.distance_to(c) < 14.0 and d.items.keys()[0] in DB.FESTA_LOOT:
+				ids.append(id)
+		return ids
+	var filled: float = await _until(g, 25.0, func(): return here.call().size() >= DB.FESTA_STOCK)
+	if filled < 0.0:
+		bad.append("only %d drops on the ground" % here.call().size())
+	else:
+		var ids: Array = here.call()
+		for k in 2:
+			g.bcast("cl_drop_remove", [ids[k]])
+		if await _until(g, 25.0, func(): return here.call().size() >= DB.FESTA_STOCK) < 0.0:
+			bad.append("not restocked: %d on the ground" % here.call().size())
+
+	var made: float = await _until(g, 20.0, func(): return Sfx.stream("festa") != null)
+	if made < 0.0:
+		bad.append("no song")
+	var playing := false
+	for n in g.world.get_children():
+		if "_beat" in n and n._beat != null:
+			playing = n._beat.playing
+	if not playing:
+		bad.append("song not playing")
+
+	var near := 0
+	for s in DB.solids:
+		if Vector2(s.get_center().x - c.x, s.get_center().z - c.z).length() < 11.0:
+			near += 1
+	# The booth, six speakers, a cooler and a drum are ours.
+	if near > 9:
+		bad.append("%d things of the beach's own in the way" % (near - 9))
+	g.debug_result("festa", bad.is_empty(), "%s; %d dancing, %s" % ["; ".join(bad) if not bad.is_empty() else "fine", dancers, "the real song" if Sfx.song_is_file else "the stand-in tune"])
 
 
 ## Nobody who was already in the crowd is anybody else for the wheel having been built, and
