@@ -12,6 +12,8 @@ const Traffic := preload("res://scenes/world/traffic.gd")
 const Events := preload("res://scenes/world/events.gd")
 const Balls := preload("res://scenes/world/balls.gd")
 const Motos := preload("res://scenes/world/motos.gd")
+const Drag := preload("res://scenes/player/drag.gd")
+const Becos := preload("res://scenes/world/becos.gd")
 const Crowd := preload("res://scenes/crowd/crowd_manager.gd")
 const Police := preload("res://scenes/police/police_manager.gd")
 const Dogs := preload("res://scenes/crowd/dog_manager.gd")
@@ -55,6 +57,7 @@ var world: Node3D
 var ambient: Node3D
 var traffic: Node3D
 var motos: Node3D
+var drag: Node3D
 var balls: Node3D
 var events: Node3D
 var crowd: Node3D
@@ -88,6 +91,7 @@ var _air := {}          # pid -> seconds of breath left
 var _last_hit := {}
 var _till_ready := {}   # vendor index -> match time its till is full again
 var _reload := {}       # pid -> [weapon, seconds left]
+var _brick_ready := {}   # pile -> match time it has another brick
 var _ko_immune := {}    # pid -> match time until which they cannot be knocked out again
 var _robbed := {}       # pid -> match time until which their pockets are already turned out
 var _bicho_round := 0
@@ -110,6 +114,9 @@ func _ready() -> void:
 	motos = Motos.new()
 	motos.name = "Motos"
 	add_child(motos)
+	drag = Drag.new()
+	drag.name = "Drag"
+	add_child(drag)
 	balls = Balls.new()
 	balls.name = "Balls"
 	add_child(balls)
@@ -478,6 +485,260 @@ func _debug_test(what: String) -> void:
 			await get_tree().create_timer(0.3).timeout
 			var woke: bool = crowd.state[i] != Crowd.KO
 			debug_result("ko", out and took == 300 and woke, "punches %d took %d woke %s" % [punches, took, woke])
+		"club":
+			# The new blunt things: each one lays an NPC out for 45 s and a player for 30.
+			crowd.debug_clear()
+			var at := Vector3(0, 0, 20)
+			var report := ""
+			var all_ok := true
+			for item in ["porrete", "frigideira", "tijolo", "taco"]:
+				var i: int = crowd.debug_stand(at, 0.0)
+				crowd.hp[i] = 900.0
+				local_player.global_position = at + Vector3(0, 0.2, -1.2)
+				local_player.rotation.y = PI
+				_give(local_player.st, item, 1)
+				local_player.st.equipped = item
+				var o := at + Vector3(0, 1.6 * crowd._scale[i], -1.2)
+				var swings := 0
+				while crowd.state[i] != Crowd.KO and swings < 60:
+					_last_attack.clear()
+					srv_attack(o, Vector3(0, 0, 1))
+					swings += 1
+				var npc_out: float = crowd._ko[i][0] - MatchState.time if crowd.state[i] == Crowd.KO else -1.0
+				var hurt := 0
+				while local_player.st.ko <= 0.0 and hurt < 60:
+					_ko_immune.clear()
+					srv_damage(local_player.id, 1.0, -1, DB.ZONE_HEAD, DB.ITEMS[item])
+					hurt += 1
+				var player_out: float = local_player.st.ko
+				local_player.st.ko = 0.0
+				var ok: bool = absf(npc_out - 45.0) < 1.0 and absf(player_out - 30.0) < 0.5 and DB.ITEMS[item].get("sound", "") != ""
+				all_ok = all_ok and ok
+				report += " %s swings %d npc %.0f player %.0f;" % [item, swings, npc_out, player_out]
+				crowd.state[i] = Crowd.GONE
+			debug_result("club", all_ok, report)
+		"drag":
+			# Out cold, hauled twenty metres on a rope, thrown, picked up again and left to wake.
+			crowd.debug_clear()
+			var at := Vector3(0, 0, 20)
+			var i: int = crowd.debug_stand(at, 0.0)
+			crowd.hp[i] = 900.0
+			crowd.money[i] = 50
+			local_player.global_position = at + Vector3(0, 0.2, -1.2)
+			local_player.rotation.y = PI
+			var o := at + Vector3(0, 1.6 * crowd._scale[i], -1.2)
+			_give(local_player.st, "porrete", 1)
+			local_player.st.equipped = "porrete"
+			var swings := 0
+			while crowd.state[i] != Crowd.KO and swings < 40:
+				_last_attack.clear()
+				srv_attack(o, Vector3(0, 0, 1))
+				swings += 1
+			local_player.global_position = crowd.pos[i] + Vector3(0, 0.2, -1.5)
+			drag.srv_drag(Drag.NPC, i)
+			await get_tree().create_timer(0.3).timeout
+			var held: bool = drag.is_hauling(1) and local_player.dragging and drag._puppet_of.has(i)
+			var start: Vector3 = crowd.pos[i]
+			var worst := 0.0
+			for step in 40:
+				local_player.global_position += Vector3(0, 0, -0.5)
+				await get_tree().create_timer(0.05).timeout
+				worst = maxf(worst, Vector2(crowd.pos[i].x - local_player.global_position.x, crowd.pos[i].z - local_player.global_position.z).length())
+			var trailed: float = start.distance_to(crowd.pos[i])
+			var rope_ok: bool = worst < Drag.ROPE * 1.5 + 0.2 and trailed > 8.0
+			# Throw it forward.
+			var before: Vector3 = crowd.pos[i]
+			drag.srv_throw(Vector3(0, 0.2, -1))
+			await get_tree().create_timer(2.5).timeout
+			var thrown: float = before.distance_to(crowd.pos[i])
+			var landed: bool = not drag.is_hauling(1) and drag.flung.is_empty() and not drag._puppet_of.has(i) and crowd.state[i] == Crowd.KO
+			var throw_ok: bool = thrown > 3.0 and thrown < 14.0
+			# And hauled again, only to come round on the rope.
+			local_player.global_position = crowd.pos[i] + Vector3(0, 0.2, -1.5)
+			drag.srv_drag(Drag.NPC, i)
+			await get_tree().create_timer(0.3).timeout
+			var again: bool = drag.is_hauling(1)
+			crowd._ko[i][0] = MatchState.time
+			await get_tree().create_timer(0.6).timeout
+			var woke: bool = crowd.state[i] != Crowd.KO and not drag.is_hauling(1) and not local_player.dragging and not drag._puppet_of.has(i)
+			# A player in the same fix: spawned, floored, hauled and let go.
+			cl_spawn(2, "Vitima", local_player.global_position + Vector3(0, 0, 3), Player.fresh_state())
+			var v = players[2]
+			v.global_position = local_player.global_position + Vector3(0, 0, 1.5)
+			v.net_pos = v.global_position
+			srv_floor(2, 30.0)
+			drag.srv_drag(Drag.PLAYER, 2)
+			await get_tree().create_timer(0.3).timeout
+			var p_held: bool = drag.is_hauling(1) and v.dragged
+			var v0: Vector3 = v.global_position
+			for step in 20:
+				local_player.global_position += Vector3(0, 0, -0.5)
+				await get_tree().create_timer(0.05).timeout
+			var p_trailed: float = v0.distance_to(v.global_position)
+			drag.srv_drop()
+			await get_tree().create_timer(0.3).timeout
+			var p_free: bool = not v.dragged and not drag.is_hauling(1)
+			var ok: bool = held and rope_ok and landed and throw_ok and again and woke and p_held and p_trailed > 5.0 and p_free
+			debug_result("drag", ok, "swings %d held %s worst %.2f trailed %.1f landed %s thrown %.1f again %s woke %s | player held %s trailed %.1f free %s" % [swings, held, worst, trailed, landed, thrown, again, woke, p_held, p_trailed, p_free])
+		"feed":
+			# What a forced dose does to somebody out cold: sleep longer, run, rage, dance, die.
+			crowd.debug_clear()
+			var at := Vector3(0, 0, 20)
+			var report := ""
+			var all_ok := true
+			local_player.global_position = at + Vector3(0, 0.2, -1.2)
+			for pair in [["rivotril", "sleep"], ["cocaine", "run"], ["bomba", "rage"], ["bala", "dance"]]:
+				var i: int = crowd.debug_stand(at, 0.0)
+				crowd.hp[i] = 100.0
+				crowd.srv_damage_npc(i, 1.0, 1, DB.ZONE_HEAD, {"ko": true, "ko_head": 1.0, "ko_npc": 20.0})
+				_give(local_player.st, pair[0], 2)
+				srv_feed(Drag.NPC, i, pair[0])
+				var woke_at: float = crowd._ko[i][0] - MatchState.time if crowd._ko.has(i) else -1.0
+				crowd._ko[i][0] = MatchState.time
+				await get_tree().create_timer(0.5).timeout
+				var s: int = crowd.state[i]
+				var ok: bool = false
+				match pair[1]:
+					"sleep": ok = woke_at > 30.0
+					"run": ok = s == Crowd.PARADE or s == Crowd.FLEE
+					"rage": ok = s == Crowd.HOSTILE
+					"dance": ok = s == Crowd.PARADE
+				all_ok = all_ok and ok and local_player.st.inv.get(pair[0], 0) == 1
+				report += " %s state %d out %.0f;" % [pair[0], s, woke_at]
+				crowd.state[i] = Crowd.GONE
+			# Three doses is one too many.
+			var j: int = crowd.debug_stand(at, 0.0)
+			crowd.hp[j] = 100.0
+			crowd.srv_damage_npc(j, 1.0, 1, DB.ZONE_HEAD, {"ko": true, "ko_head": 1.0, "ko_npc": 60.0})
+			_give(local_player.st, "weed", 3)
+			for k in 3:
+				srv_feed(Drag.NPC, j, "weed")
+			var dead: bool = crowd.state[j] == Crowd.DEAD
+			# A player as the victim.
+			cl_spawn(2, "Vitima", at + Vector3(0, 0.2, 1.0), Player.fresh_state())
+			srv_floor(2, 30.0)
+			_give(local_player.st, "cocaine", 1)
+			srv_feed(Drag.PLAYER, 2, "cocaine")
+			var dosed: bool = players[2].st.drugs.has("cocaine")
+			debug_result("feed", all_ok and dead and dosed, report + " overdose dead %s player dosed %s" % [dead, dosed])
+		"alleys":
+			# Every lane is open, clear of the lots, walkable on the plan, and has nobody stuck in it.
+			var bad := ""
+			var count := 0
+			for band in [1, 3]:
+				var xs: Array = Layout.ALLEY_X if band == 1 else Layout.ALLEY_B_X
+				var z_mid: float = 86.0 if band == 1 else 121.0
+				var z_a: float = 74.0 if band == 1 else 112.0
+				var z_b: float = 98.0 if band == 1 else 130.0
+				for cx in xs:
+					count += 1
+					if not Layout.lot_over(0 if band == 1 else 1, cx - 1.6, cx + 1.6).is_empty():
+						bad += " lot@%d" % cx
+					if not Layout.walkable(Vector3(cx, 0, z_mid)):
+						bad += " plan@%d" % cx
+					if Nav.blocked(Vector3(cx, 0, z_mid)) or not Nav.clear(Vector3(cx, 0, z_a), Vector3(cx, 0, z_b)):
+						bad += " nav@%d" % cx
+			# From the sidewalk to the back street the quick way is straight through.
+			var route: PackedVector3Array = Nav.path(Vector3(-90, 0, 72), Vector3(-90, 0, 104))
+			var short: float = Nav.length(Vector3(-90, 0, 72), route)
+			var stuck := 0
+			var where := ""
+			for st in Places.stands:
+				if st.pos.y < 1.0 and Nav.blocked(st.pos):
+					stuck += 1
+					where += " %s/%s" % [st.pos, st.arch]
+			var ok: bool = bad == "" and short < 40.0 and stuck == 0 and Becos.bocas.size() == 3 and Places.ladders.size() >= 8 and Places.cells.size() == 2
+			debug_result("alleys", ok, "%d alleys%s route %.0f m, stands stuck %d%s, bocas %d, ladders %d, cells %d" % [count, bad, short, stuck, where, Becos.bocas.size(), Places.ladders.size(), Places.cells.size()])
+		"ladder":
+			# Walk into the foot of a ladder, hold forward, end up on the roof; walk off it.
+			var l: Dictionary = Places.ladders[0]
+			local_player.global_position = l.pos + l.out * 1.2 + Vector3(0, 0.2, 0)
+			local_player.rotation.y = Kit.face(-l.out)
+			await get_tree().create_timer(0.3).timeout
+			Input.action_press("move_forward")
+			var t := 0.0
+			while t < 14.0 and local_player.global_position.y < l.top - 0.05:
+				await get_tree().create_timer(0.1).timeout
+				t += 0.1
+			Input.action_release("move_forward")
+			await get_tree().create_timer(0.6).timeout
+			var up: float = local_player.global_position.y
+			var on_roof: bool = up > l.top - 0.4 and up < l.top + 1.0 and local_player._ladder < 0
+			debug_result("ladder", on_roof, "top %.1f reached %.1f in %.1f s" % [l.top, up, t])
+		"faccao_shop":
+			# Everything is on the menu at the boca, until their crew has a quarrel with you.
+			for cop in police.cops:
+				cop.pos = Vector3(0, 0, 45)
+			await get_tree().create_timer(0.8).timeout
+			var cc: Dictionary = threats.crew_of(0)
+			cc.alert = 0.0
+			cc.flare = 999.0
+			var vi := DB.VENDORS.size() - 3
+			var v: Dictionary = DB.VENDORS[vi]
+			local_player.global_position = v.pos + Vector3(0.0, 0.2, -1.0)
+			local_player.st.money = 20000
+			var bought := 0
+			for d in v.stock:
+				srv_buy(vi, d)
+			for d in DB.DRUGS:
+				if local_player.st.inv.get(d, 0) > 0:
+					bought += 1
+			var calm: bool = threats.crew_calm(0)
+			cc.hostile = true
+			var money: int = local_player.st.money
+			srv_buy(vi, "cocaine")
+			var refused: bool = local_player.st.money == money
+			debug_result("faccao_shop", bought == DB.DRUGS.size() and calm and refused, "bought %d of %d drugs, calm %s, refused at war %s" % [bought, DB.DRUGS.size(), calm, refused])
+		"turf":
+			# Armed in their lane: a warning, then they fire; they come back after being killed.
+			for cop in police.cops:
+				cop.pos = Vector3(0, 0, 45)
+			await get_tree().create_timer(0.8).timeout
+			var c: Dictionary = threats.crew_of(0)
+			c.alert = 0.0
+			c.flare = 999.0
+			local_player.global_position = c.b.mouth + Vector3(0, 0.2, 4.0)
+			_give(local_player.st, "pistol", 1)
+			local_player.st.equipped = "pistol"
+			var t := 0.0
+			while t < 14.0 and not c.hostile:
+				await get_tree().create_timer(0.25).timeout
+				t += 0.25
+			var warned: bool = c.warned.get(1, false)
+			var fired_on: int = 0
+			for i in c.soldiers:
+				if crowd.state[i] == Crowd.HOSTILE:
+					fired_on += 1
+			# Kill one, walk away, wait out the clock.
+			var i0: int = c.soldiers[0]
+			crowd.srv_damage_npc(i0, 9999.0, 1)
+			var killed: bool = crowd.state[i0] == Crowd.DEAD
+			local_player.global_position = Vector3(0, 0.2, 60)
+			local_player.st.equipped = "fists"
+			c.died[i0] = MatchState.time - 200.0
+			await get_tree().create_timer(1.0).timeout
+			var back: bool = crowd.state[i0] == Crowd.AMBIENT and crowd.hp[i0] > 0.0
+			debug_result("turf", c.hostile and warned and fired_on >= 2 and killed and back, "hostile %s warned %s in %.1f s, %d soldiers up, killed %s back %s" % [c.hostile, warned, t, fired_on, killed, back])
+		"ransom":
+			# Out cold, hauled to the steel door and handed over.
+			crowd.debug_clear()
+			var cell: Dictionary = Places.cells[0]
+			var at: Vector3 = cell.door + cell.face * 1.0
+			var i: int = crowd.debug_stand(at + Vector3(0, 0, -1.0), 0.0)
+			crowd.money[i] = 120
+			crowd.srv_damage_npc(i, 1.0, 1, DB.ZONE_HEAD, {"ko": true, "ko_head": 1.0, "ko_npc": 60.0})
+			local_player.global_position = at + Vector3(0, 0.2, 0.3)
+			drag.srv_drag(Drag.NPC, i)
+			await get_tree().create_timer(0.3).timeout
+			var hauled: bool = drag.is_hauling(1)
+			var before: int = local_player.st.money
+			var worth: int = drag.ransom_for(Drag.NPC, i)
+			local_player.global_position = cell.door + cell.face * 0.8 + Vector3(0, 0.2, 0)
+			await get_tree().create_timer(0.3).timeout
+			drag.srv_ransom()
+			await get_tree().create_timer(0.3).timeout
+			var paid: int = local_player.st.money - before
+			debug_result("ransom", hauled and paid == worth and paid >= 150 and crowd.state[i] == Crowd.GONE and not drag.is_hauling(1), "hauled %s paid %d (worth %d) state %d" % [hauled, paid, worth, crowd.state[i]])
 		"weapons":
 			# Each weapon in the hand, seen from the side, then down the sights.
 			local_player.global_position = Vector3(-20, 0.2, 45)
@@ -973,6 +1234,7 @@ func srv_client_ready(pname: String) -> void:
 		drop_data.append([id, drops[id].pos, drops[id].money, drops[id].items])
 	cl_init.rpc_id(pid, MatchState.seed_value, MatchState.duration, MatchState.time, MatchState.ended, _players_data(), crowd.snapshot(), drop_data, motos.snapshot(), events.snapshot())
 	roleta.cl_sync.rpc_id(pid, roleta.results)
+	drag.cl_sync.rpc_id(pid, drag.snapshot())
 	ready_peers.append(pid)
 	bcast("cl_spawn", [pid, pname.left(16), DB.spawn_point(), Player.fresh_state()])
 
@@ -1001,6 +1263,7 @@ func cl_match_start(seed_value: int, duration: float, pdata: Array) -> void:
 	dogs.setup(seed_value, crowd)
 	traffic.setup(seed_value)
 	motos.reset()
+	drag.reset()
 	yacht.reset()
 	roleta.reset()
 	sea_patrol.reset()
@@ -1558,18 +1821,19 @@ func _srv_emote_watchers() -> void:
 # --- combat ---
 
 ## Hurts a player. A bare fist to the head may put them out cold instead; returns whether it did.
-func srv_damage(pid: int, amount: float, attacker: int, zone := 0, ko := false) -> bool:
+func srv_damage(pid: int, amount: float, attacker: int, zone := 0, weapon := {}) -> bool:
 	var p = players.get(pid)
 	if p == null or p.st.dead or MatchState.ended or p.st.get("hide", -1) >= 0:
 		return false
 	# Nobody keeps dancing through that.
 	p.st.emote = -1
-	if ko and zone == DB.ZONE_HEAD and p.st.ko <= 0.0 and MatchState.time > _ko_immune.get(pid, 0.0) and randf() < DB.KO_CHANCE:
-		p.st.ko = DB.KO_PLAYER
-		_ko_immune[pid] = MatchState.time + DB.KO_PLAYER + DB.KO_IMMUNE
+	if p.st.ko <= 0.0 and MatchState.time > _ko_immune.get(pid, 0.0) and randf() < DB.ko_chance(weapon, zone):
+		var out: float = weapon.get("ko_time", DB.KO_PLAYER)
+		p.st.ko = out
+		_ko_immune[pid] = MatchState.time + out + DB.KO_IMMUNE
 		motos.srv_release(pid)
 		push_state(p)
-		bcast("cl_ko", [p.global_position + Vector3(0, 0.6, 0), DB.KO_PLAYER])
+		bcast("cl_ko", [p.global_position + Vector3(0, 0.6, 0), out])
 		return true
 	p.st.hp -= amount * p.damage_taken_mult()
 	if p.st.hp <= 0.0:
@@ -1751,7 +2015,7 @@ func _srv_strike(p, item: String, origin: Vector3, dir: Vector3, reach: float, k
 			bcast("cl_fx", [origin, from + dir * truck_t, w.melee, DB.WHO_PLAYER, pid, DB.WHO_NONE, -1, 0, item, mode])
 			return struck
 		var res := 0
-		var ko: bool = w.get("ko", false)
+		var ko: Dictionary = w if w.get("ko", false) else {}
 		if hit.type != DB.WHO_NONE and hit.zone == DB.ZONE_HEAD:
 			res |= DB.FX_HEAD
 			if w.melee:
@@ -1991,7 +2255,7 @@ func cl_fx(from: Vector3, to: Vector3, melee: bool, src_type: int, src_id: int, 
 		if lead:
 			Sfx.play(w.get("sound", "shot"), from, 4.0)
 	elif hit_type != DB.WHO_NONE:
-		Sfx.play("punch", to)
+		Sfx.play(w.get("sound", "punch"), to)
 	if hit_type != DB.WHO_NONE and hit_type != DB.WHO_PLAYER and hit_type != DB.WHO_DOG and res & DB.FX_KILL == 0 and lead:
 		Sfx.play("grunt", to, -3.0, 0.8 + (hit_id * 7 % 50) * 0.01)
 	if res & DB.FX_HEAD:
@@ -2212,6 +2476,12 @@ func _setup_interact() -> void:
 	interaction.on(&"mount", func(a: Dictionary) -> void: to_server("srv_mount", [a.arg], motos))
 	interaction.on(&"pickup", func(a: Dictionary) -> void: to_server("srv_pickup", [a.arg]))
 	interaction.on(&"rob_player", func(a: Dictionary) -> void: to_server("srv_rob_player", [a.arg]))
+	interaction.on(&"climb_ladder", func(a: Dictionary) -> void: local_player.grab_ladder(a.arg))
+	interaction.on(&"brick", Callable(), _srv_brick)
+	interaction.on(&"drag_npc", func(a: Dictionary) -> void: to_server("srv_drag", [Drag.NPC, a.arg], drag))
+	interaction.on(&"drag_player", func(a: Dictionary) -> void: to_server("srv_drag", [Drag.PLAYER, a.arg], drag))
+	interaction.on(&"drop_body", func(_a: Dictionary) -> void: to_server("srv_drop", [], drag))
+	interaction.on(&"ransom", func(_a: Dictionary) -> void: to_server("srv_ransom", [], drag))
 	interaction.provide(_offer_near)
 
 
@@ -2233,10 +2503,26 @@ func _offer_near(p, out: Array) -> void:
 		return
 	if not p.can_fight():
 		return
+	var rung := Places.ladder_near(at, 1.1)
+	if not rung.is_empty():
+		out.append(Interact.offer(&"climb_ladder", at, "climb down the ladder" if rung[1] else "climb the ladder  (or walk into it)", rung[0], 2))
+	var feed: String = ("   [G: force-feed %s]" % DB.ITEMS[p.drug_sel].name) if p.drug_sel != "" else ""
+	if drag.is_hauling(p.id):
+		var cell: int = drag.cell_near(at)
+		if cell >= 0:
+			var h: Dictionary = drag.hauls[p.id]
+			out.append(Interact.offer(&"ransom", at, "hand the body over for ransom  (about R$%d)" % drag.ransom_for(h.kind, h.id), 0, 101))
+		out.append(Interact.offer(&"drop_body", at, "drop the body" + feed, 0, 100))
+		return
 	for pid in players:
 		var v = players[pid]
 		if v != p and v.st.ko > 0.0 and not v.st.dead and at.distance_to(v.global_position) < 2.5:
+			if drag.haul_of(Drag.PLAYER, pid).is_empty():
+				out.append(Interact.offer(&"drag_player", at, "drag %s%s" % [v.pname, feed], pid, 4))
 			out.append(Interact.offer(&"rob_player", at, "go through %s's pockets" % v.pname, pid, 3, 0.8))
+	for i in crowd.out_near(at, 2.5):
+		if drag.haul_of(Drag.NPC, i).is_empty():
+			out.append(Interact.offer(&"drag_npc", at, "drag the body" + feed, i, 4))
 	var bike: int = motos.free_near(at)
 	if bike >= 0:
 		out.append(Interact.offer(&"mount", at, "take the jet ski" if motos.kind[bike] == motos.SKI else "take the moto", bike, 2))
@@ -2249,6 +2535,20 @@ func _offer_near(p, out: Array) -> void:
 			best_d = d
 	if best >= 0:
 		out.append(Interact.offer(&"pickup", at, "pick up", best, 1))
+
+
+## A brick off the pile in the alley: one at a time, and the pile does not last for ever.
+func _srv_brick(p, _a: Dictionary, arg: int) -> void:
+	if p.st.inv.get("tijolo", 0) > 0:
+		send(p.id, "cl_toast", ["You already have a brick"])
+		return
+	if MatchState.time < _brick_ready.get(arg, 0.0):
+		send(p.id, "cl_toast", ["Nothing but dust"])
+		return
+	_brick_ready[arg] = MatchState.time + 30.0
+	_give(p.st, "tijolo", 1)
+	push_state(p)
+	send(p.id, "cl_toast", ["Tijolo"])
 
 
 ## A change of clothes: whoever they were looking for, it was not someone dressed like this.
@@ -2326,6 +2626,8 @@ func _vendor_for(p, vi: int):
 	if p == null or not p.can_fight() or vi < 0 or vi >= DB.VENDORS.size():
 		return null
 	var v = DB.VENDORS[vi]
+	if v.has("crew") and not threats.crew_calm(v.crew):
+		return null
 	return v if p.global_position.distance_to(v.pos) <= VENDOR_RANGE + 1.5 else null
 
 
@@ -2345,6 +2647,8 @@ func srv_buy(vi: int, item: String) -> void:
 	if p.st.money < price or (def.type == "weapon" and p.st.inv.has(item) and not def.get("stack", false)):
 		return
 	p.st.money -= price
+	if v.has("crew"):
+		threats.note_customer(p.id)
 	match def.type:
 		"ammo": _give(p.st, item, def.amount)
 		"weapon":
@@ -2461,7 +2765,12 @@ func srv_use(item: String) -> void:
 	p.st.inv[item] -= 1
 	if p.st.inv[item] <= 0:
 		p.st.inv.erase(item)
-	# Each dose stacks tolerance; past 1.0 the hit becomes an overdose instead.
+	_srv_dose(p, item)
+
+
+## Puts a dose of `item` into player `p`, whoever it was that wanted them to have it. Each dose
+## stacks tolerance; past 1.0 the hit becomes an overdose instead.
+func _srv_dose(p, item: String) -> void:
 	var tol: float = p.st.tol.get(item, 0.0) + DB.TOLERANCE_PER_DOSE
 	p.st.tol[item] = tol
 	var def: Dictionary = DB.ITEMS[item]
@@ -2475,3 +2784,36 @@ func srv_use(item: String) -> void:
 	push_state(p)
 	if def.has("sound"):
 		bcast("cl_sound", [def.sound, p.global_position + Vector3(0, 1.2, 0)])
+
+
+## Holding somebody's nose and tipping `item` down them: a body that is out cold, or being
+## hauled. `kind` is Drag.NPC or Drag.PLAYER.
+@rpc("any_peer", "call_remote", "reliable")
+func srv_feed(kind: int, id: int, item: String) -> void:
+	var p = players.get(Net.sender())
+	if p == null or not p.can_fight() or not DB.DRUGS.has(item) or p.st.inv.get(item, 0) <= 0:
+		return
+	var at: Vector3
+	if kind == Drag.NPC:
+		if id < 0 or id >= crowd.count or crowd.state[id] != Crowd.KO:
+			return
+		at = crowd.pos[id]
+	else:
+		var v = players.get(id)
+		if v == null or v == p or v.st.ko <= 0.0 or v.st.dead:
+			return
+		at = v.global_position
+	if at.distance_to(p.global_position) > 3.5:
+		return
+	p.st.inv[item] -= 1
+	if p.st.inv[item] <= 0:
+		p.st.inv.erase(item)
+	push_state(p)
+	bcast("cl_sound", ["gulp", at + Vector3(0, 0.5, 0)])
+	Crime.report_crime(at, p.id, 2)
+	if kind == Drag.NPC:
+		crowd.srv_feed(id, item, p.id)
+	else:
+		var v = players[id]
+		_srv_dose(v, item)
+		send(id, "cl_toast", ["Somebody has made you swallow something"])

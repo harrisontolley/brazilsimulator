@@ -56,6 +56,15 @@ const EDGES: Array[float] = [BLOCK_A_Z, RUA_Z, BLOCK_B_Z, FOOT_Z, FAVELA_Z]
 const CROSS_X: Array[float] = [-225.0, -135.0, -45.0, 45.0, 135.0, 225.0]
 const STAIR_X: Array[float] = [-135.0, 45.0, 225.0]
 const CROSS_HALF := 4.0
+## Alleys cut through the two building rows: lanes of 3.2 m, not the 8 m of the streets. They
+## run from the avenida's sidewalk to the back street, and from the back street up to the foot
+## path under the favela. Kept clear of LOTS.
+const ALLEY_X: Array[float] = [-270.0, -178.0, -90.0, -32.0, 32.0, 80.0, 185.0, 270.0]
+const ALLEY_B_X: Array[float] = [-270.0, -220.0, -180.0, -85.0, 75.0, 150.0, 190.0, 270.0]
+const ALLEY_HALF := 1.6
+## Every way through each row, streets and alleys together, in order.
+const GAPS_A: Array[float] = [-270.0, -225.0, -178.0, -135.0, -90.0, -45.0, -32.0, 32.0, 45.0, 80.0, 135.0, 185.0, 225.0, 270.0]
+const GAPS_B: Array[float] = [-270.0, -220.0, -180.0, -135.0, -85.0, 45.0, 75.0, 150.0, 190.0, 225.0, 270.0]
 
 ## Favela terraces: each is TERRACE_D deep and TERRACE_H above the one below.
 const TERRACES := 6
@@ -211,7 +220,30 @@ static func band(z: float) -> int:
 
 
 static func _gaps(b: int) -> Array[float]:
-	return CROSS_X if b == 1 else STAIR_X
+	return GAPS_A if b == 1 else GAPS_B
+
+
+## Half the width of the way through at `cx`: an alley or a street.
+static func _half(b: int, cx: float) -> float:
+	return ALLEY_HALF if (ALLEY_X if b == 1 else ALLEY_B_X).has(cx) else CROSS_HALF
+
+
+## The stretches of band `b` that are buildings, as [lo, hi, lo, hi...] pairs of x.
+static func row_plots(b: int) -> Array:
+	var edges: Array = [-520.0]
+	for cx in _gaps(b):
+		edges.append(cx - _half(b, cx))
+		edges.append(cx + _half(b, cx))
+	edges.append(520.0)
+	return edges
+
+
+## Whether x is in an alley mouth of band b (1 front row, 3 back row), and which one: its x, or INF.
+static func alley_at(b: int, x: float, slack := 0.0) -> float:
+	for cx in (ALLEY_X if b == 1 else ALLEY_B_X):
+		if absf(x - cx) <= ALLEY_HALF + slack:
+			return cx
+	return INF
 
 
 static func _nearest(xs: Array[float], x: float) -> float:
@@ -231,7 +263,8 @@ static func walkable(p: Vector3) -> bool:
 		return false
 	if b % 2 == 0:
 		return true
-	return absf(p.x - _nearest(_gaps(b), p.x)) <= CROSS_HALF
+	var cx := _nearest(_gaps(b), p.x)
+	return absf(p.x - cx) <= _half(b, cx)
 
 
 ## The street-level spot nearest p: under a rooftop, that is the street in front of it.
@@ -241,7 +274,7 @@ static func snap(p: Vector3) -> Vector3:
 	var b := band(p.z)
 	if b == EDGES.size():
 		p.z = FAVELA_Z - 1.0
-	elif b % 2 == 1 and absf(p.x - _nearest(_gaps(b), p.x)) > CROSS_HALF:
+	elif b % 2 == 1 and absf(p.x - _nearest(_gaps(b), p.x)) > _half(b, _nearest(_gaps(b), p.x)):
 		var lo := EDGES[b - 1]
 		var hi := EDGES[b]
 		p.z = lo - 0.8 if p.z - lo < hi - p.z else hi + 0.8
@@ -258,7 +291,7 @@ static func next_point(from: Vector3, to: Vector3) -> Vector3:
 	if bf % 2 == 1:
 		# Inside a cross street: run to whichever end leads on.
 		var cx := _nearest(_gaps(bf), from.x)
-		if bt == bf and absf(to.x - cx) <= CROSS_HALF:
+		if bt == bf and absf(to.x - cx) <= _half(bf, cx):
 			return to
 		var lo := EDGES[bf - 1] - 1.0
 		var hi := EDGES[bf] + 1.0
@@ -280,7 +313,7 @@ static func next_point(from: Vector3, to: Vector3) -> Vector3:
 			best = cx
 			best_cost = cost
 	# Line up with the mouth of the street first, then run its length.
-	if absf(from.x - best) > CROSS_HALF - 1.0:
+	if absf(from.x - best) > _half(row, best) - 1.0:
 		return Vector3(best, 0.0, edge - 1.0 if up else edge + 1.0)
 	return Vector3(best, 0.0, far)
 

@@ -39,7 +39,8 @@ const HELP := [
 	["Left mouse", "attack; hold to draw back a throw"], ["Right mouse", "aim; look down a scope"], ["R", "reload"],
 	["1  2  3  4", "fists and blades / guns / sniper and launcher / grenades"],
 	["E (hold)", "rob: shout at them, or keep quiet over a sunbather"], ["V", "fake a shout"],
-	["F", "use, pick up, shop, hide, take a moto or a jet ski"], ["Z  X  G", "pick a drug, take it"],
+	["F", "use, pick up, shop, hide, take a moto or a jet ski, climb a ladder"], ["Z  X  G", "pick a drug, take it; next to a body out cold, force it down them"],
+	["Body out cold", "F drags it by the head (F drops it, left mouse throws it); E goes through its pockets; drag one to a steel door in an alley for ransom"],
 	["B (hold)", "emotes: point at one and let go; tap to join in, stop, or go again"],
 	["Tab", "scores"], ["Esc", "menu and settings"], ["F11", "fullscreen"],
 ]

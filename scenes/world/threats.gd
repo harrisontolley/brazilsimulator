@@ -8,6 +8,19 @@ extends Node3D
 
 const Kit := preload("res://scenes/characters/char_kit.gd")
 const Layout := preload("res://scenes/world/layout.gd")
+const Becos := preload("res://scenes/world/becos.gd")
+
+## Turf: armed or wanted in a boca's lane, you are told once, then you are shot at.
+const TURF_WARN := 3.0
+const TURF_FIRE := 7.0
+## Once nobody who is a problem has been about this long they stand down.
+const TURF_CALM := 8.0
+## A lookout lets off a rocket when the police come this close to the boca.
+const COP_ALERT := 50.0
+## Soldiers who were killed are back at their posts after this, if nobody is watching.
+const REMAN := 90.0
+## Buying from them counts as being no trouble for this long.
+const CUSTOMER := 60.0
 
 ## Walk within this of a gang with money on you and they may fancy their chances.
 const MUG_RANGE := 9.0
@@ -45,6 +58,9 @@ var _pending: Array = []  # {pid, gang, at}
 var _snatch_t := 0.0
 var _snatch_ok := {}  # pid -> match time the crew may pick them again
 var _passed := false
+var _crews: Array = []
+var _turf_t := 0.0
+var _customer := {}   # pid -> match time they stop counting as a customer
 
 
 func _ready() -> void:
@@ -75,6 +91,8 @@ func reset() -> void:
 	_gang_ok.clear()
 	_pending.clear()
 	_snatch_ok.clear()
+	_crews.clear()
+	_customer.clear()
 	_snatch_t = randf_range(SNATCH_EVERY.x, SNATCH_EVERY.y) + QUIET_START
 
 
@@ -87,6 +105,10 @@ func _process(delta: float) -> void:
 	if not multiplayer.is_server() or not MatchState.running or MatchState.ended:
 		return
 	_srv_snatch_tick(delta)
+	_turf_t -= delta
+	if _turf_t <= 0.0:
+		_turf_t = 0.25
+		_srv_turf(0.25)
 	_t -= delta
 	if _t <= 0.0:
 		_t = 0.25
@@ -95,6 +117,130 @@ func _process(delta: float) -> void:
 		if MatchState.time >= _pending[k].at:
 			_srv_set_on(_pending[k])
 			_pending.remove_at(k)
+
+
+# --- the facção's bocas ---
+
+func _build_crews() -> void:
+	var base: int = Net.game.crowd.COUNT
+	for b in Becos.bocas:
+		var first: int = base + b.first
+		_crews.append({
+			"b": b, "soldiers": [first, first + 1, first + 4], "vapor": first + 2, "lookout": first + 3,
+			"hostile": false, "target": -1, "quiet": 0.0, "warn": {}, "warned": {}, "alert": 0.0, "flare": 0.0, "died": {},
+		})
+
+
+## Whether the dealer at crew `k` is willing to do business: alive, at the post, and not at war.
+func crew_calm(k: int) -> bool:
+	for c in _crews:
+		if c.b.crew == k:
+			var crowd = Net.game.crowd
+			return not c.hostile and c.alert <= 0.0 and crowd.state[c.vapor] == crowd.AMBIENT
+	return false
+
+
+## The crew running boca `k`, or {}.
+func crew_of(k: int) -> Dictionary:
+	for c in _crews:
+		if c.b.crew == k:
+			return c
+	return {}
+
+
+func note_customer(pid: int) -> void:
+	_customer[pid] = MatchState.time + CUSTOMER
+
+
+## Whether the point is in the lane of a boca or at either mouth of it.
+func _on_turf(c: Dictionary, p: Vector3) -> bool:
+	return absf(p.x - c.b.x) < 4.0 and p.z > c.b.z0 - 6.0 and p.z < c.b.z1 + 6.0
+
+
+func _srv_turf(dt: float) -> void:
+	var g = Net.game
+	var crowd = g.crowd
+	if _crews.is_empty():
+		if Becos.bocas.is_empty() or crowd.count <= crowd.COUNT:
+			return
+		_build_crews()
+	for c in _crews:
+		var troublemaker := -1
+		for pid in g.players:
+			var pl = g.players[pid]
+			if not pl.at_large() or not _on_turf(c, pl.global_position):
+				c.warn.erase(pid)
+				c.warned.erase(pid)
+				continue
+			var customer: bool = MatchState.time < _customer.get(pid, 0.0)
+			var trouble: bool = (DB.is_gun(pl.st.equipped) or pl.st.heat > 0) and not customer
+			if not trouble:
+				c.warn.erase(pid)
+				c.warned.erase(pid)
+				continue
+			var w: float = c.warn.get(pid, 0.0) + dt
+			c.warn[pid] = w
+			# The cops are coming: no warning shout, they are not asking.
+			if w >= TURF_WARN and not c.warned.get(pid, false):
+				c.warned[pid] = true
+				g.send(pid, "cl_toast", ["SAI DAQUI!  This is not your street"])
+				g.bcast("cl_sound", ["whistle", c.b.mouth + Vector3(0, 1.5, 0)])
+			if w >= TURF_FIRE or c.alert > 0.0:
+				troublemaker = pid
+		# The lookout sees the police coming.
+		c.flare -= dt
+		c.alert -= dt
+		for cop in g.police.cops:
+			if cop.state != g.police.DOWN and cop.pos.distance_to(c.b.mouth) < COP_ALERT and c.flare <= 0.0:
+				c.flare = 45.0
+				c.alert = 25.0
+				var at: Vector3 = c.b.mouth + Vector3(0, 6.0, 0)
+				g.bcast("cl_flare", [at], self)
+				break
+		if troublemaker >= 0:
+			c.quiet = 0.0
+			if not c.hostile:
+				c.hostile = true
+				c.target = troublemaker
+				for i in c.soldiers + [c.vapor]:
+					crowd.srv_guard(i, troublemaker, 30.0)
+				g.send(troublemaker, "cl_toast", ["They are shooting!"])
+		elif c.hostile:
+			c.quiet += dt
+			if c.quiet >= TURF_CALM:
+				c.hostile = false
+				for i in c.soldiers + [c.vapor]:
+					crowd.srv_stand_down(i)
+		_srv_reman(c, dt)
+
+
+## Crew who have been killed or knocked away come back to their posts a while later, unseen.
+func _srv_reman(c: Dictionary, _dt: float) -> void:
+	var g = Net.game
+	var crowd = g.crowd
+	var posts: Array = c.soldiers + [c.vapor, c.lookout]
+	for i in posts:
+		if crowd.state[i] == crowd.DEAD or crowd.state[i] == crowd.GONE:
+			if not c.died.has(i):
+				c.died[i] = MatchState.time
+			elif MatchState.time - c.died[i] >= REMAN:
+				var watched := false
+				for pid in g.players:
+					if g.players[pid].global_position.distance_to(crowd._home[i]) < 25.0:
+						watched = true
+				if not watched:
+					c.died.erase(i)
+					crowd.srv_respawn(i, crowd._home[i])
+		else:
+			c.died.erase(i)
+
+
+@rpc("authority", "call_remote", "unreliable")
+func cl_flare(at: Vector3) -> void:
+	var fx = Net.game.fx
+	Sfx.play("firework", at, 6.0)
+	fx.firework(at + Vector3(0, 26.0, 0), Color(1.0, 0.85, 0.2))
+	fx.smoke(at, 1.2, 0.6)
 
 
 # --- corner gangs ---

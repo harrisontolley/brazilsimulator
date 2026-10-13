@@ -9,8 +9,10 @@ const Kit := preload("res://scenes/characters/char_kit.gd")
 const CharRig := preload("res://scenes/characters/char_rig.gd")
 const Emotes := preload("res://scenes/characters/emotes.gd")
 
-## What _cast_of(4242) came to before the wheel was built.
-const CAST := [281228236, 438102235, 2323301200]
+## What _cast_of(4242) came to before the wheel was built. The last number is where people on
+## foot have their lanes, which moved when the alleys were cut and furnished; the first two,
+## who everybody is and who is doing what with whom, are as they always were.
+const CAST := [281228236, 438102235, 2604204798]
 
 
 static func out_dir() -> String:
@@ -55,6 +57,8 @@ static func run(g: Node, what: String) -> bool:
 			await _emotes(g)
 		"emoteshots":
 			await _emote_shots(g)
+		"gallery":
+			await _gallery(g)
 		"arsenal", "shotgun", "sniper", "rocket", "grenade", "molotov":
 			await _arsenal(g, what)
 		_:
@@ -94,11 +98,12 @@ static func _nav(g: Node) -> void:
 				shut += 1
 				if first == "":
 					first = "door of %s shut at %s" % [room.name, d[0]]
-	# And a walk from the sand to the back street has to go round the buildings, not through.
+	# And a walk from the sand to the back street has to go round the buildings, not through:
+	# further than the 84 m straight line, by way of the alley or the street.
 	var a := Vector3(-80, 0, 20)
 	var b := Vector3(-80, 0, 104)
 	var route: PackedVector3Array = Nav.path(a, b)
-	var route_ok := not route.is_empty() and route[route.size() - 1].distance_to(b) < 1.5 and Nav.length(a, route) > 100.0
+	var route_ok := not route.is_empty() and route[route.size() - 1].distance_to(b) < 1.5 and Nav.length(a, route) > 86.0
 	var at := a
 	for p in route:
 		route_ok = route_ok and Nav.clear(at, p)
@@ -229,6 +234,95 @@ static func _snap(g: Node, name: String) -> void:
 	await RenderingServer.frame_post_draw
 	if out_dir() != "":
 		g.get_viewport().get_texture().get_image().save_png("%s/%s.png" % [out_dir(), name])
+
+
+## Pictures of the back streets work: alleys, bocas, ladders, roofs, the new weapons in hand,
+## a body hauled and thrown, the ransom door. Needs a renderer and --out=dir.
+static func _gallery(g: Node) -> void:
+	var p = g.local_player
+	var Becos = g.threats.Becos
+	var shoot := func(name: String, at: Vector3, look: Vector3, fov := 55.0, wait := 0.5, hud := false) -> void:
+		_camera(g, at, look, fov)
+		g.hud.visible = hud
+		await _wait(g, wait)
+		await _snap(g, name)
+	p.global_position = Vector3(150, 0.2, -10)
+	await _wait(g, 1.0)
+
+	# The back street from above, an alley with nothing in front of it, a boca, its dealer.
+	await shoot.call("01_overview", Vector3(-90, 125, 100.5), Vector3(-90, 0, 100.0), 62.0)
+	await shoot.call("02_alley", Vector3(-32, 1.7, 100.5), Vector3(-32, 3.0, 80.0), 62.0)
+	var b: Dictionary = {}
+	for bo in Becos.bocas:
+		if bo.crew == 1:
+			b = bo
+	await shoot.call("03_boca_mouth", Vector3(b.x, 1.7, 109.5), Vector3(b.x, 1.8, 125.0), 62.0, 0.8)
+	await shoot.call("04_dealer", Vector3(b.x + 0.2, 1.6, b.dealer.z - 4.5), Vector3(b.x, 1.3, b.dealer.z), 42.0)
+	# Rooftops: the foot of a ladder, a plank across a lane, a laje party.
+	var l: Dictionary = Places.ladders[0]
+	await shoot.call("05_ladder", l.pos + l.out * 3.2 + Vector3(0, 2.4, 0), l.pos + Vector3(0, minf(l.top, 6.0), 0), 60.0)
+	if not Becos.planks.is_empty():
+		var pl: Vector3 = Becos.planks[0]
+		await shoot.call("06_plank", pl + Vector3(-5.5, 2.4, 3.0), pl + Vector3(0.5, 0.0, 0.0), 62.0)
+	for st in Places.stands:
+		if st.pos.y > 1.0 and st.idle == Kit.DANCE:
+			await shoot.call("07_laje_party", st.pos + Vector3(0, 3.0, 7.0), st.pos + Vector3(0, 1.0, 0), 62.0, 0.8)
+			break
+	var c: Dictionary = Places.cells[0]
+	await shoot.call("08_ransom_door", c.door + c.face * 3.2 + Vector3(0, 1.7, 0), c.door + Vector3(0, 1.3, 0), 55.0)
+	# The lookout's flare, from the back street.
+	g.threats.cl_flare(b.mouth + Vector3(0, 6, 0))
+	await shoot.call("09_flare", Vector3(b.x - 8.0, 1.7, 105.5), Vector3(b.x, 28.0, 125.0), 75.0, 0.9)
+
+	# Out in the open and alone: the new things in the hand.
+	var crowd = g.crowd
+	crowd.debug_clear()
+	crowd.visible = false
+	p.global_position = Vector3(150, 0.2, -10)
+	p.rotation.y = PI
+	p.rig.zoom(1)
+	await _wait(g, 0.8)
+	var k := 10
+	for item in ["porrete", "frigideira", "tijolo"]:
+		g._give(p.st, item, 1)
+		p.st.equipped = item
+		await shoot.call("%d_%s" % [k, item], Vector3(151.3, 1.25, -7.6), Vector3(150.1, 0.85, -10.0), 34.0, 0.7)
+		k += 1
+
+	# A body being hauled, and one in the air.
+	crowd.visible = true
+	var at := Vector3(150, 0, -10)
+	var i: int = crowd.debug_stand(at, 0.0)
+	crowd.hp[i] = 900.0
+	p.global_position = at + Vector3(0, 0.2, -1.2)
+	var o := at + Vector3(0, 1.6 * crowd._scale[i], -1.2)
+	for sw in 20:
+		if crowd.state[i] == crowd.KO:
+			break
+		g._last_attack.clear()
+		g.srv_attack(o, Vector3(0, 0, 1))
+	# What the prompt says to somebody standing over them with a drug picked.
+	p.global_position = crowd.pos[i] + Vector3(0, 0.2, -1.3)
+	g._give(p.st, "rivotril", 1)
+	p.drug_sel = "rivotril"
+	p.rig.zoom(1)
+	await _wait(g, 0.8)
+	p.rig.cam.current = true
+	g.hud.visible = true
+	await _wait(g, 0.5)
+	await _snap(g, "13_prompt")
+	g.drag.srv_drag(g.drag.NPC, i)
+	await _wait(g, 0.3)
+	for step in 3:
+		for m in 14:
+			p.global_position += Vector3(0.0, 0.0, -0.3)
+			await _wait(g, 0.04)
+		await shoot.call("%d_hauled" % (14 + step), p.global_position + Vector3(5.0, 1.7, 1.2), p.global_position + Vector3(0, 0.5, 1.2), 50.0, 0.0)
+	g.drag.srv_throw(Vector3(0, 0.3, -1))
+	_camera(g, p.global_position + Vector3(7.0, 2.2, -3.0), p.global_position + Vector3(0, 1.0, -3.0), 55.0)
+	await _wait(g, 0.38)
+	await _snap(g, "17_thrown")
+	g.debug_result("gallery", true, "pictures in %s" % out_dir())
 
 
 ## Every new pose in a row, photographed twice a moment apart.

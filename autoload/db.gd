@@ -13,13 +13,19 @@ const ITEMS := {
 	# `kind` "rocket" flies and bursts over `blast` metres; "thrown" leaves the hand, and the
 	# thing itself is the ammunition: `fuse` seconds, or flames for `burn` seconds where it lands.
 	# `sound` is what it sounds like, `muzzle` where the barrel ends in the first-person view.
+	# A melee one with `ko` lays people out: `ko_head` / `ko_body` is how often a blow there does
+	# (a head blow defaults to KO_CHANCE, a body blow to never), `ko_time` how long a player stays
+	# down and `ko_npc` how long anybody else does.
 	"fists": {"name": "Fists", "type": "weapon", "melee": true, "damage": 12.0, "range": 2.3, "cooldown": 0.45, "spread": 0.0, "intimidation": 1.0, "price": 0, "held": 0, "ko": true},
 	"estoque": {"name": "Estoque", "type": "weapon", "melee": true, "damage": 22.0, "range": 2.0, "cooldown": 0.5, "spread": 0.0, "intimidation": 1.6, "price": 80, "held": 1},
 	"knife": {"name": "Faca", "type": "weapon", "melee": true, "damage": 28.0, "range": 2.1, "cooldown": 0.5, "spread": 0.0, "intimidation": 1.8, "price": 150, "held": 1},
 	"pistol": {"name": "Pistol", "type": "weapon", "melee": false, "damage": 34.0, "range": 60.0, "cooldown": 0.22, "spread": 0.035, "intimidation": 2.5, "price": 400, "held": 2, "mag": 12, "reload": 1.4, "recoil": 0.03, "head_kill": 0.85},
 	"revolver": {"name": "Três-oitão", "type": "weapon", "melee": false, "damage": 55.0, "range": 70.0, "cooldown": 0.5, "spread": 0.02, "intimidation": 2.8, "price": 900, "held": 3, "mag": 6, "reload": 2.2, "recoil": 0.065, "head_kill": 1.0, "sound": "revolver"},
 	"smg": {"name": "Submetralhadora", "type": "weapon", "melee": false, "damage": 16.0, "range": 45.0, "cooldown": 0.09, "spread": 0.06, "intimidation": 3.0, "price": 1500, "held": 4, "mag": 30, "reload": 2.0, "recoil": 0.016, "head_kill": 0.45, "auto": true, "sound": "smg"},
-	"taco": {"name": "Taco", "type": "weapon", "melee": true, "damage": 32.0, "range": 2.8, "cooldown": 0.7, "spread": 0.0, "intimidation": 2.0, "price": 120, "held": 11, "shove": 7.0},
+	"taco": {"name": "Taco", "type": "weapon", "melee": true, "damage": 32.0, "range": 2.8, "cooldown": 0.7, "spread": 0.0, "intimidation": 2.0, "price": 120, "held": 11, "shove": 7.0, "ko": true, "ko_head": 0.6, "ko_body": 0.2, "ko_time": 30.0, "ko_npc": 45.0, "sound": "thwack"},
+	"porrete": {"name": "Porrete", "type": "weapon", "melee": true, "damage": 18.0, "range": 2.5, "cooldown": 0.65, "spread": 0.0, "intimidation": 2.2, "price": 90, "held": 12, "ko": true, "ko_head": 0.8, "ko_body": 0.35, "ko_time": 30.0, "ko_npc": 45.0, "sound": "thwack"},
+	"frigideira": {"name": "Frigideira", "type": "weapon", "melee": true, "damage": 10.0, "range": 2.2, "cooldown": 0.6, "spread": 0.0, "intimidation": 1.4, "price": 60, "held": 13, "ko": true, "ko_head": 0.95, "ko_body": 0.5, "ko_time": 30.0, "ko_npc": 45.0, "sound": "bong"},
+	"tijolo": {"name": "Tijolo", "type": "weapon", "melee": true, "damage": 16.0, "range": 1.9, "cooldown": 0.55, "spread": 0.0, "intimidation": 1.5, "price": 15, "held": 14, "ko": true, "ko_head": 0.7, "ko_body": 0.25, "ko_time": 30.0, "ko_npc": 45.0, "sound": "crack"},
 	"shotgun": {"name": "Escopeta", "type": "weapon", "melee": false, "damage": 14.0, "pellets": 9, "range": 34.0, "cooldown": 0.95, "spread": 0.085, "intimidation": 3.2, "price": 1800, "held": 5, "mag": 5, "reload": 2.6, "recoil": 0.11, "head_kill": 0.2, "feed": "shells", "sound": "shotgun", "muzzle": Vector3(0.2, -0.13, -1.25)},
 	"fuzil": {"name": "Fuzil", "type": "weapon", "melee": false, "damage": 30.0, "range": 120.0, "cooldown": 0.105, "spread": 0.026, "intimidation": 3.5, "price": 3200, "held": 6, "mag": 30, "reload": 2.4, "recoil": 0.024, "head_kill": 0.7, "auto": true, "sound": "rifle", "muzzle": Vector3(0.2, -0.13, -1.3)},
 	"sniper": {"name": "Sniper", "type": "weapon", "melee": false, "damage": 160.0, "range": 420.0, "cooldown": 1.5, "spread": 0.0015, "hip": 0.09, "intimidation": 3.5, "price": 4500, "held": 7, "mag": 5, "reload": 3.0, "recoil": 0.13, "head_kill": 1.0, "feed": "rounds", "scope": 9.0, "pierce": 1, "sound": "sniper", "muzzle": Vector3(0.2, -0.13, -1.5)},
@@ -118,7 +124,7 @@ const DROWN_DMG := 12.0
 ## Where a bad trip may leave you: a rooftop on the avenue, or up to the waist in the sea.
 const WAKE_SPOTS := [Vector3(60.0, 0.2, 86.0), Vector3(-40.0, 0.2, -49.0)]
 ## What the two weapon keys cycle through.
-const MELEE := ["fists", "knife", "estoque", "taco"]
+const MELEE := ["fists", "knife", "estoque", "taco", "porrete", "frigideira", "tijolo"]
 const GUNS := ["pistol", "revolver", "smg", "shotgun", "fuzil"]
 const HEAVY := ["sniper", "rpg"]
 const THROWN := ["grenade", "molotov"]
@@ -147,6 +153,10 @@ const ARCHETYPES := [
 	{"id": "socialite", "weight": 0.0, "money": [80, 400], "resistance": 0.1, "fight": 0.0, "shoot": 0.0, "gun": 0.0, "hp": 40.0, "melee": 0.0, "scale": 0.97, "width": 0.86, "build": 1},
 	{"id": "magnata", "weight": 0.0, "money": [2500, 6000], "resistance": 0.35, "fight": 0.0, "shoot": 0.0, "gun": 0.0, "hp": 60.0, "melee": 0.0, "scale": 1.02, "width": 1.42, "build": 2},
 	{"id": "traficante", "weight": 0.0, "money": [250, 900], "resistance": 0.6, "fight": 0.9, "shoot": 0.85, "gun": 0.6, "hp": 100.0, "melee": 14.0, "scale": 1.05, "width": 1.15},
+	# The alleys: a boca's lookout kid, its dealer, and the old men who have seen everything.
+	{"id": "olheiro", "weight": 0.0, "money": [5, 40], "resistance": 0.2, "fight": 0.1, "shoot": 0.0, "gun": 0.0, "hp": 35.0, "melee": 4.0, "scale": 0.78, "width": 0.85},
+	{"id": "vapor", "weight": 0.0, "money": [300, 900], "resistance": 0.55, "fight": 0.6, "shoot": 0.4, "gun": 0.4, "hp": 75.0, "melee": 12.0, "scale": 1.0, "width": 1.0},
+	{"id": "velho", "weight": 0.0, "money": [5, 50], "resistance": 0.2, "fight": 0.05, "shoot": 0.0, "gun": 0.0, "hp": 40.0, "melee": 3.0, "scale": 0.94, "width": 0.96},
 ]
 
 ## Cash an NPC must be carrying to show mid / rich props.
@@ -166,7 +176,7 @@ const LOOT := ["phone", "watch", "camera", "chain"]
 ## `till` shops keep cash that can be taken at gunpoint.
 const VENDORS := [
 	{"name": "DEALER", "kind": "shop", "pos": Vector3(-60, 0, 47), "stock": ["cocaine", "weed", "meth", "lanca", "bala", "doce", "ketamine"], "color": Color(0.2, 0.7, 0.3)},
-	{"name": "ARMS", "kind": "shop", "pos": Vector3(80, 0, 47), "stock": ["knife", "taco", "pistol", "revolver", "smg", "shotgun", "fuzil", "sniper", "rpg", "grenade", "molotov", "ammo", "shells", "rounds", "rocket"], "color": Color(0.25, 0.25, 0.3)},
+	{"name": "ARMS", "kind": "shop", "pos": Vector3(80, 0, 47), "stock": ["knife", "taco", "porrete", "pistol", "revolver", "smg", "shotgun", "fuzil", "sniper", "rpg", "grenade", "molotov", "ammo", "shells", "rounds", "rocket"], "color": Color(0.25, 0.25, 0.3)},
 	{"name": "QUIOSQUE 1", "kind": "shop", "till": true, "pos": Vector3(-240, 0, 47), "stock": FOOD, "color": Color(0.9, 0.3, 0.2)},
 	{"name": "QUIOSQUE 2", "kind": "shop", "till": true, "pos": Vector3(-150, 0, 47), "stock": FOOD, "color": Color(0.95, 0.6, 0.1)},
 	{"name": "QUIOSQUE 3", "kind": "shop", "till": true, "pos": Vector3(10, 0, 47), "stock": FOOD, "color": Color(0.9, 0.3, 0.2)},
@@ -183,6 +193,13 @@ const VENDORS := [
 	{"name": "BAR DO PORTUGUÊS", "kind": "shop", "indoor": true, "till": true, "pos": Vector3(103.8, 0, 117.5), "stock": ["cerveja", "caipirinha", "espetinho"], "color": Color(0.1, 0.4, 0.2)},
 	{"name": "CONTRABANDO", "kind": "shop", "indoor": true, "jail": true, "pos": Vector3(-6, 0, 127.4), "stock": ["estoque", "colher", "corda", "cocaine", "weed", "rivotril"], "color": Color(0.3, 0.3, 0.3)},
 	{"name": "BICHO DO BINGO", "kind": "bicho", "indoor": true, "pos": Vector3(-14, 0, 89.4), "stock": [], "color": Color(0.85, 0.6, 0.1)},
+	# An old man in an alley who sells whatever you can hit somebody with.
+	{"name": "FERRO-VELHO", "kind": "shop", "stall": false, "pos": Vector3(-178, 0, 90.0), "stock": ["porrete", "frigideira", "tijolo", "taco", "knife"], "color": Color(0.5, 0.4, 0.3)},
+	# The facção's three bocas, in the alleys (see scenes/world/becos.gd): they sell everything,
+	# at black market prices, for as long as their crew has no quarrel with you.
+	{"name": "BOCA DA FACÇÃO", "kind": "shop", "crew": 0, "stall": false, "discount": 1.2, "pos": Vector3(-180, 0, 121.0), "stock": DRUGS + DRINKS, "color": Color(0.2, 0.7, 0.3)},
+	{"name": "BOCA DA FACÇÃO", "kind": "shop", "crew": 1, "stall": false, "discount": 1.2, "pos": Vector3(150, 0, 121.0), "stock": DRUGS + DRINKS, "color": Color(0.2, 0.7, 0.3)},
+	{"name": "BOCA DA FACÇÃO", "kind": "shop", "crew": 2, "stall": false, "discount": 1.2, "pos": Vector3(80, 0, 86.0), "stock": DRUGS + DRINKS, "color": Color(0.2, 0.7, 0.3)},
 ]
 
 ## The 25 animals of the jogo do bicho, in their traditional order.
@@ -209,6 +226,15 @@ const KO_NPC := 25.0
 const KO_COP := 12.0
 const KO_PLAYER := 3.5
 const KO_IMMUNE := 8.0
+
+
+## How often a blow from `w` to `zone` lays somebody out.
+func ko_chance(w: Dictionary, zone: int) -> float:
+	if not w.get("ko", false):
+		return 0.0
+	if zone == ZONE_HEAD:
+		return w.get("ko_head", KO_CHANCE)
+	return w.get("ko_body", 0.0)
 ## Places to hide: how likely a cop searching right beside one is to look inside it.
 const HIDE_KINDS := {
 	"cacamba": {"name": "the dumpster", "find": 0.25},

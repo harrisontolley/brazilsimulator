@@ -13,6 +13,7 @@ const Places := preload("res://scenes/world/places.gd")
 enum { MV_GROUND, MV_AIR, MV_SLIDE, MV_WALLRUN, MV_DIVE, MV_RIDE, MV_CROUCH, MV_SWIM }
 
 const WALK := 4.5
+const CLIMB_SPEED := 2.6
 const SPRINT := 7.0
 ## How near a dance has to be to fall in with it.
 const JOIN_RANGE := 5.0
@@ -120,6 +121,17 @@ var mv := MV_GROUND
 var net_mv := 0
 ## Camera pitch as others should see it: where the head and gun point.
 var net_pitch := 0.0
+## Somebody has hold of this body (see scenes/player/drag.gd): it goes where `drag_at` and
+## `drag_yaw` say, and flails at `drag_fly`, tumbling when it has been thrown.
+var dragged := false
+var drag_at := Vector3.ZERO
+var drag_yaw := 0.0
+var drag_fly := 0.0
+var drag_tumble := false
+## This player has hold of somebody.
+var dragging := false
+## Index into Places.ladders while on one, or -1.
+var _ladder := -1
 
 var _cap: CapsuleShape3D
 var _shape: CollisionShape3D
@@ -543,6 +555,31 @@ func is_aiming() -> bool:
 	return net_byte() & 16 != 0
 
 
+## [Drag kind, id] of the body a dose would go down: the one being hauled, or the nearest one
+## out cold within reach. Empty when there is nobody to feed.
+func feed_target() -> Array:
+	var g = Net.game
+	if g.drag.hauls.has(id):
+		var h: Dictionary = g.drag.hauls[id]
+		return [h.kind, h.id]
+	var pid := _ko_player_near()
+	if pid >= 0:
+		return [g.drag.PLAYER, pid]
+	var near: Array = g.crowd.out_near(global_position, 2.0)
+	if not near.is_empty():
+		return [g.drag.NPC, near[0]]
+	return []
+
+
+## Id of a knocked out player within arm's reach, or -1.
+func _ko_player_near() -> int:
+	for pid in Net.game.players:
+		var v = Net.game.players[pid]
+		if v != self and v.st.ko > 0.0 and not v.st.dead and global_position.distance_to(v.global_position) < 2.5:
+			return pid
+	return -1
+
+
 func aim_dir() -> Vector3:
 	return -rig.cam.global_basis.z
 
@@ -583,7 +620,27 @@ func _unhandled_input(e: InputEvent) -> void:
 func _physics_process(delta: float) -> void:
 	if not is_local:
 		return
+	if dragged:
+		# Out cold with somebody's hands in the collar: the body goes where it is taken.
+		global_position = drag_at
+		rotation.y = drag_yaw
+		velocity = Vector3.ZERO
+		mv = MV_GROUND
+		_send_t -= delta
+		if _send_t <= 0.0 and not multiplayer.is_server():
+			_send_t = 0.05
+			Net.game.srv_move.rpc_id(1, global_position, rotation.y, net_byte(), rig.rotation.x)
+		return
 	var active := Controls.playing() and can_act()
+	if _ladder >= 0:
+		_ladder_step(delta)
+		return
+	if active and mv != MV_SWIM and mv != MV_RIDE and not dragging and Input.is_action_pressed("move_forward"):
+		# Walking into the foot of a ladder, facing it, starts the climb.
+		var at := Places.ladder_near(global_position, 0.75)
+		if not at.is_empty() and not at[1] and -global_basis.z.dot(Places.ladders[at[0]].out) < -0.3:
+			grab_ladder(at[0])
+			return
 	var wish := Vector3.ZERO
 	var iv := Input.get_vector("move_left", "move_right", "move_forward", "move_back") if active else Vector2.ZERO
 	if is_inverted():
@@ -613,7 +670,7 @@ func _physics_process(delta: float) -> void:
 		# with the same keys, and stopped by backing out of it.
 		stop_emote()
 		em = -1
-	var top := (SPRINT if Input.is_action_pressed("sprint") or drug_phase("guarana") == "od" else WALK) * speed_mult()
+	var top := (SPRINT if (Input.is_action_pressed("sprint") and not dragging) or drug_phase("guarana") == "od" else WALK) * speed_mult() * (0.65 if dragging else 1.0)
 	_buffer_t = JUMP_BUFFER if jump_tap else _buffer_t - delta
 	_slide_cd -= delta
 	_dive_cd -= delta
@@ -1148,6 +1205,52 @@ func _ride_water(active: bool, delta: float) -> void:
 	_ride_spd = minf(_ride_spd, after + 2.0) if _ride_spd > 0.0 else _ride_spd
 
 
+## Onto ladder `i`, from its foot or from the roof at its top.
+func grab_ladder(i: int) -> void:
+	var l: Dictionary = Places.ladders[i]
+	_ladder = i
+	velocity = Vector3.ZERO
+	mv = MV_WALLRUN
+	_wall_side = 1.0
+	_set_crouch(false)
+	if global_position.y > l.top - 1.0:
+		global_position = l.pos + l.out * 0.45 + Vector3(0, l.top - 0.3, 0)
+
+
+func _ladder_step(delta: float) -> void:
+	var l: Dictionary = Places.ladders[_ladder]
+	var up := 0.0
+	if Controls.playing() and can_act():
+		up = Input.get_axis("move_back", "move_forward")
+	var base: Vector3 = l.pos + l.out * 0.45
+	global_position = Vector3(base.x, global_position.y + up * CLIMB_SPEED * delta, base.z)
+	rotation.y = Kit.face(-l.out)
+	velocity = Vector3.ZERO
+	mv = MV_WALLRUN
+	_wall_side = 1.0
+	if not can_act() or Input.is_action_just_pressed("jump"):
+		# Let go: a hop back off the rungs.
+		_ladder = -1
+		velocity = l.out * 3.0 + Vector3(0, 2.5, 0)
+		mv = MV_AIR
+		return
+	if global_position.y >= l.top:
+		# Over the lip and onto the roof.
+		global_position = Vector3(l.pos.x, l.top + 0.05, l.pos.z) - l.out * 1.1
+		_ladder = -1
+		mv = MV_GROUND
+		return
+	if global_position.y <= 0.02 and up < 0.0:
+		global_position.y = 0.0
+		_ladder = -1
+		mv = MV_GROUND
+		return
+	_send_t -= delta
+	if _send_t <= 0.0 and not multiplayer.is_server():
+		_send_t = 0.05
+		Net.game.srv_move.rpc_id(1, global_position, rotation.y, net_byte(), rig.rotation.x)
+
+
 ## Thrown through the air by something big: a bus, a crash.
 func knock(v: Vector3) -> void:
 	if mv == MV_RIDE:
@@ -1355,8 +1458,12 @@ func _process(delta: float) -> void:
 	else:
 		_vis.visible = st.get("hide", -1) < 0
 		_label.visible = not st.dead
-		global_position = global_position.lerp(net_pos, minf(1.0, 14.0 * delta))
-		rotation.y = lerp_angle(rotation.y, net_yaw, minf(1.0, 14.0 * delta))
+		if dragged:
+			global_position = drag_at
+			rotation.y = drag_yaw
+		else:
+			global_position = global_position.lerp(net_pos, minf(1.0, 14.0 * delta))
+			rotation.y = lerp_angle(rotation.y, net_yaw, minf(1.0, 14.0 * delta))
 	_animate(delta)
 
 
@@ -1410,7 +1517,11 @@ func _animate(delta: float) -> void:
 	if em >= 0:
 		# Nobody dances with a rifle in their hand: it is put away for the duration.
 		held = Kit.HELD_NONE
-	_anim.update(delta, m, CharRig.DEAD if st.dead else (CharRig.OUT if out else CharRig.ALIVE), _spd, _vy, _turn, aim, side, held, net_byte() & 16 != 0)
+	_anim.flail = drag_fly
+	_anim.tumble = drag_tumble
+	_anim.flail_seed = fmod(id * 0.618, 1.0)
+	var rig_state := CharRig.DEAD if st.dead else (CharRig.FLAIL if dragged else (CharRig.OUT if out else CharRig.ALIVE))
+	_anim.update(delta, m, rig_state, _spd, _vy, _turn, aim, side, held, net_byte() & 16 != 0)
 	_anim.apply(_mats)
 	_water_fx(m, under, delta)
 
@@ -1589,7 +1700,7 @@ func _animate_viewmodel() -> void:
 		# Drawn back over the shoulder as it winds up, then over the top.
 		var k := wind_up()
 		_vm_r.position += Vector3(0.05, 0.22, 0.3) * k + Vector3(-0.15, 0.2, -0.5) * e
-	elif DB.ITEMS[st.equipped].get("held", 0) == Kit.HELD_BAT:
+	elif DB.ITEMS[st.equipped].get("held", 0) in [Kit.HELD_BAT, Kit.HELD_CLUB, Kit.HELD_PAN]:
 		_vm_r.position += Vector3(-0.35, 0.05, -0.3) * e
 		_vm_r.rotation.x = -0.9 * e
 	elif _vm_side > 0.0:
@@ -1656,7 +1767,12 @@ func _local_process(delta: float) -> void:
 		# The point on the line of sight level with the head: where the blow starts from.
 		var cam: Vector3 = rig.cam.global_position
 		var from := cam + dir * maxf(0.0, (head - cam).dot(dir))
-		if kind == "thrown":
+		if dragging:
+			# Both hands are full: the swing is a heave.
+			_wind = -1.0
+			if Input.is_action_just_pressed("attack"):
+				g.to_server("srv_throw", [dir], g.drag)
+		elif kind == "thrown":
 			# Hold to draw the arm back, let go to throw: the longer, the further.
 			if Input.is_action_pressed("attack") and _attack_t <= 0.0:
 				_wind = maxf(_wind, 0.0) + delta
@@ -1678,6 +1794,10 @@ func _local_process(delta: float) -> void:
 					_vm_side = -_vm_side
 		if Input.is_action_just_pressed("reload"):
 			g.to_server("srv_reload")
+		if Input.is_action_just_pressed("rob") and not dragging:
+			var body := _ko_player_near()
+			if body >= 0:
+				g.to_server("srv_rob_player", [body])
 		if Input.is_action_just_pressed("rob") and snatch_npc >= 0:
 			g.to_server("srv_snatch", [snatch_npc], g.crowd)
 		if Input.is_action_pressed("rob") and target_npc >= 0:
@@ -1700,7 +1820,11 @@ func _local_process(delta: float) -> void:
 			var step := 1 if Input.is_action_just_pressed("drug_next") else -1
 			drug_sel = held[posmod(held.find(drug_sel) + step, held.size())]
 		if drug_sel != "" and Input.is_action_just_pressed("drug_use"):
-			g.to_server("srv_use", [drug_sel])
+			var body := feed_target()
+			if not body.is_empty():
+				g.to_server("srv_feed", [body[0], body[1], drug_sel])
+			else:
+				g.to_server("srv_use", [drug_sel])
 
 	_send_t -= delta
 	if _send_t <= 0.0 and not multiplayer.is_server():
@@ -1738,9 +1862,13 @@ func _emote_keys(delta: float) -> void:
 		wheel.close()
 	_emote_was = down
 	var em := emote()
-	rig.watching = em >= 0
+	# Out cold, the view stands back to watch what is being done with the body.
+	var out: bool = st.ko > 0.0 and not st.dead
+	rig.watching = em >= 0 or out
 	var with := emote_to_join() if em < 0 and can_emote() else 0
 	hud.join_hint = "B: join the %s" % Emotes.LIST[Net.game.players[with].emote()].name if with != 0 else ""
+	if out:
+		hud.join_hint = "Out cold  %ds" % ceili(st.ko)
 
 
 ## The tune an emote brings with it, started wherever in the bar the dance has got to so that
