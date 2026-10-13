@@ -767,7 +767,7 @@ func _physics_process(delta: float) -> void:
 			else:
 				mv = MV_GROUND
 		elif mv == MV_DIVE and velocity.y <= 0.0:
-			_land_dive(crouch)
+			_land_dive(crouch, jump_held or _buffer_t > 0.0)
 	else:
 		_coyote_t -= delta
 		if mv == MV_GROUND or mv == MV_SLIDE or mv == MV_CROUCH:
@@ -1396,11 +1396,15 @@ func _start_dive(wish: Vector3) -> void:
 	_set_crouch(true)
 
 
-## Crouch held: the dive runs out into a slide. Otherwise a belly flop that costs speed.
-func _land_dive(crouch: bool) -> void:
+## Crouch held: the dive runs out into a slide. Jump held or buffered: the landing tick
+## hops straight off with the dive's speed intact. Otherwise a belly flop that costs speed.
+func _land_dive(crouch: bool, hop: bool) -> void:
 	if crouch and hspeed() >= SLIDE_END:
 		mv = MV_SLIDE
 		_slide_t = 0.0
+		return
+	if hop:
+		mv = MV_GROUND
 		return
 	velocity.x *= 0.45
 	velocity.z *= 0.45
